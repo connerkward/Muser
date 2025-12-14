@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Embedding Visualization</title>
+  <script type="module" crossorigin src="/assets/index-lgyfq6tG.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-PTpdCffa.css">
+</head>
+<body>
+  <nav class="tabs">
+    <div class="logo">T O P O</div>
+    <div class="mode-switch">
+      <span class="mode-label">IMG</span>
+      <label class="switch">
+        <input type="checkbox" id="mode-toggle">
+        <span class="slider"></span>
+      </label>
+      <span class="mode-label">TXT</span>
+    </div>
+  </nav>
+  
+  <main id="viz-container">
+    <div id="topography" class="view active"></div>
+  </main>
+  
+  <div id="tooltip"></div>
+  
+  <div id="species-panel" class="species-panel">
+    <div class="species-header">
+      <h2 id="species-title"></h2>
+      <button class="species-close">&times;</button>
+    </div>
+    <div id="species-tree" class="species-tree"></div>
+  </div>
+  
+  <div id="lightbox" class="lightbox">
+    <button class="lightbox-close">&times;</button>
+    <img id="lightbox-img" src="" alt="">
+    <div id="lightbox-text" class="lightbox-text"></div>
+    <div class="lightbox-info">
+      <h2 id="lightbox-title"></h2>
+      <p id="lightbox-cluster"></p>
+    </div>
+  </div>
+  
+</body>
+</html>
+

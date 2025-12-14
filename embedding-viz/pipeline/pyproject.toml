@@ -1,0 +1,21 @@
+[project]
+name = "embedding-viz-pipeline"
+version = "0.1.0"
+description = "Embedding pipeline for image visualization"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "transformers",
+    "pillow",
+    "numpy",
+    "umap-learn",
+    "hdbscan",
+    "scipy",
+    "scikit-learn",
+    "open-clip-torch",
+    "sentence-transformers",
+]
+
+[tool.uv]
+dev-dependencies = []
+
