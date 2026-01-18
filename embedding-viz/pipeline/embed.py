@@ -145,9 +145,9 @@ def main(mode: str = "image", source_dir: str = None, max_items: int = MAX_ITEMS
     
     if source_dir is None:
         if mode == "image":
-            source_dir = "/Users/con/ideas-syncthing/z-to-sort/definately_reviewed"
+            source_dir = "/Users/CONWARD/ideas-syncthing"
         else:
-            source_dir = "/Users/con/Library/Mobile Documents/iCloud~md~obsidian/Documents"
+            source_dir = "/Users/CONWARD/Library/Mobile Documents/iCloud~md~obsidian/Documents"
     
     source_path = Path(source_dir)
     print(f"Mode: {mode}")

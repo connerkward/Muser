@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import fs from 'fs';
 import path from 'path';
 
-const IMAGE_SOURCE = '/Users/con/ideas-syncthing/z-to-sort/definately_reviewed';
+const IMAGE_SOURCE = '/Users/CONWARD/ideas-syncthing';
 
 export default defineConfig({
   server: {
