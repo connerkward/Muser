@@ -2,7 +2,7 @@
 
 Interactive visualization of image and text embeddings using CLIP and sentence-transformers, rendered as a topographical map and network graph.
 
-<video src="embedding-viz/media/Screen Recording 2025-12-20 at 02.49.05.mov" controls width="100%"></video>
+**Demo Video**: [📹 Watch screen recording](embedding-viz/media/Screen%20Recording%202025-12-20%20at%2002.49.05.mov)
 
 ## Features
 
