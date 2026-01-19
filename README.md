@@ -10,8 +10,6 @@ Interactive visualization of image and text embeddings using CLIP and sentence-t
 
 Toggle between **Image (IMG)** and **Text (TXT)** modes to visualize different embedding types:
 
-![Main Image View](embedding-viz/media/Screenshot%202025-12-13%20at%2019.17.32.png)
-
 **Image Mode**: Visualizes image embeddings from CLIP model, showing semantic clusters of similar images with labeled categories like:
 - FURNITURE / PRODUCT PHOTO
 - SCREENSHOT / ILLUSTRATION
