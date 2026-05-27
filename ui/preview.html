@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Muser</title>
+    <title>Muser — UI preview</title>
   </head>
   <body>
     <header>
@@ -12,9 +12,10 @@
         <input id="q" type="search" placeholder="Describe the image you're looking for…" autocomplete="off" />
         <button id="go" type="submit">Search</button>
       </form>
-      <div id="status">Connecting…</div>
+      <div class="preview-note">UI preview — mock data, no MCP host. Edit <code>ui/gallery.css</code> / <code>ui/gallery.ts</code> and it hot-reloads.</div>
+      <div id="status"></div>
     </header>
     <div id="grid"></div>
-    <script type="module" src="./search-app.ts"></script>
+    <script type="module" src="./preview.ts"></script>
   </body>
 </html>

@@ -27,6 +27,7 @@
     "mcp": "bun src/mcp.ts",
     "mcp:http": "bun src/mcp.ts --http",
     "preview": "node preview.mjs",
+    "dev:ui": "vite",
     "build:ui": "vite build",
     "build": "bun run build:ui",
     "postinstall": "bun run build:ui || true",
