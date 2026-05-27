@@ -12,3 +12,6 @@ build/
 
 # Local scratch
 /tmp-test/
+
+# ext-apps basic-host (cloned by preview.mjs)
+/ext-apps/
