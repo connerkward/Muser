@@ -112,20 +112,36 @@ class JinaV4Embedder:
     def _load(self):
         if self._model is None:
             import torch
+            from PIL import Image
             from transformers import AutoModel
 
-            self._model = AutoModel.from_pretrained(
-                self.model_id, trust_remote_code=True, torch_dtype=torch.float16
-            ).to(_device()).eval()
+            Image.MAX_IMAGE_PIXELS = None  # trusted local files
+            dev = _device()
+            # fp16 autocast is broken on MPS ("Unexpected floating ScalarType");
+            # use fp32 off CUDA by default — reliable. Override via MUSER_JINA_DTYPE
+            # (e.g. "bfloat16" on MPS for ~half the memory / faster).
+            import os
+
+            override = os.environ.get("MUSER_JINA_DTYPE")
+            dtype = getattr(torch, override) if override else (torch.float16 if dev == "cuda" else torch.float32)
+            self._model = (
+                AutoModel.from_pretrained(self.model_id, trust_remote_code=True, dtype=dtype)
+                .to(dev)
+                .eval()
+            )
         return self._model
+
+    @staticmethod
+    def _to_np(out) -> np.ndarray:
+        """encode_* returns a list of (float16) tensors; stack to float32 ndarray."""
+        return np.stack([t.float().cpu().numpy() for t in out]).astype(np.float32)
 
     def embed_images(self, paths: Sequence[str], batch_size: int = 8) -> np.ndarray:
         model = self._load()
         out = []
         for i in range(0, len(paths), batch_size):
             chunk = list(paths[i : i + batch_size])
-            vecs = model.encode_image(images=chunk, task=self.task, return_numpy=True)
-            out.append(np.asarray(vecs, dtype=np.float32))
+            out.append(self._to_np(model.encode_image(images=chunk, task=self.task, batch_size=len(chunk))))
         v = np.concatenate(out, axis=0)
         self.dim = v.shape[-1]
         return _l2(v)
@@ -135,8 +151,11 @@ class JinaV4Embedder:
         out = []
         for i in range(0, len(queries), batch_size):
             chunk = list(queries[i : i + batch_size])
-            vecs = model.encode_text(texts=chunk, task=self.task, prompt_name="query", return_numpy=True)
-            out.append(np.asarray(vecs, dtype=np.float32))
+            out.append(
+                self._to_np(
+                    model.encode_text(texts=chunk, task=self.task, prompt_name="query", batch_size=len(chunk))
+                )
+            )
         v = np.concatenate(out, axis=0)
         self.dim = v.shape[-1]
         return _l2(v)
