@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "torch>=2.4",
-    "transformers>=4.49",
+    "transformers>=4.52,<5",
     "sentence-transformers>=3.4",
     "pillow>=10.4",
     "numpy>=1.26",
@@ -19,6 +19,8 @@ dependencies = [
     "huggingface-hub>=0.27",
     "tqdm>=4.66",
     "gradio>=5.9",
+    "peft>=0.19.1",
+    "torchvision>=0.27.0",
 ]
 
 [project.scripts]
