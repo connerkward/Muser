@@ -107,6 +107,9 @@ class JinaV4Embedder:
     model_id: str = "jinaai/jina-embeddings-v4"
     task: str = "retrieval"
     dim: int = 2048
+    # Cap vision tokens — a VLM tokenizes at native resolution, so a huge image
+    # otherwise explodes into a multi-GB attention buffer (Metal OOM). ~1.0MP.
+    max_pixels: int = 1003520
     _model: object = field(default=None, repr=False)
 
     def _load(self):
@@ -116,7 +119,12 @@ class JinaV4Embedder:
             from transformers import AutoModel
 
             Image.MAX_IMAGE_PIXELS = None  # trusted local files
-            dev = _device()
+            # jina's encode leaks MPS memory (~1.5GB/image -> Metal OOM ~image 48),
+            # so MPS is unreliable for bulk indexing. Default jina to CPU on Mac
+            # (stable, slower); use CUDA on a server. Override via MUSER_JINA_DEVICE.
+            import os
+
+            dev = os.environ.get("MUSER_JINA_DEVICE") or ("cuda" if _device() == "cuda" else "cpu")
             # fp16 autocast is broken on MPS ("Unexpected floating ScalarType");
             # use fp32 off CUDA by default — reliable. Override via MUSER_JINA_DTYPE
             # (e.g. "bfloat16" on MPS for ~half the memory / faster).
@@ -136,26 +144,50 @@ class JinaV4Embedder:
         """encode_* returns a list of (float16) tensors; stack to float32 ndarray."""
         return np.stack([t.float().cpu().numpy() for t in out]).astype(np.float32)
 
+    @staticmethod
+    def _free():
+        """Release MPS allocator memory — jina's encode accumulates it otherwise."""
+        import torch
+
+        if torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+
     def embed_images(self, paths: Sequence[str], batch_size: int = 8) -> np.ndarray:
+        import torch
+
         model = self._load()
         out = []
-        for i in range(0, len(paths), batch_size):
-            chunk = list(paths[i : i + batch_size])
-            out.append(self._to_np(model.encode_image(images=chunk, task=self.task, batch_size=len(chunk))))
+        with torch.inference_mode():
+            for i in range(0, len(paths), batch_size):
+                # Hand jina pre-downscaled PIL images (both dims <= max_side) so no
+                # pathological file can explode the vision-token buffer (Metal OOM).
+                chunk = [_load_rgb(p) for p in paths[i : i + batch_size]]
+                out.append(
+                    self._to_np(
+                        model.encode_image(
+                            images=chunk, task=self.task, batch_size=len(chunk), max_pixels=self.max_pixels
+                        )
+                    )
+                )
+                self._free()
         v = np.concatenate(out, axis=0)
         self.dim = v.shape[-1]
         return _l2(v)
 
     def embed_queries(self, queries: Sequence[str], batch_size: int = 32) -> np.ndarray:
+        import torch
+
         model = self._load()
         out = []
-        for i in range(0, len(queries), batch_size):
-            chunk = list(queries[i : i + batch_size])
-            out.append(
-                self._to_np(
-                    model.encode_text(texts=chunk, task=self.task, prompt_name="query", batch_size=len(chunk))
+        with torch.inference_mode():
+            for i in range(0, len(queries), batch_size):
+                chunk = list(queries[i : i + batch_size])
+                out.append(
+                    self._to_np(
+                        model.encode_text(texts=chunk, task=self.task, prompt_name="query", batch_size=len(chunk))
+                    )
                 )
-            )
+                self._free()
         v = np.concatenate(out, axis=0)
         self.dim = v.shape[-1]
         return _l2(v)
