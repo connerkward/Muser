@@ -15,3 +15,8 @@ build/
 
 # ext-apps basic-host (cloned, or symlinked, by preview.mjs)
 /ext-apps
+
+# Python
+.venv/
+__pycache__/
+*.pyc

@@ -1,32 +1,43 @@
 # Muser — agent notes
 
-Natural-language image search. CLI + MCP App. Bun + TypeScript.
+Local-first semantic image search with a built-in retrieval-eval harness.
+**Python 3.12 + uv.** (A retired Bun/TS prototype lives in `legacy-ts/`.)
+
+See `REQUIREMENTS.md` for scope/decisions.
 
 ## Architecture
 
-- `src/core.ts` — the substance. CLIP embeddings (vision encoder for images, text encoder
-  for queries; same shared space) via `@huggingface/transformers`, stored/searched in a
-  per-folder LanceDB table at `<folder>/.muser`. Models are lazy-loaded and memoised.
-- `src/cli.ts` — `muser` bin (commander): `index`, `search`, `info`.
-- `src/server.ts` — `createServer()`: MCP tools `index_folder`, `index_info`, and the
-  `search_images` **ext-apps** tool that renders the gallery UI.
-- `src/mcp.ts` — `muser-mcp` bin: stdio (default) or `--http`.
-- `ui/search.html` + `ui/search-app.ts` — the ext-apps gallery, built by Vite
-  (`vite-plugin-singlefile`) into `dist/ui/search.html`, which `server.ts` serves.
+- `muser/embedders.py` — model-agnostic image/text embedders in a shared space.
+  Backends: `SentenceTransformerEmbedder` (CLIP/SigLIP baselines) and
+  `JinaV4Embedder` (2026 frontier default). Heavy deps lazy-imported.
+- `muser/registry.py` — `name -> (tier, factory)` model registry. Add a model
+  once → it appears in CLI, index, and benchmark. `DEFAULT_MODEL = "jina-v4"`.
+- `muser/index.py` — `MuserIndex`: one embedded LanceDB at `~/.muser/db`, one
+  table per model (`img__<model>`), cosine over L2-normalized vectors.
+  Incremental by mtime; skips corrupt files.
+- `muser/cli.py` — `muser` entrypoint (typer): `index`, `search`, `bench`,
+  `models`, `web`.
+- `eval/datasets.py` — standard benchmarks reduced to {image_paths, queries,
+  qrels}. Flickr30k via HF's `refs/convert/parquet` branch (scripts unsupported).
+- `eval/harness.py` — embeds corpus → LanceDB → queries → **ranx** metrics
+  (hits@1, recall@5/10, mrr, ndcg@10, map) + latency. `format_table` for a comparison.
+- `eval/web.py` — Gradio UI: Benchmark tab (run + compare) and Inspect tab
+  (query the corpus, gallery flags the ground-truth image).
 
 ## Conventions / gotchas
 
-- **Run with Bun**, not node/tsc — bins have a `#!/usr/bin/env bun` shebang and TS runs
-  directly. `bun run build:ui` must run before the MCP UI works (also runs on postinstall).
-- Keep heavy deps (`@huggingface/transformers`, `@lancedb/lancedb`, `sharp`) **lazy-loaded**
-  — MCP hosts list tools at startup and must not block on model downloads.
-- LanceDB schema is **inferred from the first batch** of rows (no apache-arrow dep). The
-  vector column is named `vector`; search is cosine distance, score = `1 - _distance`.
-- The sandboxed UI can't read local files, so `search_images` returns base64 JPEG
-  thumbnails (via `sharp`) in `structuredContent.results[].thumb`.
+- **Run via uv**: `uv run muser ...` / `uv run python ...`. Editable-install with
+  `uv pip install -e .` so the `muser` script and `eval/` imports resolve.
+- **Don't reinvent**: metrics = ranx; models = transformers/sentence-transformers;
+  index = LanceDB; benchmarks = HF datasets; web = Gradio.
+- **Adding a model**: one line in `registry.py`. Baselines are a quality *floor*;
+  the shipped default must be a 2026 frontier model.
+- Big/corrupt images: `_load_rgb` disables PIL's bomb guard (trusted local files)
+  and downscales to ≤1024px before encoding.
+- MPS is used automatically on Apple Silicon.
 
-## Reference implementations
+## Status
 
-Patterns mirror two working MCP apps by the same author:
-`~/dev/mcp-apple-notes` (transformers.js + LanceDB + ext-apps) and the `gritt` repo
-(clean `server.ts`/`main.ts` + Vite singlefile ext-apps skeleton).
+Core (embed/index/search), harness (Flickr30k + ranx), CLI, and web UI are
+working and verified. Next: wire `jina-v4` run (7.5GB download), add Qwen3-VL,
+VLM-generated ground truth for the user's own folders, embedded-service daemon.
