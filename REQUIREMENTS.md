@@ -43,6 +43,20 @@ surfaces: CLI · web (Gradio) · [MCP later]  → thin clients of the core/servi
 - **challengers**: Qwen3-VL-2B, Nemotron-ColEmbed-v2 (docs only).
 - **baselines (floor)**: CLIP ViT-B/32, ViT-L/14, SigLIP 2-base.
 
+### Measured (Flickr30k, this session) + hardware guidance
+| model | hits@1 | ndcg@10 | ms/img (M-series MPS) |
+|---|---|---|---|
+| jina-v4 | 0.967 | 0.986 | ~4000 (fp32) |
+| clip-l14 | 0.893 | 0.952 | ~90 |
+| clip-b32 | 0.853 | 0.930 | ~110 |
+
+- jina-v4 is best **but ~45× slower** on MPS (every 2026 frontier model is VLM-scale
+  → slow off CUDA). fp16 **crashes on MPS** (autocast); bf16 is ~3× slower than fp32.
+  → **fp32 off CUDA** (`MUSER_JINA_DTYPE` to override).
+- **Policy**: all models usable on Mac (`--model`); for bulk-indexing a large corpus
+  on Mac, prefer `clip-l14`/`siglip2-b`; run `jina-v4` on a CUDA server (fp16, fast)
+  via the embedded-service. Optional: re-rank top-K with jina-v4.
+
 ## Evaluation (the harness)
 - **Reuse standard benchmarks**: MIEB/MTEB, Flickr30k, MS-COCO-5k, CIRR/Fashion-IQ
   (composed), ViDoRe (docs, optional). Metrics via `ranx`: Recall@1/5/10, MRR, nDCG, mAP.
