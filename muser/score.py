@@ -50,6 +50,36 @@ RISK = {
 }
 
 
+# Benchmark-tuned weight (eval/nsfw_bench.py): nsfw = NSFW_W·Falconsai + (1-NSFW_W)·zero-shot.
+# 0.9 maximized AUC (0.913) vs Falconsai alone (0.873) and zero-shot alone (0.797).
+NSFW_W = 0.9
+
+_FALCON = {"pipe": None}
+
+
+def _falconsai_nsfw(paths, on_progress, batch_size: int = 24) -> np.ndarray:
+    """Real ViT NSFW probability per image (Falconsai/nsfw_image_detection)."""
+    from transformers import pipeline
+
+    from .embedders import _device, _load_rgb
+
+    if _FALCON["pipe"] is None:
+        _FALCON["pipe"] = pipeline("image-classification", model="Falconsai/nsfw_image_detection", device=_device())
+    pipe = _FALCON["pipe"]
+    out = np.zeros(len(paths), dtype=np.float32)
+    for i in range(0, len(paths), batch_size):
+        chunk = paths[i : i + batch_size]
+        try:
+            res = pipe([_load_rgb(p) for p in chunk], batch_size=batch_size)
+            for j, r in enumerate(res):
+                out[i + j] = next((x["score"] for x in r if x["label"].lower() == "nsfw"), 0.0)
+        except Exception:
+            pass  # leave unreadable images at 0
+        if i % (batch_size * 20) == 0:
+            on_progress(f"  Falconsai {i}/{len(paths)}")
+    return out
+
+
 def _pct(x: np.ndarray) -> np.ndarray:
     """Rank → percentile in [0,1] (robust, comparable across metrics)."""
     order = x.argsort()
@@ -92,11 +122,17 @@ def score_all(model: str = "siglip2-b", on_progress=print) -> dict:
         on_progress(f"risk:{cat} (zero-shot)…")
         risk[cat] = (X @ concept(prompts).T).max(1)
 
+    # ---- nsfw: blend the real Falconsai ViT classifier with the zero-shot signal
+    # at the benchmark-optimal weight (see eval/nsfw_bench.py / NSFW_W). ----
+    on_progress("nsfw (Falconsai ViT pass)…")
+    falcon = _falconsai_nsfw(paths, on_progress)
+    nsfw_blend = NSFW_W * falcon + (1 - NSFW_W) * _pct(risk["nsfw"])
+
     nov_p, aes_p = _pct(novelty), _pct(aesthetic)
     interesting = 0.6 * nov_p + 0.4 * aes_p
     metrics = {
         "interesting": _pct(interesting), "novelty": nov_p, "aesthetic": aes_p,
-        **{c: _pct(risk[c]) for c in risk},
+        "nsfw": _pct(nsfw_blend), "private": _pct(risk["private"]),
     }
 
     scores = {paths[i]: {m: round(float(metrics[m][i]), 4) for m in metrics} for i in range(n)}
