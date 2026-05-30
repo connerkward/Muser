@@ -42,6 +42,8 @@
   .card .foot { display:flex; justify-content:space-between; align-items:center; padding:0 10px 9px; }
   .card .score { font-size:12px; color:var(--acc); font-weight:600; }
   .card .reveal { font-size:11px; padding:4px 8px; }
+  .card .foot { gap:6px; }
+  .card .lens { font-size:11px; padding:4px 8px; color:var(--acc); border-color:var(--acc); white-space:nowrap; }
   .empty { color:var(--mut); text-align:center; padding:60px 0; }
   .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--panel);
            border:1px solid var(--line); padding:10px 16px; border-radius:10px; opacity:0; transition:.2s; }
@@ -56,6 +58,10 @@
   .modal .file img { width:100%; aspect-ratio:1; object-fit:cover; cursor:zoom-in; }
   .modal .file .fn { font-size:10px; color:var(--mut); padding:6px; word-break:break-all; flex:1; }
   .modal .file button { font-size:11px; border-radius:0; border:0; border-top:1px solid var(--line); padding:6px; }
+  .modal .file .frow { display:flex; }
+  .modal .file .frow button { flex:1; }
+  .modal .file .frow button + button { border-left:1px solid var(--line); }
+  .modal .file .lens { color:var(--acc); }
   .nav { background:transparent; border:1px solid transparent; padding:7px 12px; color:var(--mut); }
   .nav.on { background:var(--panel); border-color:var(--line); color:var(--fg); }
   .cluster { cursor:pointer; }
@@ -151,6 +157,28 @@ let toastT;
 function toast(m){ const t=$("#toast"); t.textContent=m; t.classList.add("show");
   clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"),1800); }
 
+// ---- reverse-image search: copy the image to the clipboard, open Google Lens, ⌘V.
+// $0 (consumer Lens, not the paid Vision API). Nothing leaves the machine until the
+// user pastes. Promise-form ClipboardItem keeps the click's user-activation across the
+// async fetch (required by Safari; works in Chrome). Clipboard images must be PNG.
+async function blobToPng(blob){
+  if(blob.type==="image/png") return blob;
+  const bmp=await createImageBitmap(blob);   // decodes jpg/webp/gif(first frame)/etc.
+  const cv=document.createElement("canvas"); cv.width=bmp.width; cv.height=bmp.height;
+  cv.getContext("2d").drawImage(bmp,0,0);
+  const png=await new Promise(r=>cv.toBlob(r,"image/png"));
+  if(!png||!png.size) throw new Error("could not render PNG");
+  return png;
+}
+async function lensSearch(path){
+  try{
+    const png=await blobToPng(await (await fetch(`/api/image?path=${enc(path)}`)).blob());
+    await navigator.clipboard.write([new ClipboardItem({"image/png":png})]);
+    toast("image copied ✓  press ⌘V in the Lens tab");
+    window.open("https://lens.google.com/","_blank");
+  }catch(e){ toast("copy failed: "+e.message); }
+}
+
 async function status(){
   const s = await (await fetch("/api/status")).json();
   $("#status").textContent = `${s.indexed.toLocaleString()} indexed · ${s.db}`;
@@ -179,8 +207,10 @@ async function search(){
       <div class="meta"><div class="name" title="${h.path}">${h.name}</div>
         <div class="bar"><i style="width:${pct}%"></i></div></div>
       <div class="foot"><span class="score">${(h.score*100).toFixed(1)}%</span>
+        <button class="lens" title="Copy image + open Google Lens (⌘V to search)">⌖ Source</button>
         <button class="reveal">Reveal</button></div>`;
     c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
+    c.querySelector(".lens").onclick=()=>lensSearch(h.path);
     c.querySelector(".reveal").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:h.path})}); toast("revealed in Finder"); };
     if(dupes>1) c.querySelector(".dupe").onclick=e=>{ e.stopPropagation(); openDupes(h); };
     g.appendChild(c);
@@ -195,9 +225,10 @@ function openDupes(h){
   const f=$("#dupesFiles"); f.innerHTML="";
   h.dupes.forEach(p=>{
     const d=document.createElement("div"); d.className="file";
-    d.innerHTML=`<img loading="lazy" src="/api/thumb?path=${enc(p)}" title="${p}"><div class="fn">${p}</div><button>Reveal</button>`;
+    d.innerHTML=`<img loading="lazy" src="/api/thumb?path=${enc(p)}" title="${p}"><div class="fn">${p}</div><div class="frow"><button class="lens">⌖ Source</button><button class="rev">Reveal</button></div>`;
     d.querySelector("img").onclick=()=>window.open(`/api/image?path=${enc(p)}`,"_blank");
-    d.querySelector("button").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:p})}); toast("revealed in Finder"); };
+    d.querySelector(".lens").onclick=()=>lensSearch(p);
+    d.querySelector(".rev").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:p})}); toast("revealed in Finder"); };
     f.appendChild(d);
   });
   $("#dupes").classList.add("show");
@@ -228,8 +259,10 @@ async function loadScores(gridSel,msgSel,metricSel){
     const dupe = (h.dupe_count||1)>1 ? `<span class="dupe" title="${h.dupe_count} copies">⧉ ${h.dupe_count}</span>` : "";
     const c=document.createElement("div"); c.className="card";
     c.innerHTML=`<div class="thumb"><span class="scoreb">${Math.round(h.score*100)}</span>${dupe}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}"></div>
-      <div class="meta"><div class="name" title="${h.path}">${h.name}</div></div>`;
+      <div class="meta"><div class="name" title="${h.path}">${h.name}</div></div>
+      <div class="foot"><button class="lens" title="Copy image + open Google Lens (⌘V to search)">⌖ Source</button></div>`;
     c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
+    c.querySelector(".lens").onclick=()=>lensSearch(h.path);
     if((h.dupe_count||1)>1) c.querySelector(".dupe").onclick=e=>{ e.stopPropagation(); openDupes(h); };
     g.appendChild(c);
   });
