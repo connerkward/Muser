@@ -17,6 +17,7 @@ from .embedders import (
     JinaCLIPv2Embedder,
     JinaV4Embedder,
     JinaV4MLXEmbedder,
+    PerceptionEncoderEmbedder,
     SentenceTransformerEmbedder,
     SigLIP2Embedder,
 )
@@ -34,6 +35,11 @@ _REGISTRY: dict[str, tuple[str, Callable[[], Embedder]]] = {
     "jina-clip-v2": ("frontier", lambda: JinaCLIPv2Embedder()),
     # SigLIP2-So400m: ~400M vision, Apache-2.0 — the commercial-safe top option.
     "siglip2-so400m": ("frontier", lambda: SigLIP2Embedder("siglip2-so400m", "google/siglip2-so400m-patch16-512")),
+    # SigLIP2-giant: 1.87B, Apache-2.0 — same-family upgrade above so400m.
+    "siglip2-giant": ("frontier", lambda: SigLIP2Embedder("siglip2-giant", "google/siglip2-giant-opt-patch16-384")),
+    # Perception Encoder (Meta, Apache-2.0) — claims to beat SigLIP2 on retrieval.
+    "pe-core-l14": ("frontier", lambda: PerceptionEncoderEmbedder("pe-core-l14", "PE-Core-L14-336")),
+    "pe-core-g14": ("frontier", lambda: PerceptionEncoderEmbedder("pe-core-g14", "PE-Core-G14-448")),
     # --- 2026 frontier ---
     # jina-v4 (transformers): best quality (0.967 Flickr) but leaks MPS memory and
     # hard-crashes on real images — CUDA server only.

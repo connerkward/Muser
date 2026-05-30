@@ -255,6 +255,58 @@ class SigLIP2Embedder:
 
 
 # ---------------------------------------------------------------------------
+# Perception Encoder (Meta, Apache-2.0) — claims to beat SigLIP2 on image-text
+# retrieval. CLIP-style dual encoder via Meta's perception_models lib.
+# ---------------------------------------------------------------------------
+@dataclass
+class PerceptionEncoderEmbedder:
+    name: str
+    config: str  # e.g. "PE-Core-L14-336"
+    dim: int = 0
+    _model: object = field(default=None, repr=False)
+    _preprocess: object = field(default=None, repr=False)
+    _tokenizer: object = field(default=None, repr=False)
+
+    def _load(self):
+        if self._model is None:
+            import core.vision_encoder.pe as pe
+            import core.vision_encoder.transforms as transforms
+
+            self._model = pe.CLIP.from_config(self.config, pretrained=True).to(_device()).eval()
+            self._preprocess = transforms.get_image_transform(self._model.image_size)
+            self._tokenizer = transforms.get_text_tokenizer(self._model.context_length)
+        return self._model
+
+    def embed_images(self, paths: Sequence[str], batch_size: int = 16) -> np.ndarray:
+        import torch
+
+        self._load()
+        dev = _device()
+        out = []
+        with torch.inference_mode():
+            for i in range(0, len(paths), batch_size):
+                imgs = torch.stack([self._preprocess(_load_rgb(p)) for p in paths[i : i + batch_size]]).to(dev)
+                out.append(self._model.encode_image(imgs).float().cpu().numpy())
+        v = np.concatenate(out, axis=0).astype(np.float32)
+        self.dim = v.shape[-1]
+        return _l2(v)
+
+    def embed_queries(self, queries: Sequence[str], batch_size: int = 64) -> np.ndarray:
+        import torch
+
+        self._load()
+        dev = _device()
+        out = []
+        with torch.inference_mode():
+            for i in range(0, len(queries), batch_size):
+                toks = self._tokenizer(list(queries[i : i + batch_size])).to(dev)
+                out.append(self._model.encode_text(toks).float().cpu().numpy())
+        v = np.concatenate(out, axis=0).astype(np.float32)
+        self.dim = v.shape[-1]
+        return _l2(v)
+
+
+# ---------------------------------------------------------------------------
 # Jina-CLIP v2 — 865M CLIP-architecture (EVA02-L vision + XLM-R text). NOT the
 # 3.75B VLM, so it runs fine on MPS. sentence-transformers exposes only its text
 # tower, so use the native transformers API (encode_text / encode_image).
