@@ -72,6 +72,34 @@ retrieval is ~random — neither gets a domain point.)
 data: **siglip2-b is the default** (tied-best quality, fastest top-tier, Apache, clean
 install); pe-core-l14's edge isn't worth its install friction here.
 
+## Cross-check — COCO-5k (the ranking is dataset-independent)
+
+Third dataset, frontier models only (n=500). Confirms the order isn't a Flickr artifact.
+
+![Pareto frontier — COCO-5k](pareto-coco.png)
+
+| model | hits@1 | ndcg@10 | ms/img |
+|---|---|---|---|
+| pe-core-l14 | 0.778 | 0.890 | 114 |
+| siglip2-b | 0.770 | 0.880 | 71 |
+| siglip2-so400m | 0.770 | 0.879 | 275 |
+| clip-l14 | 0.626 | 0.793 | 54 |
+| clip-b32 | 0.578 | 0.767 | 33 |
+
+**Consistent across all three datasets:** pe-core-l14 ≈ siglip2-b ≈ so400m at the top
+(within ~1 SE — a tie), siglip2-so400m always dominated (ties siglip2-b on quality at
+3–4× the cost), CLIP tier 15–20 pts behind. The pe-l14/siglip2-b co-lead and the
+so400m domination hold on Flickr, COCO, *and* the user's own corpus — so **siglip2-b
+as default / pe-core-l14 as the quality pick is a robust conclusion, not a Flickr fluke.**
+
+| hits@1 | Flickr-1k | COCO-500 | z-to-sort-500 |
+|---|---|---|---|
+| pe-core-l14 | 0.913 | 0.778 | 0.782 |
+| siglip2-b | 0.871 | 0.770 | 0.770 |
+| siglip2-so400m | 0.876 | 0.770 | 0.708 |
+| clip-l14 | 0.726 | 0.626 | 0.550 |
+| clip-b32 | 0.675 | 0.578 | 0.560 |
+
 ## Other models tested today (not on the 1k axis)
 
 Smaller/earlier evals or disqualified — shown for completeness.

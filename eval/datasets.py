@@ -73,4 +73,36 @@ def _rng(seed: int):
     return r
 
 
-LOADERS = {"flickr30k": load_flickr30k}
+def load_coco(n_images: int = 200, captions_per_image: int = 1, seed: int = 0) -> Benchmark:
+    """MS-COCO 2014 5k test split: text->image retrieval ground truth."""
+    from datasets import load_dataset
+
+    ds = load_dataset(
+        "nlphuji/mscoco_2014_5k_test_image_text_retrieval", revision="refs/convert/parquet", split="test"
+    )
+    idx = list(range(len(ds)))
+    rng = _rng(seed)
+    rng.shuffle(idx)
+    idx = sorted(idx[:n_images])
+
+    out_dir = CACHE / "coco5k"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    image_paths, queries, qrels = [], [], {}
+    for row_i in idx:
+        row = ds[row_i]
+        img_id = str(row.get("cocoid", row.get("filename", row_i)))
+        path = out_dir / f"{img_id}.jpg"
+        if not path.exists():
+            row["image"].convert("RGB").save(path, "JPEG", quality=90)
+        path_s = str(path.resolve())
+        image_paths.append(path_s)
+        caps = row["caption"]
+        caps = [caps] if isinstance(caps, str) else caps
+        for j, cap in enumerate(caps[:captions_per_image]):
+            qid = f"{img_id}__{j}"
+            queries.append((qid, cap.strip()))
+            qrels[qid] = {path_s: 1}
+    return Benchmark("coco5k", image_paths, queries, qrels)
+
+
+LOADERS = {"flickr30k": load_flickr30k, "coco5k": load_coco}
