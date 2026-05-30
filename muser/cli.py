@@ -9,8 +9,13 @@
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
 import sys
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 import typer
@@ -20,6 +25,50 @@ from .registry import DEFAULT_MODEL, load_model, model_names
 
 app = typer.Typer(add_completion=False, help="Local-first semantic image search + eval harness.")
 con = Console()
+
+# ---------------------------------------------------------------------------
+# Thin-client: index/search talk to the warm `muser serve` process over HTTP
+# (auto-spawned if down) so the terminal path is instant. `--local` bypasses it.
+# ---------------------------------------------------------------------------
+SERVICE = "http://127.0.0.1:7777"
+
+
+def _get(path: str, **params):
+    url = SERVICE + path + ("?" + urllib.parse.urlencode(params) if params else "")
+    with urllib.request.urlopen(url, timeout=600) as r:
+        return json.load(r)
+
+
+def _post(path: str, payload: dict):
+    req = urllib.request.Request(
+        SERVICE + path, data=json.dumps(payload).encode(), headers={"content-type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=86400) as r:
+        return json.load(r)
+
+
+def _service_up() -> bool:
+    try:
+        urllib.request.urlopen(SERVICE + "/api/status", timeout=0.6)
+        return True
+    except Exception:
+        return False
+
+
+def _ensure_service():
+    if _service_up():
+        return
+    con.print("[dim]starting muser service (warming model, ~20s first time)…[/]")
+    kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    if os.name == "posix":
+        kwargs["start_new_session"] = True
+    subprocess.Popen([sys.executable, "-c", "from muser.service import serve; serve()"], **kwargs)
+    for _ in range(120):
+        time.sleep(0.5)
+        if _service_up():
+            return
+    con.print("[red]service failed to start[/]")
+    raise typer.Exit(1)
 
 
 @app.command()
@@ -34,22 +83,30 @@ def models():
 @app.command()
 def index(
     folder: str = typer.Argument(..., help="Folder of images to index"),
-    model: str = typer.Option(DEFAULT_MODEL, help="Embedding model"),
+    model: str = typer.Option(DEFAULT_MODEL, help="Embedding model (only with --local)"),
     recursive: bool = typer.Option(True, help="Descend into subfolders"),
+    local: bool = typer.Option(False, "--local", help="Index in-process instead of via the service"),
 ):
     """Index (or incrementally re-index) a folder of images."""
+    folder = str(Path(folder).expanduser())
+    if not local:
+        _ensure_service()
+        con.print(f"[dim]indexing {folder} via service…[/]")
+        r = _post("/api/index", {"folder": folder, "recursive": recursive})
+        con.print(f"  +{r['added']} added · {r['updated']} updated · {r['removed']} removed · {r['total']} total")
+        return
+
     from .index import MuserIndex
 
     emb = load_model(model)
     idx = MuserIndex()
     t0 = time.time()
-
-    def prog(done, total):
-        con.print(f"  embedding {done}/{total}", end="\r")
-
-    res = idx.index_folder(folder, model, emb, recursive=recursive, on_progress=prog)
+    res = idx.index_folder(
+        folder, model, emb, recursive=recursive,
+        on_progress=lambda d, t: con.print(f"  embedding {d}/{t}", end="\r"),
+    )
     con.print(
-        f"\nIndexed {Path(folder).resolve()} [{model}]\n"
+        f"\nIndexed {folder} [{model}]\n"
         f"  +{res.added} added · {res.updated} updated · {res.removed} removed · "
         f"{res.total} total  ({time.time()-t0:.1f}s)"
     )
@@ -58,24 +115,31 @@ def index(
 @app.command()
 def search(
     query: list[str] = typer.Argument(..., help='Text query, e.g. "a dog on a beach"'),
-    in_: str = typer.Option(..., "--in", help="Indexed folder (sets the search scope is global; folder informs nothing yet)"),
-    model: str = typer.Option(DEFAULT_MODEL, help="Embedding model"),
     k: int = typer.Option(12, "-k", "--limit", help="Number of results"),
+    model: str = typer.Option(DEFAULT_MODEL, help="Embedding model (only with --local)"),
+    local: bool = typer.Option(False, "--local", help="Search in-process instead of via the service"),
 ):
-    """Search the index by natural-language description."""
-    from .index import MuserIndex
-
+    """Search the whole index by natural-language description."""
     q = " ".join(query)
-    emb = load_model(model)
-    idx = MuserIndex()
-    qv = emb.embed_queries([q])[0]
-    hits = idx.search(model, qv, k=k)
-    if not hits:
-        con.print(f"No results. Index a folder first: muser index <folder> --model {model}")
+    if not local:
+        _ensure_service()
+        r = _get("/api/search", q=q, k=k)
+        results, used = r["results"], r["model"]
+    else:
+        from .index import MuserIndex
+
+        emb = load_model(model)
+        qv = emb.embed_queries([q])[0]
+        results = [{"path": p, "name": os.path.basename(p), "score": s} for p, s in MuserIndex().search(model, qv, k=k)]
+        used = model
+
+    if not results:
+        con.print("No results. Index a folder first:  muser index <folder>")
         raise typer.Exit(1)
-    con.print(f'Top {len(hits)} for "{q}" [{model}]:')
-    for i, (p, s) in enumerate(hits, 1):
-        con.print(f"  {i:2}. {s*100:5.1f}%  {p}")
+    con.print(f'Top {len(results)} for "{q}" [dim]\\[{used}][/]:')
+    for i, h in enumerate(results, 1):
+        parent = "file://" + urllib.parse.quote(os.path.dirname(h["path"]))
+        con.print(f"  {i:2}. {h['score']*100:5.1f}%  [link={parent}]{h['name']}[/link]  [dim]{h['path']}[/dim]")
 
 
 @app.command()

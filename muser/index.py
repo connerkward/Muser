@@ -123,7 +123,13 @@ class MuserIndex:
                 existing[r["path"]] = float(r["mtimeMs"])
 
         to_embed = [p for p in on_disk if abs(existing.get(p, -1) - os.stat(p).st_mtime * 1000.0) > 1.0]
-        to_remove = [p for p in existing if p not in on_disk_set]
+        # Only prune rows UNDER this folder — the table accumulates many folders, so a
+        # path indexed from elsewhere must not be removed when re-indexing this one.
+        abs_path = str(Path(folder).resolve())
+        prefix = abs_path + os.sep
+        to_remove = [
+            p for p in existing if (p == abs_path or p.startswith(prefix)) and p not in on_disk_set
+        ]
 
         # Drop stale/replaced rows before re-adding.
         stale = to_remove + [p for p in to_embed if p in existing]
@@ -131,7 +137,17 @@ class MuserIndex:
             t.delete(" OR ".join("path = '" + p.replace("'", "''") + "'" for p in stale))
 
         added_paths = [p for p in to_embed if p not in existing]
-        self.add_images(model, embedder, to_embed, batch_size=batch_size, on_progress=on_progress)
+        # Commit in chunks so a long index is durable, searchable mid-run, and resumable
+        # by mtime if interrupted (a single add-at-the-end would lose everything on crash).
+        CHUNK = 512
+        done = 0
+        for i in range(0, len(to_embed), CHUNK):
+            chunk = to_embed[i : i + CHUNK]
+            self.add_images(
+                model, embedder, chunk, batch_size=batch_size,
+                on_progress=(lambda d, _t: on_progress(done + d, len(to_embed))) if on_progress else None,
+            )
+            done += len(chunk)
 
         return IndexResult(
             added=len(added_paths),
