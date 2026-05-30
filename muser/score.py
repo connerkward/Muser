@@ -47,10 +47,6 @@ RISK = {
         "a credit card or bank statement", "a passport or ID document",
         "personal financial information on a screen", "a private email inbox",
     ],
-    "political": [
-        "a political protest or rally", "a political campaign poster",
-        "a politician giving a speech", "political propaganda", "a controversial political image",
-    ],
 }
 
 
@@ -83,7 +79,7 @@ def score_all(model: str = "siglip2-b", on_progress=print) -> dict:
     from pynndescent import NNDescent
 
     ann = NNDescent(X, metric="cosine", n_neighbors=12, random_state=42)
-    _, dist = ann.neighbor_graph  # cosine distances incl. self at col 0
+    nbr, dist = ann.neighbor_graph  # neighbor indices + cosine distances incl. self at col 0
     novelty = dist[:, 1:].mean(axis=1)  # higher distance = more isolated = more novel
 
     # ---- aesthetic: striking vs dull ----
@@ -104,7 +100,40 @@ def score_all(model: str = "siglip2-b", on_progress=print) -> dict:
     }
 
     scores = {paths[i]: {m: round(float(metrics[m][i]), 4) for m in metrics} for i in range(n)}
-    out = {"model": model, "n": n, "metrics": list(metrics.keys()), "scores": scores}
+
+    # ---- duplicate groups (reuse the kNN graph): union near-identical images so the
+    # ranked tabs show one canonical per group with its copies, like search dedup. ----
+    on_progress("duplicate groups…")
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in range(n):
+        for j in range(1, nbr.shape[1]):
+            if dist[i, j] <= 0.015:  # cosine distance ≤ 0.015  ⇔  similarity ≥ 0.985
+                ri, rj = find(i), find(int(nbr[i, j]))
+                if ri != rj:
+                    parent[ri] = rj
+    from collections import defaultdict
+
+    groups = defaultdict(list)
+    for i in range(n):
+        groups[find(i)].append(i)
+    inter = metrics["interesting"]
+    canonical, dupes = [], {}
+    for members in groups.values():
+        members.sort(key=lambda i: -inter[i])  # representative = highest-interesting copy
+        canon = paths[members[0]]
+        canonical.append(canon)
+        if len(members) > 1:
+            dupes[canon] = [paths[i] for i in members]
+
+    out = {"model": model, "n": n, "metrics": list(metrics.keys()), "scores": scores,
+           "canonical": canonical, "dupes": dupes}
     SCORES_JSON.write_text(json.dumps(out))
-    on_progress(f"wrote {SCORES_JSON}")
+    on_progress(f"wrote {SCORES_JSON}  ({len(canonical)} unique of {n})")
     return out

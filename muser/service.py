@@ -182,12 +182,18 @@ def create_app(model: str = DEFAULT_MODEL):
         s = json.loads(SCORES.read_text())
         if metric not in s["metrics"]:
             return {"built": False, "items": []}
-        items = sorted(s["scores"].items(), key=lambda kv: kv[1].get(metric, 0), reverse=(order == "desc"))
-        page = items[offset : offset + limit]
-        return {
-            "built": True, "metric": metric, "metrics": s["metrics"], "total": len(items),
-            "items": [{"path": p, "name": os.path.basename(p), "score": sc.get(metric, 0), "scores": sc} for p, sc in page],
-        }
+        canon = s.get("canonical") or list(s["scores"].keys())  # deduped reps (fallback for old files)
+        dupes = s.get("dupes", {})
+        ranked = sorted(canon, key=lambda p: s["scores"][p].get(metric, 0), reverse=(order == "desc"))
+        page = ranked[offset : offset + limit]
+        items = []
+        for p in page:
+            d = dupes.get(p, [p])
+            items.append({
+                "path": p, "name": os.path.basename(p), "score": s["scores"][p].get(metric, 0),
+                "scores": s["scores"][p], "dupes": d, "dupe_count": len(d),
+            })
+        return {"built": True, "metric": metric, "metrics": s["metrics"], "total": len(ranked), "items": items}
 
     return app
 
