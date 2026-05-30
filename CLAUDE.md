@@ -33,14 +33,25 @@ See `REQUIREMENTS.md` for scope/decisions.
 
 ## Reverse-image search (web UI)
 
-Every result, score card, and dupes-modal file has a **⌖ Source** button. It's
-purely client-side and **$0**: `lensSearch()` in `app.html` fetches `/api/image`,
-converts to PNG (`createImageBitmap` → canvas, since clipboard writes must be PNG),
-`navigator.clipboard.write`s it (works on `127.0.0.1` — a secure context), flashes a
-"✓ Copied" animation, then opens `lens.google.com`; the user presses ⌘V. Nothing
-leaves the machine until they paste. The ⌘V is irreducible for a *local* file — a
-plain link can't auto-upload it, and `lens.google.com/uploadbyurl?url=` needs a
-*public* URL (would require tunnelling the service; rejected for privacy).
+Every result, score card, and dupes-modal file has two client-side, **$0** buttons,
+both driven by one helper `engineSearch(path, btn, url, hint)` in `app.html`:
+
+- **⌖ Source** (green) → Google Lens — "where does this image appear" / visually similar.
+- **⏱ Origin** (amber) → TinEye — provenance. The toast tells the user to paste then
+  **sort by "Oldest"**, surfacing the earliest *crawled* copy ≈ original source.
+
+`engineSearch` fetches `/api/image`, converts to PNG (`createImageBitmap` → canvas,
+since clipboard image writes must be PNG), `navigator.clipboard.write`s it (works on
+`127.0.0.1` — a secure context), flashes a "✓ Copied" pop, then opens the engine; the
+user presses ⌘V. Nothing leaves the machine until they paste.
+
+Two honest limits: (1) the ⌘V is irreducible for a *local* file — a plain link can't
+auto-upload it, and `…/uploadbyurl?url=` needs a *public* URL (rejected: would require
+tunnelling the service). (2) "first time posted on the internet" is **not knowable** —
+TinEye's oldest = earliest *it* crawled, not the true first post (origin may be
+deleted/uncrawled/offline). Best-effort proxy, not a guarantee. A fully automated
+earliest-date answer would need the **paid TinEye Search API** (`sort=crawl_date asc`,
+~$0.04/search) wired server-side — not built.
 
 The paid alternative (programmatic JSON results, batchable) is **Cloud Vision Web
 Detection** — a restricted key lives in `central/.env` (`GCP_VISION_API_KEY`,

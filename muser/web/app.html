@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Muser — semantic image search</title>
 <style>
-  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --fg:#e7e9ee; --mut:#8b93a3; --acc:#46c8a0; }
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --fg:#e7e9ee; --mut:#8b93a3; --acc:#46c8a0; --acc2:#d6a85b; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--fg);
          font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
@@ -42,11 +42,13 @@
   .card .foot { display:flex; justify-content:space-between; align-items:center; padding:0 10px 9px; }
   .card .score { font-size:12px; color:var(--acc); font-weight:600; }
   .card .reveal { font-size:11px; padding:4px 8px; }
-  .card .foot { gap:6px; }
-  .card .lens { font-size:11px; padding:4px 8px; color:var(--acc); border-color:var(--acc); white-space:nowrap; transition:background .15s, color .15s; }
-  .lens.copied { background:var(--acc) !important; color:#06231a !important; border-color:var(--acc) !important;
-                 animation:lenspop .34s cubic-bezier(.3,1.4,.5,1); }
-  .lens:disabled { cursor:default; }
+  .card .foot { gap:6px; flex-wrap:wrap; }
+  .card .lens, .card .orig { font-size:11px; padding:4px 8px; white-space:nowrap; transition:background .15s, color .15s; }
+  .lens { color:var(--acc); border-color:var(--acc); }
+  .orig { color:var(--acc2); border-color:var(--acc2); }
+  .copied { background:var(--acc) !important; color:#06231a !important; border-color:var(--acc) !important;
+            animation:lenspop .34s cubic-bezier(.3,1.4,.5,1); }
+  .lens:disabled, .orig:disabled { cursor:default; }
   @keyframes lenspop { 0%{transform:scale(1)} 45%{transform:scale(1.14)} 100%{transform:scale(1)} }
   .empty { color:var(--mut); text-align:center; padding:60px 0; }
   .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--panel);
@@ -174,21 +176,29 @@ async function blobToPng(blob){
   if(!png||!png.size) throw new Error("could not render PNG");
   return png;
 }
-async function lensSearch(path, btn){
+// Copy the image to the clipboard, flash a "✓ Copied" pop on the button, then open a
+// reverse-image engine in a new tab where the user pastes (⌘V). Used for two engines:
+//   • Lens  — "where does this appear" / visually-similar (lens.google.com)
+//   • TinEye — provenance: sort by "Oldest" → earliest crawled copy ≈ original source.
+//     (TinEye's crawl date is the earliest IT indexed, not provably the first post — the
+//     true origin can be deleted/uncrawled/offline. Best available proxy, not a guarantee.)
+async function engineSearch(path, btn, url, hint){
   const orig = btn && btn.textContent;
   try{
     if(btn) btn.disabled=true;
     const png=await blobToPng(await (await fetch(`/api/image?path=${enc(path)}`)).blob());
     await navigator.clipboard.write([new ClipboardItem({"image/png":png})]);
     if(btn){ btn.textContent="✓ Copied"; btn.classList.add("copied"); }
-    toast("press ⌘V in the Lens tab");
+    toast(hint);
     await new Promise(r=>setTimeout(r,600));        // let the "copied" pop play before the tab steals focus
-    window.open("https://lens.google.com/","_blank");
+    window.open(url,"_blank");
   }catch(e){ toast("copy failed: "+e.message); }
   finally{
     if(btn) setTimeout(()=>{ btn.textContent=orig; btn.classList.remove("copied"); btn.disabled=false; }, 1100);
   }
 }
+const lensSearch   =(path,btn)=>engineSearch(path,btn,"https://lens.google.com/","press ⌘V in the Lens tab");
+const originSearch =(path,btn)=>engineSearch(path,btn,"https://tineye.com/","press ⌘V, then sort by “Oldest” for the earliest copy");
 
 async function status(){
   const s = await (await fetch("/api/status")).json();
@@ -218,10 +228,12 @@ async function search(){
       <div class="meta"><div class="name" title="${h.path}">${h.name}</div>
         <div class="bar"><i style="width:${pct}%"></i></div></div>
       <div class="foot"><span class="score">${(h.score*100).toFixed(1)}%</span>
-        <button class="lens" title="Copy image + open Google Lens (⌘V to search)">⌖ Source</button>
+        <button class="lens" title="Copy image + open Google Lens (⌘V to search where it appears)">⌖ Source</button>
+        <button class="orig" title="Copy image + open TinEye (⌘V, sort Oldest = earliest known copy)">⏱ Origin</button>
         <button class="reveal">Reveal</button></div>`;
     c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
     c.querySelector(".lens").onclick=e=>lensSearch(h.path,e.currentTarget);
+    c.querySelector(".orig").onclick=e=>originSearch(h.path,e.currentTarget);
     c.querySelector(".reveal").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:h.path})}); toast("revealed in Finder"); };
     if(dupes>1) c.querySelector(".dupe").onclick=e=>{ e.stopPropagation(); openDupes(h); };
     g.appendChild(c);
@@ -236,9 +248,10 @@ function openDupes(h){
   const f=$("#dupesFiles"); f.innerHTML="";
   h.dupes.forEach(p=>{
     const d=document.createElement("div"); d.className="file";
-    d.innerHTML=`<img loading="lazy" src="/api/thumb?path=${enc(p)}" title="${p}"><div class="fn">${p}</div><div class="frow"><button class="lens">⌖ Source</button><button class="rev">Reveal</button></div>`;
+    d.innerHTML=`<img loading="lazy" src="/api/thumb?path=${enc(p)}" title="${p}"><div class="fn">${p}</div><div class="frow"><button class="lens">⌖ Source</button><button class="orig">⏱ Origin</button><button class="rev">Reveal</button></div>`;
     d.querySelector("img").onclick=()=>window.open(`/api/image?path=${enc(p)}`,"_blank");
     d.querySelector(".lens").onclick=e=>lensSearch(p,e.currentTarget);
+    d.querySelector(".orig").onclick=e=>originSearch(p,e.currentTarget);
     d.querySelector(".rev").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:p})}); toast("revealed in Finder"); };
     f.appendChild(d);
   });
@@ -271,9 +284,11 @@ async function loadScores(gridSel,msgSel,metricSel){
     const c=document.createElement("div"); c.className="card";
     c.innerHTML=`<div class="thumb"><span class="scoreb">${Math.round(h.score*100)}</span>${dupe}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}"></div>
       <div class="meta"><div class="name" title="${h.path}">${h.name}</div></div>
-      <div class="foot"><button class="lens" title="Copy image + open Google Lens (⌘V to search)">⌖ Source</button></div>`;
+      <div class="foot"><button class="lens" title="Copy image + open Google Lens (⌘V to search where it appears)">⌖ Source</button>
+        <button class="orig" title="Copy image + open TinEye (⌘V, sort Oldest = earliest known copy)">⏱ Origin</button></div>`;
     c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
     c.querySelector(".lens").onclick=e=>lensSearch(h.path,e.currentTarget);
+    c.querySelector(".orig").onclick=e=>originSearch(h.path,e.currentTarget);
     if((h.dupe_count||1)>1) c.querySelector(".dupe").onclick=e=>{ e.stopPropagation(); openDupes(h); };
     g.appendChild(c);
   });
