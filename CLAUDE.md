@@ -16,7 +16,11 @@ See `REQUIREMENTS.md` for scope/decisions.
   table per model (`img__<model>`), cosine over L2-normalized vectors.
   Incremental by mtime; skips corrupt files.
 - `muser/cli.py` — `muser` entrypoint (typer): `index`, `search`, `bench`,
-  `models`, `web`.
+  `models`, `serve`, `web`.
+- `muser/service.py` — **embedded service** (`muser serve`): FastAPI app that warms
+  the model once and owns the index; serves JSON API + the web search UI
+  (`muser/web/app.html`). Warm search ≈ 30 ms. Endpoints: /api/search, /api/index,
+  /api/thumb (PIL), /api/image, /api/reveal (open -R), /api/model, /api/status.
 - `eval/datasets.py` — standard benchmarks reduced to {image_paths, queries,
   qrels}. Flickr30k via HF's `refs/convert/parquet` branch (scripts unsupported).
 - `eval/harness.py` — embeds corpus → LanceDB → queries → **ranx** metrics
@@ -38,6 +42,8 @@ See `REQUIREMENTS.md` for scope/decisions.
 
 ## Status
 
-Core (embed/index/search), harness (Flickr30k + ranx), CLI, and web UI are
+Default model: **siglip2-b** (Apache, best quality/speed/license — see reports/).
+Embedded service + web search UI working (`muser serve` → http://127.0.0.1:7777).
+Core (embed/index/search), harness (Flickr30k/COCO/domain + ranx), CLI, and web UI are
 working and verified. Next: wire `jina-v4` run (7.5GB download), add Qwen3-VL,
 VLM-generated ground truth for the user's own folders, embedded-service daemon.

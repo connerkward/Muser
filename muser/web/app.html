@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Muser — semantic image search</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --fg:#e7e9ee; --mut:#8b93a3; --acc:#46c8a0; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { display:flex; align-items:center; gap:16px; padding:14px 22px;
+           border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:5; }
+  header h1 { font-size:16px; margin:0; font-weight:650; letter-spacing:.2px; }
+  header .sp { flex:1; }
+  .mut { color:var(--mut); font-size:13px; }
+  select, input, button { font:inherit; color:var(--fg); background:var(--panel);
+           border:1px solid var(--line); border-radius:9px; padding:9px 12px; outline:none; }
+  select:focus, input:focus { border-color:var(--acc); }
+  button { cursor:pointer; }
+  button.primary { background:var(--acc); color:#06231a; border-color:var(--acc); font-weight:650; }
+  button:hover { filter:brightness(1.08); }
+  .wrap { max-width:1200px; margin:0 auto; padding:22px; }
+  .searchbar { display:flex; gap:10px; margin-bottom:8px; }
+  .searchbar input { flex:1; font-size:16px; padding:13px 16px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:10px 0 18px; }
+  .row input.folder { flex:1; min-width:240px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden;
+          display:flex; flex-direction:column; }
+  .card .thumb { aspect-ratio:1; background:#0a0c10; display:flex; align-items:center; justify-content:center; cursor:zoom-in; }
+  .card .thumb img { width:100%; height:100%; object-fit:cover; }
+  .card .meta { padding:8px 10px; display:flex; flex-direction:column; gap:4px; }
+  .card .name { font-size:12px; color:var(--mut); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .card .bar { height:5px; border-radius:3px; background:var(--line); overflow:hidden; }
+  .card .bar > i { display:block; height:100%; background:var(--acc); }
+  .card .foot { display:flex; justify-content:space-between; align-items:center; padding:0 10px 9px; }
+  .card .score { font-size:12px; color:var(--acc); font-weight:600; }
+  .card .reveal { font-size:11px; padding:4px 8px; }
+  .empty { color:var(--mut); text-align:center; padding:60px 0; }
+  .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--panel);
+           border:1px solid var(--line); padding:10px 16px; border-radius:10px; opacity:0; transition:.2s; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🖼️ Muser</h1>
+  <span class="mut" id="status">…</span>
+  <span class="sp"></span>
+  <span class="mut">model</span>
+  <select id="model"></select>
+</header>
+
+<div class="wrap">
+  <div class="searchbar">
+    <input id="q" placeholder="Describe what you're looking for — e.g. “a person on a snowy mountain”" autofocus />
+    <button class="primary" id="go">Search</button>
+  </div>
+  <div class="row">
+    <input class="folder" id="folder" placeholder="Folder to index (absolute path)…" />
+    <button id="index">Index folder</button>
+    <span class="mut" id="idxmsg"></span>
+  </div>
+  <div id="results" class="grid"></div>
+  <div id="empty" class="empty">Index a folder, then search it.</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const enc = encodeURIComponent;
+let toastT;
+function toast(m){ const t=$("#toast"); t.textContent=m; t.classList.add("show");
+  clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"),1800); }
+
+async function status(){
+  const s = await (await fetch("/api/status")).json();
+  $("#status").textContent = `${s.indexed.toLocaleString()} indexed · ${s.db}`;
+  const sel=$("#model"); sel.innerHTML="";
+  s.models.forEach(m=>{ const o=document.createElement("option"); o.value=o.textContent=m; if(m===s.model)o.selected=true; sel.appendChild(o); });
+}
+$("#model").onchange = async e => {
+  toast("switching model…");
+  await fetch("/api/model",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name:e.target.value})});
+  await status(); toast("model ready");
+};
+
+async function search(){
+  const q=$("#q").value.trim(); if(!q) return;
+  $("#empty").style.display="none";
+  const r = await (await fetch(`/api/search?q=${enc(q)}&k=30`)).json();
+  const g=$("#results"); g.innerHTML="";
+  if(!r.results.length){ $("#empty").style.display="block"; $("#empty").textContent="No matches — is this folder indexed with the current model?"; return; }
+  r.results.forEach(h=>{
+    const pct=Math.max(0,Math.min(100,Math.round(h.score*100)));
+    const c=document.createElement("div"); c.className="card";
+    c.innerHTML=`
+      <div class="thumb"><img loading="lazy" src="/api/thumb?path=${enc(h.path)}" title="${h.name}"></div>
+      <div class="meta"><div class="name" title="${h.path}">${h.name}</div>
+        <div class="bar"><i style="width:${pct}%"></i></div></div>
+      <div class="foot"><span class="score">${(h.score*100).toFixed(1)}%</span>
+        <button class="reveal">Reveal</button></div>`;
+    c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
+    c.querySelector(".reveal").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:h.path})}); toast("revealed in Finder"); };
+    g.appendChild(c);
+  });
+}
+$("#go").onclick=search;
+$("#q").addEventListener("keydown",e=>{ if(e.key==="Enter") search(); });
+
+$("#index").onclick=async()=>{
+  const folder=$("#folder").value.trim(); if(!folder) return;
+  $("#idxmsg").textContent="indexing… (first run loads the model)";
+  try{
+    const r=await (await fetch("/api/index",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({folder})})).json();
+    $("#idxmsg").textContent=`+${r.added} added · ${r.updated} updated · ${r.total} total`;
+    await status();
+  }catch(e){ $("#idxmsg").textContent="index failed (check path)"; }
+};
+
+status();
+</script>
+</body>
+</html>

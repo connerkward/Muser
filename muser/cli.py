@@ -101,6 +101,18 @@ def bench(
 
 
 @app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", help="Bind address"),
+    port: int = typer.Option(7777, help="Port"),
+    model: str = typer.Option(DEFAULT_MODEL, help="Embedding model to serve"),
+):
+    """Run the embedded service: warm model + index + web search UI."""
+    from .service import serve as _serve
+
+    _serve(host=host, port=port, model=model)
+
+
+@app.command()
 def web():
     """Launch the benchmark/inspection web UI (Gradio)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
