@@ -27,6 +27,40 @@ Same eval for all five (1000 images, 1000 caption queries, `ranx` metrics).
 | clip-l14 | 0.726 | 0.920 | 0.963 | 0.847 | 69 | open (OpenAI) | ✓ |
 | clip-b32 | 0.675 | 0.897 | 0.938 | 0.811 | 16 | open (OpenAI) | ✓ speed floor |
 
+## Domain eval — `z-to-sort` (the user's real corpus)
+
+Flickr is general photos; the real corpus is creative/AI-gen/screenshot imagery.
+Ground truth auto-generated: each of 500 sampled images captioned with BLIP-large;
+the caption is the query, its source image the correct answer (`eval/domain.py`).
+Absolute scores are lower than Flickr (BLIP captions on a near-duplicate-heavy dump
+are less discriminative) but difficulty is identical across models, so the ranking
+holds. Error bars = 95% Wilson CI.
+
+![Pareto frontier — z-to-sort](pareto-ztosort.png)
+
+| model | hits@1 | ndcg@10 | ms/img | license | frontier |
+|---|---|---|---|---|---|
+| pe-core-l14 | 0.782 | 0.881 | 131 | Apache | ✓ |
+| **siglip2-b** | 0.770 | 0.877 | 87 | Apache | ✓ best value |
+| siglip2-so400m | 0.708 | 0.819 | 289 | Apache | ✗ dominated |
+| clip-b32 | 0.560 | 0.714 | 30 | open | ✓ floor |
+| clip-l14 | 0.550 | 0.694 | 61 | open | ✗ dominated |
+
+**What domain eval changed vs. Flickr (why it was worth running):**
+- **pe-core-l14 ≈ siglip2-b — a statistical tie** here (0.782 vs 0.770, < 1 SE at
+  n=500; CIs overlap heavily). PE's real Flickr lead **disappears on this corpus** →
+  siglip2-b (tied, faster, clean install) is the clear pick for *this* data.
+- **siglip2-so400m falls clearly below siglip2-b** (0.708 vs 0.770, ~3 SE) — on
+  Flickr they tied; here so400m is worse *and* 3× slower. Doubly dominated.
+- **clip-l14 ≤ clip-b32** (0.550 vs 0.560) — the Flickr ordering reverses; clip-l14
+  drops *off* the frontier. clip-b32 is the only CLIP worth keeping (speed floor).
+- The SigLIP/PE tier beats the CLIP tier by **~22 pts** (vs ~15 on Flickr) — model
+  choice matters *more* on the real creative/screenshot mix.
+
+**Domain frontier:** `clip-b32` → `siglip2-b` → `pe-core-l14`. Verdict for the user's
+data: **siglip2-b is the default** (tied-best quality, fastest top-tier, Apache, clean
+install); pe-core-l14's edge isn't worth its install friction here.
+
 ## Other models tested today (not on the 1k axis)
 
 Smaller/earlier evals or disqualified — shown for completeness.
