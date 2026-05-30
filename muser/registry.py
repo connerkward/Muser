@@ -12,7 +12,13 @@ from __future__ import annotations
 
 from typing import Callable
 
-from .embedders import Embedder, JinaV4Embedder, JinaV4MLXEmbedder, SentenceTransformerEmbedder
+from .embedders import (
+    Embedder,
+    JinaCLIPv2Embedder,
+    JinaV4Embedder,
+    JinaV4MLXEmbedder,
+    SentenceTransformerEmbedder,
+)
 
 # name -> (tier, factory)
 _REGISTRY: dict[str, tuple[str, Callable[[], Embedder]]] = {
@@ -22,7 +28,7 @@ _REGISTRY: dict[str, tuple[str, Callable[[], Embedder]]] = {
     "siglip2-b": ("baseline", lambda: SentenceTransformerEmbedder("siglip2-b", "google/siglip2-base-patch16-512")),
     # Mac-friendly CLIP-architecture models in jina-clip-v2's quality tier (no VLM blowup):
     # jina-clip-v2: 865M, multilingual, strong — but CC-BY-NC-4.0 (non-commercial).
-    "jina-clip-v2": ("frontier", lambda: SentenceTransformerEmbedder("jina-clip-v2", "jinaai/jina-clip-v2")),
+    "jina-clip-v2": ("frontier", lambda: JinaCLIPv2Embedder()),
     # SigLIP2-So400m: ~400M vision, Apache-2.0 — the commercial-safe top option.
     "siglip2-so400m": ("frontier", lambda: SentenceTransformerEmbedder("siglip2-so400m", "google/siglip2-so400m-patch16-512")),
     # --- 2026 frontier ---

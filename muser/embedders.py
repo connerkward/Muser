@@ -194,6 +194,46 @@ class JinaV4Embedder:
 
 
 # ---------------------------------------------------------------------------
+# Jina-CLIP v2 — 865M CLIP-architecture (EVA02-L vision + XLM-R text). NOT the
+# 3.75B VLM, so it runs fine on MPS. sentence-transformers exposes only its text
+# tower, so use the native transformers API (encode_text / encode_image).
+# ---------------------------------------------------------------------------
+@dataclass
+class JinaCLIPv2Embedder:
+    name: str = "jina-clip-v2"
+    model_id: str = "jinaai/jina-clip-v2"
+    dim: int = 1024
+    _model: object = field(default=None, repr=False)
+
+    def _load(self):
+        if self._model is None:
+            import torch
+            from transformers import AutoModel
+
+            dev = _device()
+            dtype = torch.float16 if dev == "cuda" else torch.float32
+            self._model = (
+                AutoModel.from_pretrained(self.model_id, trust_remote_code=True, torch_dtype=dtype)
+                .to(dev)
+                .eval()
+            )
+        return self._model
+
+    def embed_images(self, paths: Sequence[str], batch_size: int = 16) -> np.ndarray:
+        model = self._load()
+        imgs = [_load_rgb(p) for p in paths]
+        v = np.asarray(model.encode_image(imgs, batch_size=batch_size), dtype=np.float32)
+        self.dim = v.shape[-1]
+        return _l2(v)
+
+    def embed_queries(self, queries: Sequence[str], batch_size: int = 32) -> np.ndarray:
+        model = self._load()
+        v = np.asarray(model.encode_text(list(queries), batch_size=batch_size), dtype=np.float32)
+        self.dim = v.shape[-1]
+        return _l2(v)
+
+
+# ---------------------------------------------------------------------------
 # Jina Embeddings v4 via MLX (Apple-native). Uses jina's official 8-bit MLX build.
 # MLX has its own Metal allocator, so it sidesteps the torch-MPS leak/crash that
 # makes the transformers build unusable for bulk indexing on Apple Silicon.
