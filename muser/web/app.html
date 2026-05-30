@@ -71,6 +71,8 @@
   <h1>🖼️ Muser</h1>
   <button class="nav on" id="navSearch">Search</button>
   <button class="nav" id="navExplore">Explore</button>
+  <button class="nav" id="navInteresting">Interesting</button>
+  <button class="nav" id="navReview">Review</button>
   <span class="mut" id="status">…</span>
   <span class="sp"></span>
   <span class="mut">model</span>
@@ -104,6 +106,33 @@
     <div class="mut" id="cdsub"></div>
     <div class="grid" id="cdgrid" style="margin-top:16px"></div>
   </div>
+</div>
+
+<div class="wrap" id="interestingView" style="display:none">
+  <div class="row" style="margin-bottom:14px">
+    <span class="mut">rank by</span>
+    <select id="imetric">
+      <option value="interesting">Interesting (novelty + aesthetic)</option>
+      <option value="novelty">Novelty (most unusual / rare)</option>
+      <option value="aesthetic">Aesthetic (striking)</option>
+    </select>
+    <span class="mut" id="imsg"></span>
+  </div>
+  <div class="grid" id="scoreGrid"></div>
+</div>
+
+<div class="wrap" id="reviewView" style="display:none">
+  <div class="row" style="margin-bottom:6px">
+    <span class="mut">flag</span>
+    <select id="rcat">
+      <option value="nsfw">NSFW / explicit</option>
+      <option value="private">Private / leak (IDs, logins, messages)</option>
+      <option value="political">Overtly political</option>
+    </select>
+    <span class="mut" id="rmsg"></span>
+  </div>
+  <div style="font-size:11px;color:#caa468;margin-bottom:14px">⚠︎ Heuristic zero-shot flags for reviewing your <i>own</i> library — not a classifier or a verdict. Highest-scoring first; skim and decide.</div>
+  <div class="grid" id="reviewGrid"></div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -175,16 +204,35 @@ function openDupes(h){
 $("#dupesClose").onclick=()=>$("#dupes").classList.remove("show");
 $("#dupes").onclick=e=>{ if(e.target.id==="dupes") $("#dupes").classList.remove("show"); };
 
-// ---- Explore (clusters) ----
+// ---- view switching (Search / Explore / Interesting / Review) ----
+const VIEWS={search:"searchView",explore:"exploreView",interesting:"interestingView",review:"reviewView"};
+const NAVS={search:"navSearch",explore:"navExplore",interesting:"navInteresting",review:"navReview"};
 function showView(v){
-  $("#searchView").style.display = v==="search"?"":"none";
-  $("#exploreView").style.display = v==="explore"?"":"none";
-  $("#navSearch").className="nav"+(v==="search"?" on":"");
-  $("#navExplore").className="nav"+(v==="explore"?" on":"");
+  for(const k in VIEWS) $("#"+VIEWS[k]).style.display = k===v?"":"none";
+  for(const k in NAVS) $("#"+NAVS[k]).className="nav"+(k===v?" on":"");
   if(v==="explore" && !$("#clusterGrid").children.length) loadClusters();
+  if(v==="interesting") loadScores("#scoreGrid","#imsg","#imetric");
+  if(v==="review") loadScores("#reviewGrid","#rmsg","#rcat");
 }
-$("#navSearch").onclick=()=>showView("search");
-$("#navExplore").onclick=()=>showView("explore");
+for(const k in NAVS) $("#"+NAVS[k]).onclick=()=>showView(k);
+
+async function loadScores(gridSel,msgSel,metricSel){
+  const metric=$(metricSel).value;
+  $(msgSel).textContent="loading…";
+  const r=await (await fetch(`/api/score?metric=${metric}&order=desc&limit=140`)).json();
+  const g=$(gridSel); g.innerHTML="";
+  if(!r.built){ $(msgSel).textContent="Not built yet — run:  muser score"; return; }
+  $(msgSel).textContent=`${r.total.toLocaleString()} images · sorted by ${metric} (highest first)`;
+  r.items.forEach(h=>{
+    const c=document.createElement("div"); c.className="card";
+    c.innerHTML=`<div class="thumb"><span class="dupe">${Math.round(h.score*100)}</span><img loading="lazy" src="/api/thumb?path=${enc(h.path)}"></div>
+      <div class="meta"><div class="name" title="${h.path}">${h.name}</div></div>`;
+    c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
+    g.appendChild(c);
+  });
+}
+$("#imetric").onchange=()=>loadScores("#scoreGrid","#imsg","#imetric");
+$("#rcat").onchange=()=>loadScores("#reviewGrid","#rmsg","#rcat");
 $("#cmethod").onchange=()=>loadClusters();
 $("#cback").onclick=()=>{ $("#clusterDetail").style.display="none"; $("#clusterGrid").style.display=""; };
 

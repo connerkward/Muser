@@ -172,6 +172,23 @@ def create_app(model: str = DEFAULT_MODEL):
         page = members[offset : offset + limit]
         return {"total": len(members), "members": [{"path": p, "name": os.path.basename(p)} for p in page]}
 
+    # ---- per-image scores: Interesting / Review (read ~/.muser/scores.json) ----
+    SCORES = Path.home() / ".muser" / "scores.json"
+
+    @app.get("/api/score")
+    def score_rank(metric: str = "interesting", order: str = "desc", offset: int = 0, limit: int = 80):
+        if not SCORES.exists():
+            return {"built": False, "items": []}
+        s = json.loads(SCORES.read_text())
+        if metric not in s["metrics"]:
+            return {"built": False, "items": []}
+        items = sorted(s["scores"].items(), key=lambda kv: kv[1].get(metric, 0), reverse=(order == "desc"))
+        page = items[offset : offset + limit]
+        return {
+            "built": True, "metric": metric, "metrics": s["metrics"], "total": len(items),
+            "items": [{"path": p, "name": os.path.basename(p), "score": sc.get(metric, 0), "scores": sc} for p, sc in page],
+        }
+
     return app
 
 

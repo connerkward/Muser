@@ -180,6 +180,15 @@ def cluster(
 
 
 @app.command()
+def score(model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to score")):
+    """Score every image (interesting / novelty / aesthetic / nsfw / private / political)."""
+    from .score import score_all
+
+    out = score_all(model, on_progress=lambda m: con.print(f"[dim]{m}[/]"))
+    con.print(f"scored {out['n']} images · metrics: {', '.join(out['metrics'])}")
+
+
+@app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", help="Bind address"),
     port: int = typer.Option(7777, help="Port"),
