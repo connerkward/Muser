@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from .embedders import Embedder, JinaV4Embedder, SentenceTransformerEmbedder
+from .embedders import Embedder, JinaV4Embedder, JinaV4MLXEmbedder, SentenceTransformerEmbedder
 
 # name -> (tier, factory)
 _REGISTRY: dict[str, tuple[str, Callable[[], Embedder]]] = {
@@ -20,11 +20,18 @@ _REGISTRY: dict[str, tuple[str, Callable[[], Embedder]]] = {
     "clip-b32": ("baseline", lambda: SentenceTransformerEmbedder("clip-b32", "sentence-transformers/clip-ViT-B-32")),
     "clip-l14": ("baseline", lambda: SentenceTransformerEmbedder("clip-l14", "sentence-transformers/clip-ViT-L-14")),
     "siglip2-b": ("baseline", lambda: SentenceTransformerEmbedder("siglip2-b", "google/siglip2-base-patch16-512")),
-    # --- 2026 frontier (default) ---
+    # --- 2026 frontier ---
+    # jina-v4 (transformers): best quality (0.967 Flickr) but leaks MPS memory and
+    # hard-crashes on real images — CUDA server only.
     "jina-v4": ("frontier", lambda: JinaV4Embedder()),
+    # jina-v4-mlx: runs stably on Apple Silicon, but cross-modal retrieval is broken
+    # in this integration (~random Flickr hits@1). EXPERIMENTAL — needs debugging.
+    "jina-v4-mlx": ("experimental", lambda: JinaV4MLXEmbedder()),
 }
 
-DEFAULT_MODEL = "jina-v4"
+# Reliable, fast, strong on real images — the working Apple-Silicon default.
+# Frontier jina-v4 is the CUDA-server default (wired with the embedded-service).
+DEFAULT_MODEL = "clip-l14"
 
 
 def model_names() -> list[str]:

@@ -191,3 +191,104 @@ class JinaV4Embedder:
         v = np.concatenate(out, axis=0)
         self.dim = v.shape[-1]
         return _l2(v)
+
+
+# ---------------------------------------------------------------------------
+# Jina Embeddings v4 via MLX (Apple-native). Uses jina's official 8-bit MLX build.
+# MLX has its own Metal allocator, so it sidesteps the torch-MPS leak/crash that
+# makes the transformers build unusable for bulk indexing on Apple Silicon.
+# ---------------------------------------------------------------------------
+@dataclass
+class JinaV4MLXEmbedder:
+    name: str = "jina-v4-mlx"
+    model_id: str = "jinaai/jina-embeddings-v4-mlx-8bit"
+    processor_id: str = "jinaai/jina-embeddings-v4"
+    task: str = "retrieval"
+    dim: int = 2048
+    max_side: int = 1024
+    _model: object = field(default=None, repr=False)
+    _proc: object = field(default=None, repr=False)
+
+    def _load(self):
+        if self._model is None:
+            import sys
+
+            from huggingface_hub import snapshot_download
+            from transformers import AutoProcessor
+
+            model_dir = snapshot_download(self.model_id)
+            # jina's load_model.py expects weights.safetensors[.index.json] but the
+            # repo ships them as model.safetensors[.index.json] — alias the names.
+            import os
+
+            for want, have in [
+                ("weights.safetensors.index.json", "model.safetensors.index.json"),
+                ("weights.safetensors", "model.safetensors"),
+            ]:
+                wp, hp = os.path.join(model_dir, want), os.path.join(model_dir, have)
+                if not os.path.exists(wp) and os.path.exists(hp):
+                    os.symlink(have, wp)
+            if model_dir not in sys.path:
+                sys.path.insert(0, model_dir)
+            from load_model import load_mlx_model
+
+            self._model = load_mlx_model(model_dir)
+            # jina's MLX build frees the vision/text weights after the first encode
+            # (single-shot optimization) — patch_embed becomes None and image #2
+            # crashes. We index in a loop, so keep weights resident (64GB is fine).
+            type(self._model.visual).clear_weights = lambda self: None
+            if hasattr(type(self._model), "_clear_model_weights"):
+                type(self._model)._clear_model_weights = lambda self: None
+            self._proc = AutoProcessor.from_pretrained(self.processor_id, trust_remote_code=True)
+        return self._model
+
+    def embed_images(self, paths: Sequence[str], batch_size: int = 1) -> np.ndarray:
+        import mlx.core as mx
+
+        self._load()
+        prompt = "<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>Describe the image.<|im_end|>\n"
+        out = []
+        for p in paths:  # one image at a time — grid_thw batching is fiddly, MLX is fast
+            img = _load_rgb(p, self.max_side)
+            # jina's custom processor only supports return_tensors="pt"; convert to numpy.
+            inp = self._proc(text=[prompt], images=[img], return_tensors="pt", padding=True)
+            pv = inp["pixel_values"].numpy()
+            emb = self._model.encode_image(
+                input_ids=mx.array(inp["input_ids"].numpy()),
+                pixel_values=mx.array(pv.reshape(-1, pv.shape[-1])),
+                image_grid_thw=[tuple(int(x) for x in r) for r in inp["image_grid_thw"].tolist()],
+                attention_mask=mx.array(inp["attention_mask"].numpy()),
+                task=self.task,
+            )
+            mx.eval(emb)
+            out.append(np.asarray(emb, dtype=np.float32).reshape(1, -1))
+        v = np.concatenate(out, axis=0)
+        self.dim = v.shape[-1]
+        return _l2(v)
+
+    def embed_queries(self, queries: Sequence[str], batch_size: int = 32) -> np.ndarray:
+        import mlx.core as mx
+
+        self._load()
+        out = []
+        for i in range(0, len(queries), batch_size):
+            chunk = list(queries[i : i + batch_size])
+            # jina v4 retrieval queries get a "Query: " prefix (PREFIX_DICT) — without
+            # it, query embeddings don't discriminate (one image wins every query).
+            inp = self._proc(
+                text=["<|im_start|>user\nQuery: " + t + "<|im_end|>\n" for t in chunk],
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=512,
+            )
+            emb = self._model.encode_text(
+                input_ids=mx.array(inp["input_ids"].numpy()),
+                attention_mask=mx.array(inp["attention_mask"].numpy()),
+                task=self.task,
+            )
+            mx.eval(emb)
+            out.append(np.asarray(emb, dtype=np.float32))
+        v = np.concatenate(out, axis=0)
+        self.dim = v.shape[-1]
+        return _l2(v)
