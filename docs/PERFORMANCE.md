@@ -16,8 +16,8 @@ extrapolations across corpus sizes. Goal: decide *what to run where*.
 | Model | Params | Mac ms/img (measured) | Mac img/s | H100 img/s (est.) | H100 ms/img |
 |---|---|---|---|---|---|
 | clip-b32 (ViT-B/32) | 150M | **24** | 41.7 | ~9,000 | 0.11 |
-| **clip-l14 (ViT-L/14)** | 430M | **46** | 21.7 | ~3,000 | 0.33 |
-| siglip2-b | 375M | **71** | 14.1 | ~6,000 | 0.17 |
+| clip-l14 (ViT-L/14) | 430M | **46** | 21.7 | ~3,000 | 0.33 |
+| **siglip2-b** | 375M | **71** | 14.1 | ~6,000 | 0.17 |
 | siglip2-so400m | 1.1B | **269** | 3.7 | ~2,500 | 0.40 |
 | **jina-v4 (3.75B VLM)** | 3.75B | ~2,100 (MLX)¹ / ~4,000 (torch)² | 0.47 | **~30** | ~33 |
 

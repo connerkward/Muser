@@ -194,6 +194,67 @@ class JinaV4Embedder:
 
 
 # ---------------------------------------------------------------------------
+# SigLIP 2 — needs its own loader. The #1 gotcha: SigLIP was trained with text
+# padded to a FIXED 64 tokens; without padding="max_length"/max_length=64 the
+# text embeddings don't align with image embeddings (retrieval collapses to
+# ~random). Use get_image_features / get_text_features directly.
+# ---------------------------------------------------------------------------
+@dataclass
+class SigLIP2Embedder:
+    name: str
+    model_id: str
+    dim: int = 0
+    max_length: int = 64
+    _model: object = field(default=None, repr=False)
+    _proc: object = field(default=None, repr=False)
+
+    def _load(self):
+        if self._model is None:
+            import torch
+            from transformers import AutoModel, AutoProcessor
+
+            self._model = AutoModel.from_pretrained(self.model_id).to(_device()).eval()
+            self._proc = AutoProcessor.from_pretrained(self.model_id)
+        return self._model
+
+    def embed_images(self, paths: Sequence[str], batch_size: int = 16) -> np.ndarray:
+        import torch
+
+        self._load()
+        out = []
+        with torch.inference_mode():
+            for i in range(0, len(paths), batch_size):
+                imgs = [_load_rgb(p) for p in paths[i : i + batch_size]]
+                inp = self._proc(images=imgs, return_tensors="pt").to(_device())
+                feats = self._model.get_image_features(**inp)
+                out.append(feats.float().cpu().numpy())
+        v = np.concatenate(out, axis=0).astype(np.float32)
+        self.dim = v.shape[-1]
+        return _l2(v)
+
+    def embed_queries(self, queries: Sequence[str], batch_size: int = 64) -> np.ndarray:
+        import torch
+
+        self._load()
+        out = []
+        with torch.inference_mode():
+            for i in range(0, len(queries), batch_size):
+                chunk = list(queries[i : i + batch_size])
+                inp = self._proc(
+                    text=chunk,
+                    return_tensors="pt",
+                    padding="max_length",
+                    max_length=self.max_length,
+                    truncation=True,
+                ).to(_device())
+                feats = self._model.get_text_features(**inp)
+                out.append(feats.float().cpu().numpy())
+        v = np.concatenate(out, axis=0).astype(np.float32)
+        self.dim = v.shape[-1]
+        return _l2(v)
+
+
+# ---------------------------------------------------------------------------
 # Jina-CLIP v2 — 865M CLIP-architecture (EVA02-L vision + XLM-R text). NOT the
 # 3.75B VLM, so it runs fine on MPS. sentence-transformers exposes only its text
 # tower, so use the native transformers API (encode_text / encode_image).
