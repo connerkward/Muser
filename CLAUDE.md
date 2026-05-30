@@ -31,6 +31,22 @@ See `REQUIREMENTS.md` for scope/decisions.
 - `eval/web.py` — Gradio UI: Benchmark tab (run + compare) and Inspect tab
   (query the corpus, gallery flags the ground-truth image).
 
+## Reverse-image search (web UI)
+
+Every result, score card, and dupes-modal file has a **⌖ Source** button. It's
+purely client-side and **$0**: `lensSearch()` in `app.html` fetches `/api/image`,
+converts to PNG (`createImageBitmap` → canvas, since clipboard writes must be PNG),
+`navigator.clipboard.write`s it (works on `127.0.0.1` — a secure context), flashes a
+"✓ Copied" animation, then opens `lens.google.com`; the user presses ⌘V. Nothing
+leaves the machine until they paste. The ⌘V is irreducible for a *local* file — a
+plain link can't auto-upload it, and `lens.google.com/uploadbyurl?url=` needs a
+*public* URL (would require tunnelling the service; rejected for privacy).
+
+The paid alternative (programmatic JSON results, batchable) is **Cloud Vision Web
+Detection** — a restricted key lives in `central/.env` (`GCP_VISION_API_KEY`,
+project `muser-2605300220`); see the `gcloud` skill in central. ~$59 for a one-time
+pass over the 17.9k uniques, so reserved for selective lookups, not wired in.
+
 ## Conventions / gotchas
 
 - **Run via uv**: `uv run muser ...` / `uv run python ...`. Editable-install with
