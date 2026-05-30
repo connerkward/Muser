@@ -8,6 +8,7 @@ thin HTTP clients of this. Local-only by default (binds 127.0.0.1).
 from __future__ import annotations
 
 import io
+import json
 import os
 import platform
 import subprocess
@@ -141,6 +142,35 @@ def create_app(model: str = DEFAULT_MODEL):
             raise HTTPException(400, f"unknown model {req.name}")
         state.set_model(req.name)
         return {"model": state.model_name, "indexed": state.index.count(state.model_name)}
+
+    # ---- Explore: clusters (read ~/.muser/clusters.json, written by `muser cluster`) ----
+    CLUSTERS = Path.home() / ".muser" / "clusters.json"
+
+    def _clusters():
+        return json.loads(CLUSTERS.read_text()) if CLUSTERS.exists() else None
+
+    @app.get("/api/clusters")
+    def clusters(method: str = "hdbscan"):
+        c = _clusters()
+        if not c or method not in c["methods"]:
+            return {"built": False, "clusters": []}
+        m = c["methods"][method]
+        return {
+            "built": True, "method": method, "methods": list(c["methods"].keys()), "n": c["n"],
+            "clusters": [
+                {"id": cl["id"], "label": cl["label"], "sublabel": cl["sublabel"], "size": cl["size"], "reps": cl["reps"]}
+                for cl in m["clusters"]
+            ],
+        }
+
+    @app.get("/api/cluster")
+    def cluster_members(method: str, id: int, offset: int = 0, limit: int = 80):
+        c = _clusters()
+        if not c or method not in c["methods"]:
+            return {"total": 0, "members": []}
+        members = c["methods"][method]["members"].get(str(id), [])
+        page = members[offset : offset + limit]
+        return {"total": len(members), "members": [{"path": p, "name": os.path.basename(p)} for p in page]}
 
     return app
 

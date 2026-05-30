@@ -54,18 +54,30 @@
   .modal .file img { width:100%; aspect-ratio:1; object-fit:cover; cursor:zoom-in; }
   .modal .file .fn { font-size:10px; color:var(--mut); padding:6px; word-break:break-all; flex:1; }
   .modal .file button { font-size:11px; border-radius:0; border:0; border-top:1px solid var(--line); padding:6px; }
+  .nav { background:transparent; border:1px solid transparent; padding:7px 12px; color:var(--mut); }
+  .nav.on { background:var(--panel); border-color:var(--line); color:var(--fg); }
+  .cluster { cursor:pointer; }
+  .cluster:hover { border-color:var(--acc); }
+  .cluster .mos { display:grid; grid-template-columns:1fr 1fr; gap:1px; aspect-ratio:1; background:#0a0c10; }
+  .cluster .mos img { width:100%; height:100%; object-fit:cover; }
+  .cluster .lab { font-size:13px; font-weight:600; padding:9px 11px 0; text-transform:capitalize; }
+  .cluster .sub { font-size:11px; color:var(--mut); padding:2px 11px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cluster .cnt { font-size:11px; color:var(--acc); font-weight:600; padding:5px 11px 10px; }
+  #cback { margin-bottom:4px; }
 </style>
 </head>
 <body>
 <header>
   <h1>🖼️ Muser</h1>
+  <button class="nav on" id="navSearch">Search</button>
+  <button class="nav" id="navExplore">Explore</button>
   <span class="mut" id="status">…</span>
   <span class="sp"></span>
   <span class="mut">model</span>
   <select id="model"></select>
 </header>
 
-<div class="wrap">
+<div class="wrap" id="searchView">
   <div class="searchbar">
     <input id="q" placeholder="Describe what you're looking for — e.g. “a person on a snowy mountain”" autofocus />
     <button class="primary" id="go">Search</button>
@@ -77,6 +89,21 @@
   </div>
   <div id="results" class="grid"></div>
   <div id="empty" class="empty">Index a folder, then search it.</div>
+</div>
+
+<div class="wrap" id="exploreView" style="display:none">
+  <div class="row" style="margin-bottom:14px">
+    <span class="mut">clustering</span>
+    <select id="cmethod"><option value="hdbscan">HDBSCAN (auto count)</option><option value="kmeans">K-means</option></select>
+    <span class="mut" id="cmsg"></span>
+  </div>
+  <div class="grid" id="clusterGrid"></div>
+  <div id="clusterDetail" style="display:none">
+    <button id="cback">← back to clusters</button>
+    <h3 id="cdtitle" style="margin:14px 0 2px;text-transform:capitalize"></h3>
+    <div class="mut" id="cdsub"></div>
+    <div class="grid" id="cdgrid" style="margin-top:16px"></div>
+  </div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -147,6 +174,50 @@ function openDupes(h){
 }
 $("#dupesClose").onclick=()=>$("#dupes").classList.remove("show");
 $("#dupes").onclick=e=>{ if(e.target.id==="dupes") $("#dupes").classList.remove("show"); };
+
+// ---- Explore (clusters) ----
+function showView(v){
+  $("#searchView").style.display = v==="search"?"":"none";
+  $("#exploreView").style.display = v==="explore"?"":"none";
+  $("#navSearch").className="nav"+(v==="search"?" on":"");
+  $("#navExplore").className="nav"+(v==="explore"?" on":"");
+  if(v==="explore" && !$("#clusterGrid").children.length) loadClusters();
+}
+$("#navSearch").onclick=()=>showView("search");
+$("#navExplore").onclick=()=>showView("explore");
+$("#cmethod").onchange=()=>loadClusters();
+$("#cback").onclick=()=>{ $("#clusterDetail").style.display="none"; $("#clusterGrid").style.display=""; };
+
+async function loadClusters(){
+  const method=$("#cmethod").value;
+  $("#clusterDetail").style.display="none"; $("#clusterGrid").style.display="";
+  $("#cmsg").textContent="loading…";
+  const r=await (await fetch(`/api/clusters?method=${method}`)).json();
+  const g=$("#clusterGrid"); g.innerHTML="";
+  if(!r.built){ $("#cmsg").textContent="Not built yet — run:  muser cluster"; return; }
+  $("#cmsg").textContent=`${r.clusters.length} clusters · ${r.n.toLocaleString()} images`;
+  r.clusters.forEach(c=>{
+    const mos=c.reps.slice(0,4).map(p=>`<img loading="lazy" src="/api/thumb?path=${enc(p)}">`).join("");
+    const card=document.createElement("div"); card.className="card cluster";
+    card.innerHTML=`<div class="mos">${mos}</div><div class="lab">${c.label}</div>
+      <div class="sub" title="${c.sublabel}">${c.sublabel}</div><div class="cnt">${c.size.toLocaleString()} images</div>`;
+    card.onclick=()=>openCluster(method,c.id,c.label,c.sublabel,c.size);
+    g.appendChild(card);
+  });
+}
+async function openCluster(method,id,label,sub,size){
+  $("#clusterGrid").style.display="none"; $("#clusterDetail").style.display="";
+  $("#cdtitle").textContent=label; $("#cdsub").textContent=`${sub} · ${size.toLocaleString()} images`;
+  const r=await (await fetch(`/api/cluster?method=${method}&id=${id}&limit=160`)).json();
+  const g=$("#cdgrid"); g.innerHTML="";
+  r.members.forEach(h=>{
+    const c=document.createElement("div"); c.className="card";
+    c.innerHTML=`<div class="thumb"><img loading="lazy" src="/api/thumb?path=${enc(h.path)}"></div>
+      <div class="meta"><div class="name" title="${h.path}">${h.name}</div></div>`;
+    c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
+    g.appendChild(c);
+  });
+}
 
 $("#index").onclick=async()=>{
   const folder=$("#folder").value.trim(); if(!folder) return;

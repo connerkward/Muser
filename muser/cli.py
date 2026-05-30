@@ -165,6 +165,21 @@ def bench(
 
 
 @app.command()
+def cluster(
+    model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to cluster"),
+    k: int = typer.Option(40, "-k", help="K-means cluster count"),
+):
+    """Cluster the indexed embeddings into labeled groups (writes ~/.muser/clusters.json)."""
+    from .cluster import cluster_all
+
+    out = cluster_all(model, kmeans_k=k, on_progress=lambda m: con.print(f"[dim]{m}[/]"))
+    for name, mth in out["methods"].items():
+        con.print(f"\n[bold]{name}[/] — {len(mth['clusters'])} clusters:")
+        for c in mth["clusters"][:25]:
+            con.print(f"  {c['size']:6}  {c['label']:28} [dim]{c['sublabel'][:50]}[/]")
+
+
+@app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", help="Bind address"),
     port: int = typer.Option(7777, help="Port"),
