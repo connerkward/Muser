@@ -169,27 +169,76 @@ class MuserIndex:
         return [self.search(model, q, k) for q in query_vecs]
 
     def search_dedup(
-        self, model: str, query_vec: np.ndarray, k: int = 24, threshold: float = 0.985
+        self,
+        model: str,
+        query_vec: np.ndarray,
+        k: int = 24,
+        threshold: float = 0.985,
+        method: str = "embed",
+        phash_hamming: int = 8,
     ) -> list[dict]:
         """Search, collapsing near-identical images (same picture saved in many
-        folders) into one result. Over-fetch, then greedily group by cosine of the
-        (L2-normalized) embedding >= threshold. Each result carries its duplicate
-        file paths so the UI can offer a 'show all copies' flow.
+        folders, or recompressed/resized/cropped copies) into one result.
+
+        Over-fetch, then greedily group. Three grouping methods:
+
+        - ``"embed"`` (default): cosine of the (L2-normalized) embedding >=
+          ``threshold``. Original behavior — fast, no image loading.
+        - ``"phash"``: perceptual-hash Hamming distance <= ``phash_hamming``.
+          Loads each over-fetched image and computes a 64-bit pHash (DCT-based,
+          via the ``imagehash`` library), which is robust to recompression,
+          rescaling, and mild crops where the embedding can drift below 0.985.
+        - ``"both"``: collapse when the embedding cosine is high OR the pHash
+          Hamming is low. Most aggressive / most robust to crops+recompression.
+
+        For phash/both we also compute a dHash (gradient hash) and collapse on
+        whichever of pHash/dHash is within range — dHash catches some
+        recompression artifacts pHash misses, at negligible extra cost.
+
+        pHash is 64-bit; a Hamming distance <= ~8 (≈12% of bits) is the standard
+        "same image" threshold (Krawetz / pHash.org). Lower (4–6) = stricter,
+        only near-exact; higher (10–12) starts to risk false merges. We default
+        to 8 as a balance: catches recompressed/resized copies without merging
+        genuinely distinct images.
+
+        Each result carries its duplicate file paths so the UI can offer a
+        'show all copies' flow.
         """
         t = self._open(model)
         if t is None:
             return []
         n = max(k * 12, 200)
         rows = t.search(query_vec.tolist()).distance_type("cosine").limit(n).to_list()
+
+        use_phash = method in ("phash", "both")
+        use_embed = method in ("embed", "both")
+        if not (use_phash or use_embed):
+            raise ValueError(f"unknown dedup method: {method!r} (expected embed|phash|both)")
+
         kept: list[dict] = []
         for r in rows:
             vec = np.asarray(r["vector"], dtype=np.float32)
             score = 1.0 - float(r["_distance"])
-            dup_of = next((kp for kp in kept if float(np.dot(vec, kp["_vec"])) >= threshold), None)
+            ph, dh = (self._phash_pair(r["path"]) if use_phash else (None, None))
+
+            def is_dup(kp) -> bool:
+                if use_embed and float(np.dot(vec, kp["_vec"])) >= threshold:
+                    return True
+                if use_phash and ph is not None:
+                    if kp["_ph"] is not None and _hamming64(ph, kp["_ph"]) <= phash_hamming:
+                        return True
+                    if kp["_dh"] is not None and _hamming64(dh, kp["_dh"]) <= phash_hamming:
+                        return True
+                return False
+
+            dup_of = next((kp for kp in kept if is_dup(kp)), None)
             if dup_of is not None:
                 dup_of["dupes"].append(r["path"])
             elif len(kept) < k:
-                kept.append({"path": r["path"], "score": score, "_vec": vec, "dupes": [r["path"]]})
+                kept.append(
+                    {"path": r["path"], "score": score, "_vec": vec,
+                     "_ph": ph, "_dh": dh, "dupes": [r["path"]]}
+                )
         return [
             {
                 "path": kp["path"],
@@ -200,3 +249,26 @@ class MuserIndex:
             }
             for kp in kept
         ]
+
+    @staticmethod
+    def _phash_pair(path: str) -> tuple[int | None, int | None]:
+        """(pHash, dHash) as 64-bit ints for an image, or (None, None) on failure.
+
+        Hashes are computed on the fly from the result-set images only — nothing
+        is written to the LanceDB table (a concurrent indexer owns it).
+        """
+        try:
+            import imagehash
+
+            from .embedders import _load_rgb
+
+            img = _load_rgb(path, max_side=256)  # pHash downscales to 32x32 anyway
+            ph = int(str(imagehash.phash(img)), 16)
+            dh = int(str(imagehash.dhash(img)), 16)
+            return ph, dh
+        except Exception:
+            return None, None
+
+
+def _hamming64(a: int, b: int) -> int:
+    return (a ^ b).bit_count()

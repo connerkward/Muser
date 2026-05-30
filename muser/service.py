@@ -98,11 +98,13 @@ def create_app(model: str = DEFAULT_MODEL):
         return {"added": res.added, "updated": res.updated, "removed": res.removed, "total": res.total}
 
     @app.get("/api/search")
-    def search(q: str, k: int = 24, dedup: bool = True):
+    def search(q: str, k: int = 24, dedup: bool = True, method: str = "embed"):
+        # method: "embed" (cosine, default), "phash" (perceptual-hash Hamming,
+        # robust to recompression/resize/crop), or "both" (collapse on either).
         emb = state.warm()
         qv = emb.embed_queries([q])[0]
         if dedup:
-            results = state.index.search_dedup(state.model_name, qv, k=k)
+            results = state.index.search_dedup(state.model_name, qv, k=k, method=method)
         else:
             results = [
                 {"path": p, "name": os.path.basename(p), "score": round(s, 4), "dupes": [p], "dupe_count": 1}
