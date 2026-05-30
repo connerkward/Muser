@@ -43,7 +43,11 @@
   .card .score { font-size:12px; color:var(--acc); font-weight:600; }
   .card .reveal { font-size:11px; padding:4px 8px; }
   .card .foot { gap:6px; }
-  .card .lens { font-size:11px; padding:4px 8px; color:var(--acc); border-color:var(--acc); white-space:nowrap; }
+  .card .lens { font-size:11px; padding:4px 8px; color:var(--acc); border-color:var(--acc); white-space:nowrap; transition:background .15s, color .15s; }
+  .lens.copied { background:var(--acc) !important; color:#06231a !important; border-color:var(--acc) !important;
+                 animation:lenspop .34s cubic-bezier(.3,1.4,.5,1); }
+  .lens:disabled { cursor:default; }
+  @keyframes lenspop { 0%{transform:scale(1)} 45%{transform:scale(1.14)} 100%{transform:scale(1)} }
   .empty { color:var(--mut); text-align:center; padding:60px 0; }
   .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--panel);
            border:1px solid var(--line); padding:10px 16px; border-radius:10px; opacity:0; transition:.2s; }
@@ -170,13 +174,20 @@ async function blobToPng(blob){
   if(!png||!png.size) throw new Error("could not render PNG");
   return png;
 }
-async function lensSearch(path){
+async function lensSearch(path, btn){
+  const orig = btn && btn.textContent;
   try{
+    if(btn) btn.disabled=true;
     const png=await blobToPng(await (await fetch(`/api/image?path=${enc(path)}`)).blob());
     await navigator.clipboard.write([new ClipboardItem({"image/png":png})]);
-    toast("image copied ✓  press ⌘V in the Lens tab");
+    if(btn){ btn.textContent="✓ Copied"; btn.classList.add("copied"); }
+    toast("press ⌘V in the Lens tab");
+    await new Promise(r=>setTimeout(r,600));        // let the "copied" pop play before the tab steals focus
     window.open("https://lens.google.com/","_blank");
   }catch(e){ toast("copy failed: "+e.message); }
+  finally{
+    if(btn) setTimeout(()=>{ btn.textContent=orig; btn.classList.remove("copied"); btn.disabled=false; }, 1100);
+  }
 }
 
 async function status(){
@@ -210,7 +221,7 @@ async function search(){
         <button class="lens" title="Copy image + open Google Lens (⌘V to search)">⌖ Source</button>
         <button class="reveal">Reveal</button></div>`;
     c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
-    c.querySelector(".lens").onclick=()=>lensSearch(h.path);
+    c.querySelector(".lens").onclick=e=>lensSearch(h.path,e.currentTarget);
     c.querySelector(".reveal").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:h.path})}); toast("revealed in Finder"); };
     if(dupes>1) c.querySelector(".dupe").onclick=e=>{ e.stopPropagation(); openDupes(h); };
     g.appendChild(c);
@@ -227,7 +238,7 @@ function openDupes(h){
     const d=document.createElement("div"); d.className="file";
     d.innerHTML=`<img loading="lazy" src="/api/thumb?path=${enc(p)}" title="${p}"><div class="fn">${p}</div><div class="frow"><button class="lens">⌖ Source</button><button class="rev">Reveal</button></div>`;
     d.querySelector("img").onclick=()=>window.open(`/api/image?path=${enc(p)}`,"_blank");
-    d.querySelector(".lens").onclick=()=>lensSearch(p);
+    d.querySelector(".lens").onclick=e=>lensSearch(p,e.currentTarget);
     d.querySelector(".rev").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:p})}); toast("revealed in Finder"); };
     f.appendChild(d);
   });
@@ -262,7 +273,7 @@ async function loadScores(gridSel,msgSel,metricSel){
       <div class="meta"><div class="name" title="${h.path}">${h.name}</div></div>
       <div class="foot"><button class="lens" title="Copy image + open Google Lens (⌘V to search)">⌖ Source</button></div>`;
     c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
-    c.querySelector(".lens").onclick=()=>lensSearch(h.path);
+    c.querySelector(".lens").onclick=e=>lensSearch(h.path,e.currentTarget);
     if((h.dupe_count||1)>1) c.querySelector(".dupe").onclick=e=>{ e.stopPropagation(); openDupes(h); };
     g.appendChild(c);
   });
