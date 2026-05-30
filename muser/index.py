@@ -167,3 +167,36 @@ class MuserIndex:
         self, model: str, query_vecs: np.ndarray, k: int = 12
     ) -> list[list[tuple[str, float]]]:
         return [self.search(model, q, k) for q in query_vecs]
+
+    def search_dedup(
+        self, model: str, query_vec: np.ndarray, k: int = 24, threshold: float = 0.985
+    ) -> list[dict]:
+        """Search, collapsing near-identical images (same picture saved in many
+        folders) into one result. Over-fetch, then greedily group by cosine of the
+        (L2-normalized) embedding >= threshold. Each result carries its duplicate
+        file paths so the UI can offer a 'show all copies' flow.
+        """
+        t = self._open(model)
+        if t is None:
+            return []
+        n = max(k * 12, 200)
+        rows = t.search(query_vec.tolist()).distance_type("cosine").limit(n).to_list()
+        kept: list[dict] = []
+        for r in rows:
+            vec = np.asarray(r["vector"], dtype=np.float32)
+            score = 1.0 - float(r["_distance"])
+            dup_of = next((kp for kp in kept if float(np.dot(vec, kp["_vec"])) >= threshold), None)
+            if dup_of is not None:
+                dup_of["dupes"].append(r["path"])
+            elif len(kept) < k:
+                kept.append({"path": r["path"], "score": score, "_vec": vec, "dupes": [r["path"]]})
+        return [
+            {
+                "path": kp["path"],
+                "name": os.path.basename(kp["path"]),
+                "score": round(kp["score"], 4),
+                "dupes": kp["dupes"],
+                "dupe_count": len(kp["dupes"]),
+            }
+            for kp in kept
+        ]

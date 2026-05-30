@@ -28,8 +28,11 @@
   .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:14px; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden;
           display:flex; flex-direction:column; }
-  .card .thumb { aspect-ratio:1; background:#0a0c10; display:flex; align-items:center; justify-content:center; cursor:zoom-in; }
+  .card .thumb { position:relative; aspect-ratio:1; background:#0a0c10; display:flex; align-items:center; justify-content:center; cursor:zoom-in; }
   .card .thumb img { width:100%; height:100%; object-fit:cover; }
+  .dupe { position:absolute; top:6px; right:6px; background:rgba(0,0,0,.72); color:#fff; font-size:11px;
+          font-weight:600; padding:3px 8px; border-radius:20px; cursor:pointer; border:1px solid var(--line); }
+  .dupe:hover { background:var(--acc); color:#06231a; border-color:var(--acc); }
   .card .meta { padding:8px 10px; display:flex; flex-direction:column; gap:4px; }
   .card .name { font-size:12px; color:var(--mut); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .card .bar { height:5px; border-radius:3px; background:var(--line); overflow:hidden; }
@@ -41,6 +44,16 @@
   .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--panel);
            border:1px solid var(--line); padding:10px 16px; border-radius:10px; opacity:0; transition:.2s; }
   .toast.show { opacity:1; }
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.72); display:none; align-items:center; justify-content:center; z-index:20; }
+  .modal.show { display:flex; }
+  .modal .box { background:var(--panel); border:1px solid var(--line); border-radius:14px; max-width:980px; width:92%; max-height:86vh; overflow:auto; padding:20px; }
+  .modal h3 { margin:0; font-size:15px; }
+  .modal .x { float:right; cursor:pointer; color:var(--mut); font-size:18px; }
+  .modal .files { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; margin-top:16px; }
+  .modal .file { background:var(--bg); border:1px solid var(--line); border-radius:10px; overflow:hidden; display:flex; flex-direction:column; }
+  .modal .file img { width:100%; aspect-ratio:1; object-fit:cover; cursor:zoom-in; }
+  .modal .file .fn { font-size:10px; color:var(--mut); padding:6px; word-break:break-all; flex:1; }
+  .modal .file button { font-size:11px; border-radius:0; border:0; border-top:1px solid var(--line); padding:6px; }
 </style>
 </head>
 <body>
@@ -67,6 +80,12 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<div class="modal" id="dupes"><div class="box">
+  <span class="x" id="dupesClose">✕</span>
+  <h3 id="dupesTitle"></h3><div class="mut" id="dupesSub"></div>
+  <div class="files" id="dupesFiles"></div>
+</div></div>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -95,20 +114,39 @@ async function search(){
   if(!r.results.length){ $("#empty").style.display="block"; $("#empty").textContent="No matches — is this folder indexed with the current model?"; return; }
   r.results.forEach(h=>{
     const pct=Math.max(0,Math.min(100,Math.round(h.score*100)));
+    const dupes=h.dupe_count||1;
+    const badge = dupes>1 ? `<span class="dupe" title="${dupes} copies — click to see all">⧉ ${dupes}</span>` : "";
     const c=document.createElement("div"); c.className="card";
     c.innerHTML=`
-      <div class="thumb"><img loading="lazy" src="/api/thumb?path=${enc(h.path)}" title="${h.name}"></div>
+      <div class="thumb">${badge}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}" title="${h.name}"></div>
       <div class="meta"><div class="name" title="${h.path}">${h.name}</div>
         <div class="bar"><i style="width:${pct}%"></i></div></div>
       <div class="foot"><span class="score">${(h.score*100).toFixed(1)}%</span>
         <button class="reveal">Reveal</button></div>`;
     c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
     c.querySelector(".reveal").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:h.path})}); toast("revealed in Finder"); };
+    if(dupes>1) c.querySelector(".dupe").onclick=e=>{ e.stopPropagation(); openDupes(h); };
     g.appendChild(c);
   });
 }
 $("#go").onclick=search;
 $("#q").addEventListener("keydown",e=>{ if(e.key==="Enter") search(); });
+
+function openDupes(h){
+  $("#dupesTitle").textContent = h.name;
+  $("#dupesSub").textContent = `${h.dupe_count} files are this same image`;
+  const f=$("#dupesFiles"); f.innerHTML="";
+  h.dupes.forEach(p=>{
+    const d=document.createElement("div"); d.className="file";
+    d.innerHTML=`<img loading="lazy" src="/api/thumb?path=${enc(p)}" title="${p}"><div class="fn">${p}</div><button>Reveal</button>`;
+    d.querySelector("img").onclick=()=>window.open(`/api/image?path=${enc(p)}`,"_blank");
+    d.querySelector("button").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:p})}); toast("revealed in Finder"); };
+    f.appendChild(d);
+  });
+  $("#dupes").classList.add("show");
+}
+$("#dupesClose").onclick=()=>$("#dupes").classList.remove("show");
+$("#dupes").onclick=e=>{ if(e.target.id==="dupes") $("#dupes").classList.remove("show"); };
 
 $("#index").onclick=async()=>{
   const folder=$("#folder").value.trim(); if(!folder) return;

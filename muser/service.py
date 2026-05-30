@@ -98,12 +98,17 @@ def create_app(model: str = DEFAULT_MODEL):
         return {"added": res.added, "updated": res.updated, "removed": res.removed, "total": res.total}
 
     @app.get("/api/search")
-    def search(q: str, k: int = 24):
+    def search(q: str, k: int = 24, dedup: bool = True):
         emb = state.warm()
         qv = emb.embed_queries([q])[0]
-        hits = state.index.search(state.model_name, qv, k=k)
-        return {"query": q, "model": state.model_name,
-                "results": [{"path": p, "name": os.path.basename(p), "score": round(s, 4)} for p, s in hits]}
+        if dedup:
+            results = state.index.search_dedup(state.model_name, qv, k=k)
+        else:
+            results = [
+                {"path": p, "name": os.path.basename(p), "score": round(s, 4), "dupes": [p], "dupe_count": 1}
+                for p, s in state.index.search(state.model_name, qv, k=k)
+            ]
+        return {"query": q, "model": state.model_name, "results": results}
 
     @app.get("/api/thumb")
     def thumb(path: str, size: int = 260):
