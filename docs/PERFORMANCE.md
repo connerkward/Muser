@@ -3,6 +3,11 @@
 Indexing cost/time for the candidate models, **this Mac vs. a rented H100**, with
 extrapolations across corpus sizes. Goal: decide *what to run where*.
 
+> **Quality leaderboard + Pareto frontier:** see [`reports/2026-05-29-model-benchmark.md`](../reports/2026-05-29-model-benchmark.md).
+> TL;DR (Flickr30k 1k, hits@1): **pe-core-l14 0.913** (Apache, best quality) ·
+> **siglip2-b 0.871** (Apache, best value, default) · clip-l14 0.726 · clip-b32 0.675.
+> `siglip2-so400m` (0.876) is **dominated** by pe-core-l14 (cheaper *and* better).
+
 > **How to read this:** "ms/img" is per-image embed time. Mac numbers are
 > **measured on this hardware** (Apple Silicon, 64 GB, MPS, single stream, small
 > batch). H100 numbers are **researched estimates** (bf16, batch 32–64) — image
@@ -19,11 +24,14 @@ extrapolations across corpus sizes. Goal: decide *what to run where*.
 | clip-l14 (ViT-L/14) | 430M | **46** | 21.7 | ~3,000 | 0.33 |
 | **siglip2-b** | 375M | **71** | 14.1 | ~6,000 | 0.17 |
 | siglip2-so400m | 1.1B | **269** | 3.7 | ~2,500 | 0.40 |
+| pe-core-l14 | 0.5B | **~210**³ | 4.8 | ~2,500 | 0.40 |
 | **jina-v4 (3.75B VLM)** | 3.75B | ~2,100 (MLX)¹ / ~4,000 (torch)² | 0.47 | **~30** | ~33 |
 
 ¹ jina-v4-mlx runs stably on Mac but its cross-modal retrieval is currently broken
 (see REQUIREMENTS). ² jina-v4 torch crashes on MPS with real images. **On Mac,
 jina-v4 is effectively unusable today**; numbers shown for the H100 comparison.
+³ pe-core-l14 derived from the n=1000 index run (227 ms/img incl. load); slower on
+MPS than its param count suggests, but the **quality leader** — see the report.
 
 The headline: a 300–400M CLIP/SigLIP encoder is **~50–300× faster per image** than
 the 3.75B VLM. The VLM runs its full 3B decoder over ~1,000 image tokens; CLIP runs
