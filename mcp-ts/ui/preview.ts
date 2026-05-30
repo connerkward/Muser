@@ -12,7 +12,22 @@ import purpleHeart from "./sample/purple-heart.png";
 const FOLDER = "/demo/sample-images";
 
 const SAMPLE: Hit[] = [
-  { path: `${FOLDER}/red-circle.png`, score: 0.29, thumb: redCircle },
+  {
+    path: `${FOLDER}/red-circle.png`,
+    score: 0.29,
+    thumb: redCircle,
+    dupe_count: 3,
+    dupes: [
+      `${FOLDER}/red-circle.png`,
+      `${FOLDER}/backup/red-circle.png`,
+      `${FOLDER}/archive/2024/red-circle-copy.png`,
+    ],
+    dupeThumbs: {
+      [`${FOLDER}/red-circle.png`]: redCircle,
+      [`${FOLDER}/backup/red-circle.png`]: redCircle,
+      [`${FOLDER}/archive/2024/red-circle-copy.png`]: redCircle,
+    },
+  },
   { path: `${FOLDER}/blue-square.png`, score: 0.27, thumb: blueSquare },
   { path: `${FOLDER}/green-triangle.png`, score: 0.26, thumb: greenTriangle },
   { path: `${FOLDER}/yellow-star.png`, score: 0.25, thumb: yellowStar },
@@ -36,6 +51,7 @@ const gallery = createGallery({
     setTimeout(() => gallery.render({ folder: FOLDER, query, results: mockSearch(query) }), 150);
   },
   onSelect: (hit) => gallery.setStatus(`(preview) selected ${hit.path}`),
+  onReveal: (path) => gallery.setStatus(`(preview) reveal ${path}`),
 });
 
 gallery.render({ folder: FOLDER, query: "a red circle", results: SAMPLE });

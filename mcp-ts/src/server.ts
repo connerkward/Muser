@@ -32,12 +32,32 @@ const UI_HTML = path.join(import.meta.dirname, "..", "dist", "ui", "search.html"
 /** A gallery card: service hit + a base64 thumbnail the sandboxed UI can show. */
 interface GalleryHit extends SearchHit {
   thumb: string | null;
+  /** base64 thumb per duplicate path, so the sandboxed iframe (which can't
+   *  reach /api/thumb) can render the click-into-duplicates modal inline.
+   *  Dupes are byte-identical images, so every entry reuses the rep thumb. */
+  dupeThumbs?: Record<string, string | null>;
 }
 
-/** Run a search against the embedded service and attach thumbnails. */
+/** Run a search against the embedded service and attach thumbnails.
+ *
+ *  The ext-app runs in a sandboxed iframe with no direct network access, so it
+ *  cannot call /api/thumb itself. We therefore inline every thumbnail as a
+ *  base64 data URI in structuredContent: the rep thumb for the card, plus a
+ *  per-dupe-path thumb map for the duplicates modal. Because duplicates are
+ *  byte-identical files, all dupe entries share the rep image (no extra fetches). */
 async function searchWithThumbs(query: string, k: number): Promise<GalleryHit[]> {
   const { results } = await search(query, k);
-  return Promise.all(results.map(async (h) => ({ ...h, thumb: await thumbDataUri(h.path) })));
+  return Promise.all(
+    results.map(async (h) => {
+      const thumb = await thumbDataUri(h.path);
+      const hit: GalleryHit = { ...h, thumb };
+      if (h.dupes && h.dupes.length > 1) {
+        // Same image on disk → reuse the rep thumb for every duplicate path.
+        hit.dupeThumbs = Object.fromEntries(h.dupes.map((p) => [p, thumb]));
+      }
+      return hit;
+    }),
+  );
 }
 
 export function createServer(): McpServer {

@@ -33,6 +33,13 @@ const gallery = createGallery({
       .sendMessage({ role: "user", content: [{ type: "text", text: `Selected image: ${hit.path}` }] })
       .catch(() => {});
   },
+  // The sandboxed iframe can't call /api/reveal directly, so ask the host/agent
+  // to reveal the file in Finder via a chat message.
+  onReveal: (path) => {
+    frame?.app
+      .sendMessage({ role: "user", content: [{ type: "text", text: `Reveal this file in Finder: ${path}` }] })
+      .catch(() => {});
+  },
 });
 
 connectMcpFrame({

@@ -14,6 +14,10 @@ export interface SearchHit {
   path: string;
   name: string;
   score: number;
+  /** All file paths that are byte-identical to this image (includes `path`). */
+  dupes?: string[];
+  /** Number of duplicate files (length of `dupes`). 1 when unique. */
+  dupe_count?: number;
 }
 export interface SearchResponse {
   query: string;
