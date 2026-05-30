@@ -38,13 +38,24 @@ holds. Error bars = 95% Wilson CI.
 
 ![Pareto frontier — z-to-sort](pareto-ztosort.png)
 
+All eight Mac-runnable models on the *same* n=500 eval (so they're comparable):
+
 | model | hits@1 | ndcg@10 | ms/img | license | frontier |
 |---|---|---|---|---|---|
 | pe-core-l14 | 0.782 | 0.881 | 131 | Apache | ✓ |
 | **siglip2-b** | 0.770 | 0.877 | 87 | Apache | ✓ best value |
+| pe-core-g14 (2B) | 0.748 | — | 1164 | Apache | ✗ dominated |
 | siglip2-so400m | 0.708 | 0.819 | 289 | Apache | ✗ dominated |
+| jina-clip-v2 | 0.668 | — | 248 | CC-BY-NC | ✗ dominated |
+| siglip2-giant (1.9B) | 0.668 | — | 293 | Apache | ✗ dominated |
 | clip-b32 | 0.560 | 0.714 | 30 | open | ✓ floor |
 | clip-l14 | 0.550 | 0.694 | 61 | open | ✗ dominated |
+
+The **giants confirm the rule that bigger ≠ better for retrieval**: pe-core-g14 (0.748)
+loses to its own L sibling (0.782) at 9× the cost; siglip2-giant (0.668) is far below
+siglip2-b. jina-clip-v2 (0.668) is dominated *and* non-commercial. (jina-v4 transformers
+crashes on this messy corpus / is CUDA-only; jina-v4-mlx runs but its cross-modal
+retrieval is ~random — neither gets a domain point.)
 
 **What domain eval changed vs. Flickr (why it was worth running):**
 - **pe-core-l14 ≈ siglip2-b — a statistical tie** here (0.782 vs 0.770, < 1 SE at

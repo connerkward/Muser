@@ -24,14 +24,15 @@ def _dominated(p, pts):
     )
 
 
-def pareto_plot(data: list[dict], title: str, outpath: str):
+def pareto_plot(data: list[dict], title: str, outpath: str, notes: str | None = None, logx: bool = False):
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     front = sorted([p for p in data if not _dominated(p, data)], key=lambda p: p["ms_img"])
-    xmax = max(p["ms_img"] for p in data) * 1.12
+    xmax = max(p["ms_img"] for p in data) * (1.5 if logx else 1.12)
+    xmin = min(p["ms_img"] for p in data) * 0.6 if logx else 0
     ys = [p["hits1"] for p in data]
     ymin, ymax = min(ys) - 0.06, min(1.0, max(ys) + 0.06)
 
@@ -50,6 +51,7 @@ def pareto_plot(data: list[dict], title: str, outpath: str):
             color="#c62828", alpha=0.6, fontsize=9, style="italic", ha="center")
 
     names_front = {p["name"] for p in front}
+    texts = []
     for p in data:
         on = p["name"] in names_front
         lo, hi = wilson(p["hits1"], p["n"])
@@ -58,15 +60,25 @@ def pareto_plot(data: list[dict], title: str, outpath: str):
                     yerr=[[p["hits1"] - lo], [hi - p["hits1"]]],
                     fmt="o" if on else "X", color=c, ms=10, capsize=4,
                     elinewidth=1.3, zorder=5, markeredgecolor="white", markeredgewidth=1.2)
-        ax.annotate(f"{p['name']}\n{p['hits1']:.3f} · {p['ms_img']:.0f}ms · {p['lic']}",
-                    (p["ms_img"], p["hits1"]), textcoords="offset points",
-                    xytext=(10, 12) if on else (12, -6), fontsize=8.3,
-                    color=c, weight="bold" if on else "normal")
+        texts.append(ax.text(p["ms_img"], p["hits1"],
+                             f"{p['name']}\n{p['hits1']:.3f} · {p['ms_img']:.0f}ms · {p['lic']}",
+                             fontsize=8.3, color=c, weight="bold" if on else "normal"))
+    try:
+        from adjustText import adjust_text
+        adjust_text(texts, ax=ax, expand=(1.3, 1.6),
+                    arrowprops=dict(arrowstyle="-", color="#999", lw=0.6))
+    except Exception:
+        pass
 
     ax.set_xlabel("Index cost  →  ms / image   (← cheaper / faster is better)")
     ax.set_ylabel("Quality  →  hits@1   (higher is better ↑;  bars = 95% Wilson CI)")
     ax.set_title(title)
-    ax.set_xlim(0, xmax); ax.set_ylim(ymin, ymax); ax.grid(True, alpha=0.3)
+    if logx:
+        ax.set_xscale("log")
+    ax.set_xlim(xmin, xmax); ax.set_ylim(ymin, ymax); ax.grid(True, alpha=0.3, which="both")
     ax.legend(loc="lower right", framealpha=0.95)
+    if notes:
+        ax.text(0.015, 0.015, notes, transform=ax.transAxes, fontsize=7.5, color="#555",
+                va="bottom", ha="left", bbox=dict(boxstyle="round", fc="white", ec="#bbb", alpha=0.9))
     fig.tight_layout(); fig.savefig(outpath, bbox_inches="tight")
     return [p["name"] for p in front]
