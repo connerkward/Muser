@@ -1,7 +1,10 @@
 # Muser — agent notes
 
 Local-first semantic image search with a built-in retrieval-eval harness.
-**Python 3.12 + uv.** (A retired Bun/TS prototype lives in `legacy-ts/`.)
+**Python 3.12 + uv.** A TypeScript MCP ext-app lives in `mcp-ts/` — a thin HTTP
+client of the embedded service (`muser serve`) that renders results in an
+interactive gallery UI inside Claude Desktop. It loads no model and never touches
+LanceDB; it proxies `/api/search`, `/api/thumb`, `/api/index`, `/api/status`.
 
 See `REQUIREMENTS.md` for scope/decisions.
 

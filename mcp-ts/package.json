@@ -1,0 +1,28 @@
+{
+  "name": "muser-mcp-ts",
+  "version": "0.2.0",
+  "type": "module",
+  "description": "Muser ext-app: an MCP server (thin HTTP client of `muser serve`) that renders semantic image-search results in an interactive gallery UI.",
+  "main": "src/mcp.ts",
+  "scripts": {
+    "build:ui": "vite build",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "start": "bun src/mcp.ts --stdio",
+    "serve": "bun src/mcp.ts --http",
+    "preview": "node preview.mjs",
+    "postinstall": "vite build || true"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/ext-apps": "^1.2.2",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0",
+    "vite-plugin-singlefile": "^2.0.0"
+  }
+}
