@@ -59,6 +59,33 @@ class MuserIndex:
         t = self._open(model)
         return t.count_rows() if t else 0
 
+    def folders(self, model: str, min_count: int = 2, limit: int = 400) -> list[dict]:
+        """Indexed directories (each ancestor that contains images, any depth) with
+        image counts, for the UI's folder-scope picker. Drops the shallow shared
+        roots (``/``, ``/Users``, ``/Users/<me>``) and any folder holding *every*
+        image (scoping to it == no scope). Most-populated first, capped at ``limit``."""
+        from collections import Counter
+
+        t = self._open(model)
+        if t is None:
+            return []
+        c: Counter[str] = Counter()
+        for r in t.search().select(["path"]).limit(10_000_000).to_list():
+            p = Path(r["path"]).parent
+            while True:
+                c[str(p)] += 1
+                if p == p.parent:
+                    break
+                p = p.parent
+        total = self.count(model)
+        items = [
+            {"folder": d, "count": n}
+            for d, n in c.items()
+            if n >= min_count and n < total and len(Path(d).parts) >= 4
+        ]
+        items.sort(key=lambda x: (-x["count"], x["folder"]))
+        return items[:limit]
+
     def add_images(
         self,
         model: str,
@@ -156,11 +183,32 @@ class MuserIndex:
             total=self.count(model),
         )
 
-    def search(self, model: str, query_vec: np.ndarray, k: int = 12) -> list[tuple[str, float]]:
+    @staticmethod
+    def _folder_where(folder: str | None) -> str | None:
+        """SQL predicate restricting ``path`` to files under ``folder`` (any depth),
+        or None for no scoping. Uses a half-open string range ``[prefix, prefix⁺)``
+        rather than ``LIKE 'prefix%'`` so wildcard chars common in paths (``_``)
+        can't cause false matches — only single quotes need escaping. Applied as a
+        ``prefilter`` so the vector ``limit`` is taken *after* the folder cut, not
+        before (otherwise an out-of-folder top-k could return nothing in-folder)."""
+        if not folder:
+            return None
+        prefix = str(Path(folder).expanduser().resolve()) + os.sep
+        lo = prefix.replace("'", "''")
+        hi = (prefix[:-1] + chr(ord(os.sep) + 1)).replace("'", "''")
+        return f"path >= '{lo}' AND path < '{hi}'"
+
+    def search(
+        self, model: str, query_vec: np.ndarray, k: int = 12, folder: str | None = None
+    ) -> list[tuple[str, float]]:
         t = self._open(model)
         if t is None:
             return []
-        rows = t.search(query_vec.tolist()).distance_type("cosine").limit(k).to_list()
+        q = t.search(query_vec.tolist()).distance_type("cosine")
+        where = self._folder_where(folder)
+        if where:
+            q = q.where(where, prefilter=True)
+        rows = q.limit(k).to_list()
         return [(r["path"], 1.0 - float(r["_distance"])) for r in rows]
 
     def search_batch(
@@ -176,6 +224,7 @@ class MuserIndex:
         threshold: float = 0.985,
         method: str = "embed",
         phash_hamming: int = 8,
+        folder: str | None = None,
     ) -> list[dict]:
         """Search, collapsing near-identical images (same picture saved in many
         folders, or recompressed/resized/cropped copies) into one result.
@@ -208,7 +257,11 @@ class MuserIndex:
         if t is None:
             return []
         n = max(k * 12, 200)
-        rows = t.search(query_vec.tolist()).distance_type("cosine").limit(n).to_list()
+        q = t.search(query_vec.tolist()).distance_type("cosine")
+        where = self._folder_where(folder)
+        if where:
+            q = q.where(where, prefilter=True)
+        rows = q.limit(n).to_list()
 
         use_phash = method in ("phash", "both")
         use_embed = method in ("embed", "both")

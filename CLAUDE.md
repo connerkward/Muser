@@ -23,7 +23,12 @@ See `REQUIREMENTS.md` for scope/decisions.
 - `muser/service.py` — **embedded service** (`muser serve`): FastAPI app that warms
   the model once and owns the index; serves JSON API + the web search UI
   (`muser/web/app.html`). Warm search ≈ 30 ms. Endpoints: /api/search, /api/index,
-  /api/thumb (PIL), /api/image, /api/reveal (open -R), /api/model, /api/status.
+  /api/thumb (PIL), /api/image, /api/reveal (open -R), /api/model, /api/status,
+  /api/folders. **Folder-scoped search:** `/api/search?folder=<dir>` restricts
+  results to images under that directory (any depth) — pushed into LanceDB as a
+  `prefilter` half-open range on `path` (`>= dir/ AND < dir⁺`, so wildcard chars
+  like `_` can't false-match). The web UI has a **scope** box (datalist of indexed
+  dirs + counts from `/api/folders`); free-text so any path prefix works.
 - `eval/datasets.py` — standard benchmarks reduced to {image_paths, queries,
   qrels}. Flickr30k via HF's `refs/convert/parquet` branch (scripts unsupported).
 - `eval/harness.py` — embeds corpus → LanceDB → queries → **ranx** metrics

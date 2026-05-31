@@ -99,19 +99,24 @@ def create_app(model: str = DEFAULT_MODEL):
         return {"added": res.added, "updated": res.updated, "removed": res.removed, "total": res.total}
 
     @app.get("/api/search")
-    def search(q: str, k: int = 24, dedup: bool = True, method: str = "embed"):
+    def search(q: str, k: int = 24, dedup: bool = True, method: str = "embed", folder: str | None = None):
         # method: "embed" (cosine, default), "phash" (perceptual-hash Hamming,
         # robust to recompression/resize/crop), or "both" (collapse on either).
+        # folder: restrict results to images under this directory (any depth).
         emb = state.warm()
         qv = emb.embed_queries([q])[0]
         if dedup:
-            results = state.index.search_dedup(state.model_name, qv, k=k, method=method)
+            results = state.index.search_dedup(state.model_name, qv, k=k, method=method, folder=folder)
         else:
             results = [
                 {"path": p, "name": os.path.basename(p), "score": round(s, 4), "dupes": [p], "dupe_count": 1}
-                for p, s in state.index.search(state.model_name, qv, k=k)
+                for p, s in state.index.search(state.model_name, qv, k=k, folder=folder)
             ]
         return {"query": q, "model": state.model_name, "results": results}
+
+    @app.get("/api/folders")
+    def folders():
+        return {"folders": state.index.folders(state.model_name)}
 
     @app.get("/api/thumb")
     def thumb(path: str, size: int = 260):

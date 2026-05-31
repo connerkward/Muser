@@ -98,6 +98,13 @@
     <input id="q" placeholder="Describe what you're looking for — e.g. “a person on a snowy mountain”" autofocus />
     <button class="primary" id="go">Search</button>
   </div>
+  <div class="row" id="scopeRow">
+    <span class="mut">scope</span>
+    <input class="folder" id="scope" list="folderlist" placeholder="All folders — type or pick a folder to limit the search…" />
+    <datalist id="folderlist"></datalist>
+    <button id="scopeClear" title="Search all folders">✕</button>
+    <span class="mut" id="scopemsg"></span>
+  </div>
   <div class="row">
     <input class="folder" id="folder" placeholder="Folder to index (absolute path)…" />
     <button id="index">Index folder</button>
@@ -212,12 +219,40 @@ $("#model").onchange = async e => {
   await status(); toast("model ready");
 };
 
+// ---- folder scope: limit search to images under one indexed directory ----
+let folderCounts = {};   // folder path -> image count, for the scope readout
+async function loadFolders(){
+  try{
+    const r = await (await fetch("/api/folders")).json();
+    folderCounts = {};
+    const dl=$("#folderlist"); dl.innerHTML="";
+    r.folders.forEach(f=>{
+      folderCounts[f.folder]=f.count;
+      const o=document.createElement("option");
+      o.value=f.folder; o.label=`${f.count.toLocaleString()} imgs`;
+      dl.appendChild(o);
+    });
+  }catch(e){}
+}
+function scopeMsg(){
+  const f=$("#scope").value.trim();
+  if(!f){ $("#scopemsg").textContent=""; return; }
+  const n=folderCounts[f];
+  $("#scopemsg").textContent = n!=null ? `↳ ${n.toLocaleString()} images in scope` : "↳ scoped (re-search to apply)";
+}
+$("#scope").addEventListener("input",scopeMsg);
+$("#scope").addEventListener("change",()=>{ scopeMsg(); if($("#q").value.trim()) search(); });
+$("#scopeClear").onclick=()=>{ $("#scope").value=""; scopeMsg(); if($("#q").value.trim()) search(); };
+
 async function search(){
   const q=$("#q").value.trim(); if(!q) return;
   $("#empty").style.display="none";
-  const r = await (await fetch(`/api/search?q=${enc(q)}&k=30`)).json();
+  const folder=$("#scope").value.trim();
+  const r = await (await fetch(`/api/search?q=${enc(q)}&k=30${folder?`&folder=${enc(folder)}`:""}`)).json();
   const g=$("#results"); g.innerHTML="";
-  if(!r.results.length){ $("#empty").style.display="block"; $("#empty").textContent="No matches — is this folder indexed with the current model?"; return; }
+  if(!r.results.length){ $("#empty").style.display="block";
+    $("#empty").textContent = folder ? "No matches in this folder — try clearing the scope (✕) to search everywhere."
+                                     : "No matches — is this folder indexed with the current model?"; return; }
   r.results.forEach(h=>{
     const pct=Math.max(0,Math.min(100,Math.round(h.score*100)));
     const dupes=h.dupe_count||1;
@@ -335,11 +370,11 @@ $("#index").onclick=async()=>{
   try{
     const r=await (await fetch("/api/index",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({folder})})).json();
     $("#idxmsg").textContent=`+${r.added} added · ${r.updated} updated · ${r.total} total`;
-    await status();
+    await status(); await loadFolders();
   }catch(e){ $("#idxmsg").textContent="index failed (check path)"; }
 };
 
-status();
+status(); loadFolders();
 </script>
 </body>
 </html>
