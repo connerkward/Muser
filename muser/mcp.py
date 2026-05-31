@@ -8,9 +8,10 @@ listening on http://127.0.0.1:7777 we auto-spawn it (detached) and wait until
 
 Tools
 -----
-- ``search_images(query, k=24)`` — semantic image search. Returns a text ranking
-  (path, name, score) plus one base64 JPEG thumbnail per hit as image content,
-  so any host that renders ImageContent (Claude Desktop, etc.) shows a gallery.
+- ``search_images(query, k=24, folder=None)`` — semantic image search, optionally
+  scoped to images under ``folder``. Returns a text ranking (path, name, score)
+  plus one base64 JPEG thumbnail per hit as image content, so any host that
+  renders ImageContent (Claude Desktop, etc.) shows a gallery.
 - ``index_folder(folder, recursive=True)`` — index a folder into the live index.
 - ``index_info()`` — model, indexed count, db path, available models.
 
@@ -112,7 +113,7 @@ def ensure_service() -> None:
 # Tools
 # --------------------------------------------------------------------------- #
 @mcp.tool()
-def search_images(query: str, k: int = 24) -> list:
+def search_images(query: str, k: int = 24, folder: str | None = None) -> list:
     """Semantic image search over the indexed library.
 
     Finds images matching a natural-language description (e.g. "a diagram",
@@ -123,16 +124,22 @@ def search_images(query: str, k: int = 24) -> list:
     Args:
         query: Natural-language description of the image to find.
         k: Number of results to return (default 24).
+        folder: Optional absolute path — limit results to images under this
+            directory (any depth). Omit to search the whole library.
     """
     ensure_service()
-    q = urllib.parse.urlencode({"q": query, "k": k})
-    data = _get_json(f"/api/search?{q}")
+    params = {"q": query, "k": k}
+    if folder:
+        params["folder"] = folder
+    data = _get_json(f"/api/search?{urllib.parse.urlencode(params)}")
     results = data.get("results", [])
 
     if not results:
-        return [f'No matches for "{query}". Is the library indexed for the current model?']
+        where = f" under {folder}" if folder else ""
+        return [f'No matches for "{query}"{where}. Is the library indexed for the current model?']
 
-    lines = [f'Top {len(results)} matches for "{query}" (model: {data.get("model")}):']
+    scope = f" in {folder}" if folder else ""
+    lines = [f'Top {len(results)} matches for "{query}"{scope} (model: {data.get("model")}):']
     content: list = []
     for i, h in enumerate(results, 1):
         lines.append(f'{i}. {h["name"]}  —  {h["score"]:.3f}\n   {h["path"]}')

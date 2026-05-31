@@ -28,7 +28,9 @@ See `REQUIREMENTS.md` for scope/decisions.
   results to images under that directory (any depth) — pushed into LanceDB as a
   `prefilter` half-open range on `path` (`>= dir/ AND < dir⁺`, so wildcard chars
   like `_` can't false-match). The web UI has a **scope** box (datalist of indexed
-  dirs + counts from `/api/folders`); free-text so any path prefix works.
+  dirs + counts from `/api/folders`); free-text so any path prefix works. Same
+  scoping on the CLI (`muser search "…" --in <folder>`) and MCP
+  (`search_images(query, k, folder=…)`) — both thin clients of `/api/search`.
 - `eval/datasets.py` — standard benchmarks reduced to {image_paths, queries,
   qrels}. Flickr30k via HF's `refs/convert/parquet` branch (scripts unsupported).
 - `eval/harness.py` — embeds corpus → LanceDB → queries → **ranx** metrics

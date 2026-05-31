@@ -116,27 +116,37 @@ def index(
 def search(
     query: list[str] = typer.Argument(..., help='Text query, e.g. "a dog on a beach"'),
     k: int = typer.Option(12, "-k", "--limit", help="Number of results"),
+    in_: str = typer.Option(None, "--in", help="Limit to images under this folder (any depth)"),
     model: str = typer.Option(DEFAULT_MODEL, help="Embedding model (only with --local)"),
     local: bool = typer.Option(False, "--local", help="Search in-process instead of via the service"),
 ):
-    """Search the whole index by natural-language description."""
+    """Search the index by natural-language description (optionally scoped to --in <folder>)."""
     q = " ".join(query)
+    folder = str(Path(in_).expanduser()) if in_ else None
     if not local:
         _ensure_service()
-        r = _get("/api/search", q=q, k=k)
+        params = {"q": q, "k": k}
+        if folder:
+            params["folder"] = folder
+        r = _get("/api/search", **params)
         results, used = r["results"], r["model"]
     else:
         from .index import MuserIndex
 
         emb = load_model(model)
         qv = emb.embed_queries([q])[0]
-        results = [{"path": p, "name": os.path.basename(p), "score": s} for p, s in MuserIndex().search(model, qv, k=k)]
+        results = [{"path": p, "name": os.path.basename(p), "score": s}
+                   for p, s in MuserIndex().search(model, qv, k=k, folder=folder)]
         used = model
 
     if not results:
-        con.print("No results. Index a folder first:  muser index <folder>")
+        if folder:
+            con.print(f"No results under {folder}. Drop --in to search the whole index.")
+        else:
+            con.print("No results. Index a folder first:  muser index <folder>")
         raise typer.Exit(1)
-    con.print(f'Top {len(results)} for "{q}" [dim]\\[{used}][/]:')
+    scope = f" [dim]in {folder}[/]" if folder else ""
+    con.print(f'Top {len(results)} for "{q}" [dim]\\[{used}][/]{scope}:')
     for i, h in enumerate(results, 1):
         parent = "file://" + urllib.parse.quote(os.path.dirname(h["path"]))
         con.print(f"  {i:2}. {h['score']*100:5.1f}%  [link={parent}]{h['name']}[/link]  [dim]{h['path']}[/dim]")
