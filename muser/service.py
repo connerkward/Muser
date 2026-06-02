@@ -35,6 +35,10 @@ class ModelReq(BaseModel):
     name: str
 
 
+class CartReq(BaseModel):
+    paths: list[str]
+
+
 class State:
     def __init__(self, model: str):
         self.model_name = model
@@ -248,6 +252,38 @@ def create_app(model: str = DEFAULT_MODEL):
     @app.get("/api/folders")
     def folders():
         return {"folders": state.index.folders(state.model_name)}
+
+    @app.post("/api/zip")
+    def cart_zip(req: CartReq):
+        # Bundles the requested files into a ZIP. Filenames collide on basename;
+        # we disambiguate with a numeric suffix ('_2', '_3', ...). Files are
+        # stored without compression — most are already-compressed image
+        # formats, so deflate would burn CPU for ~0% gain. In-memory build
+        # (not streaming) because ZipFile's central directory writes back into
+        # the buffer at the end, which streaming-by-truncation breaks.
+        import io, zipfile
+        from fastapi.responses import Response
+        seen, members = {}, []
+        for p in req.paths:
+            if not p or not os.path.isfile(p):
+                continue
+            base = os.path.basename(p)
+            stem, ext = os.path.splitext(base)
+            n = seen.get(base, 0) + 1
+            seen[base] = n
+            arcname = base if n == 1 else f"{stem}_{n}{ext}"
+            members.append((p, arcname))
+        if not members:
+            raise HTTPException(400, "no valid files in cart")
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
+            for src, arc in members:
+                zf.write(src, arc)
+        return Response(
+            content=buf.getvalue(),
+            media_type="application/zip",
+            headers={"Content-Disposition": 'attachment; filename="muser-cart.zip"'},
+        )
 
     @app.post("/api/pick-folder")
     def pick_folder(kind: str = "scope"):

@@ -37,6 +37,10 @@
   button.primary { background:var(--fg); color:var(--bg); border-color:var(--fg);
                    padding-left:18px; padding-right:18px; }
   button.primary:hover { opacity:.85; }
+  .loadmore { display:block; margin:22px auto; padding:9px 22px; background:transparent;
+              color:var(--mut); border:1px solid var(--line); border-radius:7px;
+              font-size:13px; cursor:pointer; }
+  .loadmore:hover { color:var(--fg); border-color:var(--fg); }
 
   .wrap { max-width:1280px; margin:0 auto; padding:30px 28px 80px; }
 
@@ -88,8 +92,15 @@
   .card .foot button { background:transparent; border:0; padding:0; color:var(--mut);
                        font-size:11px; cursor:pointer; border-bottom:1px solid transparent; }
   .card .foot button:hover { color:var(--fg); border-bottom-color:var(--fg); }
+  .card .foot button.add.added { color:var(--fg); border-bottom-color:var(--fg); }
   .card .bar { display:none; }
   .copied { color:var(--fg) !important; border-bottom-color:var(--fg) !important; }
+  .cart-actions { display:flex; gap:18px; margin-top:22px; padding-top:18px; border-top:1px solid var(--line); }
+  .cart-actions button { background:transparent; border:0; padding:0; color:var(--mut);
+                         font-size:13px; cursor:pointer; border-bottom:1px solid transparent; }
+  .cart-actions button:hover { color:var(--fg); border-bottom-color:var(--fg); }
+  .cart-actions button#cartDownload { color:var(--fg); border-bottom-color:var(--fg); }
+  .cart-actions button#cartDownload:hover { opacity:.7; }
 
   .empty { color:var(--mut); text-align:center; padding:90px 0;
            font:italic 400 15px/1.4 var(--serif); }
@@ -160,6 +171,7 @@
   <span class="mut" id="status">…</span>
   <span class="sp"></span>
   <span class="spinner" id="spinner" style="display:none" title="Working…"></span>
+  <button class="upload" id="cartOpen" style="display:none" title="Open selection">Cart (<span id="cartN">0</span>)</button>
   <button class="upload" id="indexPick" title="Pick a folder and index it">Index folder</button>
   <span class="mut">model</span>
   <select id="model"></select>
@@ -227,6 +239,16 @@
   <div class="grid" id="reviewGrid"></div>
 </div>
 
+<div class="modal" id="cartModal"><div class="box">
+  <span class="x" id="cartClose">×</span>
+  <h3>Selection</h3>
+  <div class="sub" id="cartSub"></div>
+  <div class="files" id="cartFiles"></div>
+  <div class="cart-actions">
+    <button id="cartDownload">Download zip</button>
+    <button id="cartClear">Clear</button>
+  </div>
+</div></div>
 <div class="toast" id="toast"></div>
 
 <div class="modal" id="dupes"><div class="box">
@@ -257,6 +279,68 @@ window.fetch = (...args) => {
   };
   return _origFetch(...args).finally(done);
 };
+
+// ---- selection cart: accumulate picks across searches, download as a zip,
+// clear on download or tab close. sessionStorage (not localStorage) gives us
+// the "end of session" semantics for free.
+const CART_KEY = "muser-cart";
+const _cart = new Set(JSON.parse(sessionStorage.getItem(CART_KEY) || "[]"));
+function saveCart(){ sessionStorage.setItem(CART_KEY, JSON.stringify([..._cart])); updateCartUI(); }
+function cartHas(p){ return _cart.has(p); }
+function cartToggle(p, btn){
+  if (_cart.has(p)) { _cart.delete(p); btn.textContent = "Add";   btn.classList.remove("added"); }
+  else              { _cart.add(p);    btn.textContent = "Added"; btn.classList.add("added"); }
+  saveCart();
+}
+function updateCartUI(){
+  const n = _cart.size;
+  $("#cartN").textContent = n;
+  $("#cartOpen").style.display = n > 0 ? "" : "none";
+}
+function syncCartButtons(){
+  document.querySelectorAll(".card .foot .add").forEach(b => {
+    const p = b.dataset.path;
+    if (!p) return;
+    const on = _cart.has(p);
+    b.textContent = on ? "Added" : "Add";
+    b.classList.toggle("added", on);
+  });
+}
+function openCart(){
+  $("#cartSub").textContent = _cart.size === 1 ? "1 item" : `${_cart.size} items`;
+  const f = $("#cartFiles"); f.innerHTML = "";
+  [..._cart].forEach(p => {
+    const d = document.createElement("div"); d.className = "file";
+    d.innerHTML = `<img loading="lazy" src="/api/thumb?path=${enc(p)}" title="${p}"><div class="fn">${p}</div><div class="frow"><button class="rev">Reveal</button><button class="rem">Remove</button></div>`;
+    d.querySelector("img").onclick = () => window.open(`/api/image?path=${enc(p)}`, "_blank");
+    d.querySelector(".rev").onclick = async () => { await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:p})}); toast("revealed in Finder"); };
+    d.querySelector(".rem").onclick = () => { _cart.delete(p); saveCart(); openCart(); syncCartButtons(); };
+    f.appendChild(d);
+  });
+  $("#cartModal").classList.add("show");
+}
+async function downloadCart(){
+  if (!_cart.size) return;
+  const res = await fetch("/api/zip", {
+    method: "POST", headers: {"content-type": "application/json"},
+    body: JSON.stringify({paths: [..._cart]}),
+  });
+  if (!res.ok) { toast("zip failed"); return; }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = "muser-cart.zip"; document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  _cart.clear(); saveCart(); syncCartButtons();
+  $("#cartModal").classList.remove("show");
+  toast("Downloaded — cart cleared");
+}
+$("#cartOpen").onclick = openCart;
+$("#cartClose").onclick = () => $("#cartModal").classList.remove("show");
+$("#cartModal").onclick = (e) => { if (e.target === $("#cartModal")) $("#cartModal").classList.remove("show"); };
+$("#cartDownload").onclick = downloadCart;
+$("#cartClear").onclick = () => { _cart.clear(); saveCart(); syncCartButtons(); $("#cartModal").classList.remove("show"); toast("Cart cleared"); };
+updateCartUI();
 
 // ---- reverse-image search: copy the image to the clipboard, open Google Lens, ⌘V.
 // $0 (consumer Lens, not the paid Vision API). Nothing leaves the machine until the
@@ -336,18 +420,23 @@ function scopeMsg(){
 $("#scopePick").onclick = async()=>{ const p = await pickFolder("scope"); if(p) setScope(p); };
 $("#scopeClear").onclick = ()=> setScope("");
 
-let _searchAbort=null, _searchTimer=null;
+const K_STEP=120;                                  // results per page; "Load more" pulls another K_STEP deeper
+let _searchAbort=null, _searchTimer=null, _k=K_STEP, _lastKey="", _mode="text";
 function liveSearch(){ clearTimeout(_searchTimer); _searchTimer=setTimeout(search, 180); }
+function loadMore(){ _k += K_STEP; search(); }
 async function search(){
   const q=$("#q").value.trim();
-  if(q.length < 2){ $("#results").innerHTML=""; $("#empty").style.display="none"; return; }
+  if(q.length < 2){ $("#results").innerHTML=""; $("#empty").style.display="none"; _lastKey=""; return; }
   $("#empty").style.display="none";
   const folder=$("#scope").value.trim();
   const neg=$("#neg").value.trim();
+  const key=q+"|"+folder+"|"+neg;
+  if(key!==_lastKey){ _k=K_STEP; _lastKey=key; }   // a new query resets depth; Load more keeps the same key so _k grows
+  _mode="text";
   if(_searchAbort) _searchAbort.abort();
   _searchAbort = new AbortController();
   let r;
-  try { r = await (await fetch(`/api/search?q=${enc(q)}&k=30${folder?`&folder=${enc(folder)}`:""}${neg?`&neg=${enc(neg)}`:""}`, {signal:_searchAbort.signal})).json(); }
+  try { r = await (await fetch(`/api/search?q=${enc(q)}&k=${_k}${folder?`&folder=${enc(folder)}`:""}${neg?`&neg=${enc(neg)}`:""}`, {signal:_searchAbort.signal})).json(); }
   catch(e){ if(e.name==="AbortError") return; throw e; }
   _renderHits(r);
 }
@@ -371,11 +460,14 @@ function _renderHits(r){
       <div class="meta"><div class="name" title="${h.path}">${h.name}</div>
         <div class="bar"><i style="width:${pct}%"></i></div></div>
       <div class="foot"><span class="score">${(h.score*100).toFixed(1)}%</span>
+        <button class="add" data-path="${h.path.replace(/"/g, '&quot;')}" title="Add to selection (session cart)">${cartHas(h.path) ? "Added" : "Add"}</button>
         <button class="sim" title="Find images visually similar to this one">Similar</button>
         <button class="lens" title="Copy image + open Google Lens (⌘V to search where it appears)">Lens</button>
         <button class="orig" title="Copy image + open TinEye (⌘V, sort Oldest = earliest known copy)">TinEye</button>
         <button class="reveal">Reveal</button></div>`;
     c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
+    { const btn = c.querySelector(".add"); if (cartHas(h.path)) btn.classList.add("added");
+      btn.onclick = () => cartToggle(h.path, btn); }
     c.querySelector(".sim").onclick=()=>searchImage(h.path);
     c.querySelector(".lens").onclick=e=>lensSearch(h.path,e.currentTarget);
     c.querySelector(".orig").onclick=e=>originSearch(h.path,e.currentTarget);
@@ -383,6 +475,13 @@ function _renderHits(r){
     if(dupes>1) c.querySelector(".dupe").onclick=e=>{ e.stopPropagation(); openDupes(h); };
     g.appendChild(c);
   });
+  let lm=document.getElementById("loadmore"); if(lm) lm.remove();
+  if(_mode==="text" && r.results.length >= _k){     // got a full page → more are ranked below
+    lm=document.createElement("button");
+    lm.id="loadmore"; lm.className="loadmore";
+    lm.textContent=`Load more — showing ${r.results.length}`;
+    lm.onclick=loadMore; g.after(lm);
+  }
   renderRefinements(r.refinements || []);
 }
 
@@ -392,8 +491,9 @@ async function searchImage(path){
   $("#empty").style.display="none";
   $("#q").value = ""; $("#neg").value = ""; hideSuggest();
   toast(`Searching by image: ${path.split("/").pop()}`);
+  _mode="image"; _lastKey="";          // image-similar is a fixed top-N, no Load more
   let r;
-  try { r = await (await fetch(`/api/search-image?path=${enc(path)}&k=30`, {signal:_searchAbort.signal})).json(); }
+  try { r = await (await fetch(`/api/search-image?path=${enc(path)}&k=120`, {signal:_searchAbort.signal})).json(); }
   catch(e){ if(e.name==="AbortError") return; throw e; }
   _renderHits(r);
 }
