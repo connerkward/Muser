@@ -368,22 +368,31 @@ async function engineSearch(path, btn, url, hint){
   const orig = btn && btn.textContent;
   try{
     if(btn) btn.disabled=true;
-    // Clipboard image-write needs a SECURE CONTEXT. 127.0.0.1 and *.localhost qualify;
-    // http://muser.local does NOT (.local isn't a trustworthy origin), so the API is
-    // absent there. Degrade gracefully: open the engine + the image to drag in, and
-    // point at the secure origin where one-click copy works.
-    if(!(window.isSecureContext && navigator.clipboard && window.ClipboardItem)){
+    let copied=false;
+    // 1) Server-side OS clipboard — the local service copies the image via the OS, so it
+    //    works on ANY origin (incl. http://muser.local), where the browser's async
+    //    Clipboard API is unavailable (it needs a secure context). macOS only.
+    try{
+      const r=await fetch("/api/clipboard",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path})});
+      copied=r.ok;
+    }catch(_){}
+    // 2) Fallback: browser Clipboard API (secure contexts — 127.0.0.1 / *.localhost / https).
+    if(!copied && window.isSecureContext && navigator.clipboard && window.ClipboardItem){
+      const png=await blobToPng(await (await fetch(`/api/image?path=${enc(path)}`)).blob());
+      await navigator.clipboard.write([new ClipboardItem({"image/png":png})]);
+      copied=true;
+    }
+    if(copied){
+      if(btn){ btn.textContent="✓ Copied"; btn.classList.add("copied"); }
+      toast(hint);
+      await new Promise(r=>setTimeout(r,600));       // let the "copied" pop play before the tab steals focus
+      window.open(url,"_blank");
+    }else{
+      // 3) Last resort (non-macOS + insecure origin): open engine + image to drag in.
       window.open(url,"_blank");
       window.open(`/api/image?path=${enc(path)}`,"_blank");
-      toast("Clipboard needs a secure origin — open this page at muser.localhost (or 127.0.0.1:7777). Image opened to drag in.");
-      return;
+      toast("Couldn't auto-copy here — opened the image to drag into the search.");
     }
-    const png=await blobToPng(await (await fetch(`/api/image?path=${enc(path)}`)).blob());
-    await navigator.clipboard.write([new ClipboardItem({"image/png":png})]);
-    if(btn){ btn.textContent="✓ Copied"; btn.classList.add("copied"); }
-    toast(hint);
-    await new Promise(r=>setTimeout(r,600));        // let the "copied" pop play before the tab steals focus
-    window.open(url,"_blank");
   }catch(e){ toast("copy failed: "+e.message); }
   finally{
     if(btn) setTimeout(()=>{ btn.textContent=orig; btn.classList.remove("copied"); btn.disabled=false; }, 1100);

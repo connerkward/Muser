@@ -70,6 +70,35 @@ def _reveal(path: str):
         subprocess.run(["xdg-open", os.path.dirname(path)], check=False)
 
 
+def _copy_image_to_clipboard(path: str) -> bool:
+    """Put an image on the OS clipboard server-side (no browser needed).
+
+    The web UI runs on the user's own machine, so the *service* can write straight to
+    the system clipboard — sidestepping the browser's async Clipboard API, which is
+    gated behind a secure context and therefore unavailable on http://*.local. This is
+    what lets the reverse-image buttons (Lens/TinEye) copy-then-⌘V work regardless of
+    which hostname the page is served from. macOS only for now; returns False elsewhere.
+    """
+    if platform.system() != "Darwin":
+        return False
+    import tempfile
+
+    from .embedders import _load_rgb
+
+    img = _load_rgb(path, max_side=2048)  # PNG for a lossless paste; cap pathological sizes
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    try:
+        img.save(tmp.name, "PNG")
+        tmp.close()
+        r = subprocess.run(
+            ["osascript", "-e", f'set the clipboard to (read (POSIX file "{tmp.name}") as «class PNGf»)'],
+            capture_output=True, text=True,
+        )
+        return r.returncode == 0
+    finally:
+        os.unlink(tmp.name)
+
+
 def create_app(model: str = DEFAULT_MODEL):
     from fastapi import FastAPI, HTTPException
     from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -318,6 +347,16 @@ def create_app(model: str = DEFAULT_MODEL):
     @app.post("/api/reveal")
     def reveal(req: PathReq):
         _reveal(req.path)
+        return {"ok": True}
+
+    @app.post("/api/clipboard")
+    def clipboard(req: PathReq):
+        # Server-side image copy so Lens/TinEye work on any origin (incl. http://muser.local),
+        # where the browser's secure-context Clipboard API is unavailable. macOS only.
+        if not os.path.isfile(req.path):
+            raise HTTPException(404, "not found")
+        if not _copy_image_to_clipboard(req.path):
+            raise HTTPException(501, "server clipboard unavailable (macOS only)")
         return {"ok": True}
 
     @app.post("/api/model")
