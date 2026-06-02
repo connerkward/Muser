@@ -90,14 +90,21 @@ def ensure_service() -> None:
     """Auto-spawn `muser serve` (detached) if the embedded service is down."""
     if _service_up():
         return
-    # Spawn the service in its own session so it outlives this MCP process.
-    subprocess.Popen(
-        [sys.executable, "-c", "from muser.service import serve; serve()"],
+    # Spawn the service detached so it outlives this MCP process. start_new_session
+    # (setsid) is POSIX-only; on Windows use process-group + DETACHED_PROCESS flags so
+    # the child isn't torn down with the MCP host (e.g. Claude Desktop) on exit.
+    kwargs: dict = dict(
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
-        start_new_session=True,
     )
+    if os.name == "posix":
+        kwargs["start_new_session"] = True
+    else:
+        kwargs["creationflags"] = (
+            subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+        )
+    subprocess.Popen([sys.executable, "-c", "from muser.service import serve; serve()"], **kwargs)
     deadline = time.time() + _SPAWN_TIMEOUT
     while time.time() < deadline:
         if _service_up():

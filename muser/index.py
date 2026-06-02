@@ -61,9 +61,9 @@ class MuserIndex:
 
     def folders(self, model: str, min_count: int = 2, limit: int = 400) -> list[dict]:
         """Indexed directories (each ancestor that contains images, any depth) with
-        image counts, for the UI's folder-scope picker. Drops the shallow shared
-        roots (``/``, ``/Users``, ``/Users/<me>``) and any folder holding *every*
-        image (scoping to it == no scope). Most-populated first, capped at ``limit``."""
+        image counts, for the UI's folder-scope picker. Drops any folder holding *every*
+        image (scoping to it == no scope) — which already excludes the all-encompassing
+        shared roots, OS-agnostically. Most-populated first, capped at ``limit``."""
         from collections import Counter
 
         t = self._open(model)
@@ -81,7 +81,7 @@ class MuserIndex:
         items = [
             {"folder": d, "count": n}
             for d, n in c.items()
-            if n >= min_count and n < total and len(Path(d).parts) >= 4
+            if n >= min_count and n < total
         ]
         items.sort(key=lambda x: (-x["count"], x["folder"]))
         return items[:limit]

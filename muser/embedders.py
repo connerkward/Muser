@@ -401,6 +401,12 @@ class JinaV4MLXEmbedder:
 
     def _load(self):
         if self._model is None:
+            import platform
+            if platform.system() != "Darwin" or platform.machine() != "arm64":
+                raise RuntimeError(
+                    "jina-v4-mlx requires Apple Silicon + the `mac` extra (mlx). "
+                    "Use jina-v4 (CUDA) or siglip2-b on this platform."
+                )
             import sys
 
             from huggingface_hub import snapshot_download

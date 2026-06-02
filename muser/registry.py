@@ -10,6 +10,8 @@ Tiers:
 
 from __future__ import annotations
 
+import importlib.util
+import platform
 from typing import Callable
 
 from .embedders import (
@@ -20,6 +22,15 @@ from .embedders import (
     PerceptionEncoderEmbedder,
     SentenceTransformerEmbedder,
     SigLIP2Embedder,
+)
+
+# MLX is Apple-Silicon-only. Probe without importing it (find_spec triggers no Metal
+# init), so the jina-v4-mlx backend is registered only where it can actually run —
+# off-Apple it's simply absent rather than crashing with ModuleNotFoundError on first use.
+_MLX_AVAILABLE = (
+    platform.system() == "Darwin"
+    and platform.machine() == "arm64"
+    and importlib.util.find_spec("mlx") is not None
 )
 
 # name -> (tier, factory)
@@ -44,10 +55,13 @@ _REGISTRY: dict[str, tuple[str, Callable[[], Embedder]]] = {
     # jina-v4 (transformers): best quality (0.967 Flickr) but leaks MPS memory and
     # hard-crashes on real images — CUDA server only.
     "jina-v4": ("frontier", lambda: JinaV4Embedder()),
-    # jina-v4-mlx: runs stably on Apple Silicon, but cross-modal retrieval is broken
-    # in this integration (~random Flickr hits@1). EXPERIMENTAL — needs debugging.
-    "jina-v4-mlx": ("experimental", lambda: JinaV4MLXEmbedder()),
 }
+
+# jina-v4-mlx: runs stably on Apple Silicon, but cross-modal retrieval is broken in
+# this integration (~random Flickr hits@1). EXPERIMENTAL — needs debugging. Registered
+# only where MLX can load (Apple Silicon + `mac` extra); absent elsewhere.
+if _MLX_AVAILABLE:
+    _REGISTRY["jina-v4-mlx"] = ("experimental", lambda: JinaV4MLXEmbedder())
 
 # siglip2-b: best quality/speed/license balance on Mac — 0.945 hits@1 (beats CLIP),
 # Apache-2.0, 71ms/img. siglip2-so400m for max quality (0.955) at 269ms/img.

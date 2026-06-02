@@ -65,9 +65,21 @@ def _reveal(path: str):
     if s == "Darwin":
         subprocess.run(["open", "-R", path], check=False)
     elif s == "Windows":
-        subprocess.run(["explorer", f"/select,{path}"], check=False)
+        # Explorer's /select, needs backslashes; the web UI hands us forward slashes.
+        subprocess.run(["explorer", f"/select,{os.path.normpath(path)}"], check=False)
     else:
-        subprocess.run(["xdg-open", os.path.dirname(path)], check=False)
+        # GNOME/KDE file managers can highlight the file via the FileManager1 D-Bus API;
+        # fall back to just opening the containing folder (xdg-open can't select).
+        try:
+            subprocess.run(
+                ["dbus-send", "--session", "--print-reply",
+                 "--dest=org.freedesktop.FileManager1", "/org/freedesktop/FileManager1",
+                 "org.freedesktop.FileManager1.ShowItems",
+                 f"array:string:file://{path}", "string:"],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            subprocess.run(["xdg-open", os.path.dirname(path)], check=False)
 
 
 def _copy_image_to_clipboard(path: str) -> bool:
@@ -76,11 +88,10 @@ def _copy_image_to_clipboard(path: str) -> bool:
     The web UI runs on the user's own machine, so the *service* can write straight to
     the system clipboard — sidestepping the browser's async Clipboard API, which is
     gated behind a secure context and therefore unavailable on http://*.local. This is
-    what lets the reverse-image buttons (Lens/TinEye) copy-then-⌘V work regardless of
-    which hostname the page is served from. macOS only for now; returns False elsewhere.
+    what lets the reverse-image button (Lens) copy-then-paste work regardless of which
+    hostname the page is served from. Returns False when no OS clipboard tool is found.
     """
-    if platform.system() != "Darwin":
-        return False
+    import shutil
     import tempfile
 
     from .embedders import _load_rgb
@@ -90,11 +101,34 @@ def _copy_image_to_clipboard(path: str) -> bool:
     try:
         img.save(tmp.name, "PNG")
         tmp.close()
-        r = subprocess.run(
-            ["osascript", "-e", f'set the clipboard to (read (POSIX file "{tmp.name}") as «class PNGf»)'],
-            capture_output=True, text=True,
-        )
-        return r.returncode == 0
+        s = platform.system()
+        try:
+            if s == "Darwin":
+                r = subprocess.run(
+                    ["osascript", "-e", f'set the clipboard to (read (POSIX file "{tmp.name}") as «class PNGf»)'],
+                    capture_output=True, text=True,
+                )
+                return r.returncode == 0
+            if s == "Windows":
+                # PowerShell + WinForms (no extra deps). -STA is required for the clipboard apartment.
+                ps = (
+                    "Add-Type -AssemblyName System.Windows.Forms,System.Drawing; "
+                    f"$img=[System.Drawing.Image]::FromFile('{tmp.name}'); "
+                    "[System.Windows.Forms.Clipboard]::SetImage($img); $img.Dispose()"
+                )
+                r = subprocess.run(["powershell", "-NoProfile", "-STA", "-Command", ps], capture_output=True, text=True)
+                return r.returncode == 0
+            # Linux: Wayland (wl-copy) or X11 (xclip); both read image/png from stdin.
+            data = open(tmp.name, "rb").read()
+            if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
+                cmd = ["wl-copy", "--type", "image/png"]
+            elif shutil.which("xclip"):
+                cmd = ["xclip", "-selection", "clipboard", "-t", "image/png"]
+            else:
+                return False
+            return subprocess.run(cmd, input=data, capture_output=True).returncode == 0
+        except FileNotFoundError:
+            return False
     finally:
         os.unlink(tmp.name)
 
@@ -315,16 +349,41 @@ def create_app(model: str = DEFAULT_MODEL):
             "index": "Pick a folder to index",
         }
         prompt = prompts.get(kind, "Choose a folder")
-        if platform.system() != "Darwin":
-            raise HTTPException(501, "native folder picker is macOS-only for now")
+        import shutil
+        s = platform.system()
         try:
-            out = subprocess.run(
-                ["osascript", "-e", f'POSIX path of (choose folder with prompt "{prompt}")'],
-                capture_output=True, text=True, timeout=300, check=True,
-            ).stdout.strip().rstrip("/")
-            return {"path": out}
+            if s == "Darwin":
+                out = subprocess.run(
+                    ["osascript", "-e", f'POSIX path of (choose folder with prompt "{prompt}")'],
+                    capture_output=True, text=True, timeout=300, check=True,
+                ).stdout.strip().rstrip("/")
+                return {"path": out}
+            if s == "Windows":
+                ps = (
+                    "Add-Type -AssemblyName System.Windows.Forms; "
+                    f"$d=New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description='{prompt}'; "
+                    "if($d.ShowDialog() -eq 'OK'){[Console]::Out.Write($d.SelectedPath)}"
+                )
+                out = subprocess.run(
+                    ["powershell", "-NoProfile", "-STA", "-Command", ps],
+                    capture_output=True, text=True, timeout=300, check=True,
+                ).stdout.strip()
+                return {"path": out} if out else {"cancelled": True}
+            # Linux: zenity (GTK) or kdialog (KDE).
+            if shutil.which("zenity"):
+                cmd = ["zenity", "--file-selection", "--directory", f"--title={prompt}"]
+            elif shutil.which("kdialog"):
+                cmd = ["kdialog", "--getexistingdirectory", os.path.expanduser("~")]
+            else:
+                raise HTTPException(501, "no folder picker found — install zenity or kdialog, "
+                                         "or type a path into the scope box")
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=300, check=True).stdout.strip()
+            return {"path": out} if out else {"cancelled": True}
         except subprocess.CalledProcessError:
-            return {"cancelled": True}
+            return {"cancelled": True}   # user cancelled the dialog
+        except FileNotFoundError:
+            raise HTTPException(501, "native folder picker unavailable on this platform — "
+                                     "type a path into the scope box instead")
 
     @app.get("/api/thumb")
     def thumb(path: str, size: int = 260):
@@ -351,12 +410,14 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.post("/api/clipboard")
     def clipboard(req: PathReq):
-        # Server-side image copy so Lens/TinEye work on any origin (incl. http://muser.local),
-        # where the browser's secure-context Clipboard API is unavailable. macOS only.
+        # Server-side image copy so Lens works on any origin (incl. http://muser.local),
+        # where the browser's secure-context Clipboard API is unavailable. Cross-platform:
+        # osascript (mac) / PowerShell (Windows) / wl-copy|xclip (Linux).
         if not os.path.isfile(req.path):
             raise HTTPException(404, "not found")
         if not _copy_image_to_clipboard(req.path):
-            raise HTTPException(501, "server clipboard unavailable (macOS only)")
+            raise HTTPException(501, "server clipboard unavailable — on Linux install "
+                                     "xclip (X11) or wl-clipboard (Wayland)")
         return {"ok": True}
 
     @app.post("/api/model")

@@ -39,9 +39,12 @@ muser = "muser.cli:app"
 muser-mcp = "muser.mcp:main"
 
 [project.optional-dependencies]
+# MLX has no Windows wheels and its Metal backend is Apple-only; env markers keep
+# `uv sync --extra mac` resolvable (a no-op) on Windows/Linux while installing on
+# Apple Silicon. The default (no-extra) install is already cross-platform.
 mac = [
-    "mlx>=0.31.2",
-    "mlx-lm>=0.29.1",
+    "mlx>=0.31.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "mlx-lm>=0.29.1; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 
 [build-system]
