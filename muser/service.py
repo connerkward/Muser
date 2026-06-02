@@ -90,6 +90,24 @@ def create_app(model: str = DEFAULT_MODEL):
     def home():
         return WEB.read_text()
 
+    # SVG favicon: italic lowercase 'm', matches the wordmark. Honors
+    # prefers-color-scheme via inline <style> (Safari / Chromium support
+    # this in SVG favicons). Served at /favicon.ico so the browser's
+    # implicit fetch resolves instead of 404'ing — modern browsers accept
+    # image/svg+xml at that path.
+    _FAVICON_SVG = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+        '<style>text{fill:#1a1815;font-family:Georgia,serif}'
+        '@media(prefers-color-scheme:dark){text{fill:#ece6d6}}</style>'
+        '<text x="50%" y="74%" font-style="italic" font-size="30" '
+        'text-anchor="middle">m</text></svg>'
+    ).encode("utf-8")
+
+    @app.get("/favicon.ico")
+    def favicon():
+        return Response(_FAVICON_SVG, media_type="image/svg+xml",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
     @app.get("/api/status")
     def status():
         return {
