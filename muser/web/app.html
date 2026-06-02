@@ -37,10 +37,6 @@
   button.primary { background:var(--fg); color:var(--bg); border-color:var(--fg);
                    padding-left:18px; padding-right:18px; }
   button.primary:hover { opacity:.85; }
-  .loadmore { display:block; margin:22px auto; padding:9px 22px; background:transparent;
-              color:var(--mut); border:1px solid var(--line); border-radius:7px;
-              font-size:13px; cursor:pointer; }
-  .loadmore:hover { color:var(--fg); border-color:var(--fg); }
 
   .wrap { max-width:1280px; margin:0 auto; padding:30px 28px 80px; }
 
@@ -420,37 +416,57 @@ function scopeMsg(){
 $("#scopePick").onclick = async()=>{ const p = await pickFolder("scope"); if(p) setScope(p); };
 $("#scopeClear").onclick = ()=> setScope("");
 
-const K_STEP=120;                                  // results per page; "Load more" pulls another K_STEP deeper
+const K_STEP=120;                                  // results fetched per page; infinite scroll pulls another K_STEP deeper
+const SCROLL_BUFFER=1500;                           // px below the viewport to prefetch the next page, ahead of the user
 let _searchAbort=null, _searchTimer=null, _k=K_STEP, _lastKey="", _mode="text";
+let _rendered=0, _loading=false, _hasMore=true, _io=null;
 function liveSearch(){ clearTimeout(_searchTimer); _searchTimer=setTimeout(search, 180); }
-function loadMore(){ _k += K_STEP; search(); }
+function loadMore(){ if(_loading || !_hasMore || _mode!=="text") return; _k += K_STEP; search(); }
+function maybeLoadMore(){                           // trigger the next page while the sentinel is within the buffer zone
+  const s=document.getElementById("sentinel");
+  if(s && s.getBoundingClientRect().top < innerHeight + SCROLL_BUFFER) loadMore();
+}
+function ensureSentinel(){                          // a 1px marker kept just below the grid; observed for prefetch
+  let s=document.getElementById("sentinel");
+  if(!s){
+    s=document.createElement("div"); s.id="sentinel"; s.setAttribute("aria-hidden","true");
+    _io=new IntersectionObserver(es=>{ if(es.some(e=>e.isIntersecting)) maybeLoadMore(); },
+                                 { rootMargin:`0px 0px ${SCROLL_BUFFER}px 0px` });
+    _io.observe(s);
+  }
+  $("#results").after(s);                          // re-anchor below the grid as it grows
+}
 async function search(){
   const q=$("#q").value.trim();
-  if(q.length < 2){ $("#results").innerHTML=""; $("#empty").style.display="none"; _lastKey=""; return; }
+  if(q.length < 2){ $("#results").innerHTML=""; $("#empty").style.display="none"; _lastKey=""; _rendered=0; return; }
   $("#empty").style.display="none";
   const folder=$("#scope").value.trim();
   const neg=$("#neg").value.trim();
   const key=q+"|"+folder+"|"+neg;
-  if(key!==_lastKey){ _k=K_STEP; _lastKey=key; }   // a new query resets depth; Load more keeps the same key so _k grows
-  _mode="text";
+  if(key!==_lastKey){ _k=K_STEP; _lastKey=key; _rendered=0; _hasMore=true; $("#results").innerHTML=""; }  // new query → reset + clear
+  _mode="text"; _loading=true;
   if(_searchAbort) _searchAbort.abort();
   _searchAbort = new AbortController();
   let r;
   try { r = await (await fetch(`/api/search?q=${enc(q)}&k=${_k}${folder?`&folder=${enc(folder)}`:""}${neg?`&neg=${enc(neg)}`:""}`, {signal:_searchAbort.signal})).json(); }
-  catch(e){ if(e.name==="AbortError") return; throw e; }
+  catch(e){ if(e.name==="AbortError") return; _loading=false; throw e; }   // abort: a newer search now owns _loading
   _renderHits(r);
+  _loading=false;
+  maybeLoadMore();                                 // short page / tall window: keep filling until the buffer is satisfied
 }
 
 function _renderHits(r){
-  const g=$("#results"); g.innerHTML="";
+  const g=$("#results");
   if(!r.results.length){
+    g.innerHTML="";
     $("#empty").style.display="block";
     $("#empty").textContent = $("#scope").value.trim()
       ? "No matches in this folder — try clearing the scope (✕) to search everywhere."
       : "No matches — is this folder indexed with the current model?";
-    renderRefinements([]); return;
+    _hasMore=false; renderRefinements([]); return;
   }
-  r.results.forEach(h=>{
+  _hasMore = _mode==="text" && r.results.length >= _k;   // a full page back ⇒ more are ranked below
+  r.results.slice(_rendered).forEach(h=>{                // append only the newly-fetched tail (kNN prefix is stable)
     const pct=Math.max(0,Math.min(100,Math.round(h.score*100)));
     const dupes=h.dupe_count||1;
     const badge = dupes>1 ? `<span class="dupe" title="${dupes} copies — click to see all">${dupes} copies</span>` : "";
@@ -475,13 +491,8 @@ function _renderHits(r){
     if(dupes>1) c.querySelector(".dupe").onclick=e=>{ e.stopPropagation(); openDupes(h); };
     g.appendChild(c);
   });
-  let lm=document.getElementById("loadmore"); if(lm) lm.remove();
-  if(_mode==="text" && r.results.length >= _k){     // got a full page → more are ranked below
-    lm=document.createElement("button");
-    lm.id="loadmore"; lm.className="loadmore";
-    lm.textContent=`Load more — showing ${r.results.length}`;
-    lm.onclick=loadMore; g.after(lm);
-  }
+  _rendered = r.results.length;
+  ensureSentinel();
   renderRefinements(r.refinements || []);
 }
 
@@ -491,7 +502,7 @@ async function searchImage(path){
   $("#empty").style.display="none";
   $("#q").value = ""; $("#neg").value = ""; hideSuggest();
   toast(`Searching by image: ${path.split("/").pop()}`);
-  _mode="image"; _lastKey="";          // image-similar is a fixed top-N, no Load more
+  _mode="image"; _lastKey=""; _rendered=0; _hasMore=false; $("#results").innerHTML="";   // image-similar: fixed top-N, no scroll-load
   let r;
   try { r = await (await fetch(`/api/search-image?path=${enc(path)}&k=120`, {signal:_searchAbort.signal})).json(); }
   catch(e){ if(e.name==="AbortError") return; throw e; }
