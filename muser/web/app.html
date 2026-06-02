@@ -83,6 +83,19 @@
           color:var(--mut); border:1px solid var(--line); }
   .pill:hover { color:var(--fg); border-color:var(--acc); }
   .pill.ico { padding:5px 8px; }
+  .upload { font-size:13px; font-weight:600; padding:7px 14px; border-radius:999px;
+            border:1px solid var(--line); color:var(--mut); background:transparent;
+            display:inline-flex; align-items:center; gap:6px; }
+  .upload:hover { border-color:var(--acc); color:var(--acc); }
+  .upload .arr { font-size:14px; line-height:1; }
+  .spinner { width:14px; height:14px; border:2px solid var(--line);
+             border-top-color:var(--acc); border-radius:50%;
+             animation:spin .8s linear infinite; display:inline-block; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .searchbar .neg { flex:0 1 240px; font-size:14px; padding:13px 14px;
+                    border-color:var(--line); }
+  .searchbar .neg:focus { border-color:var(--acc2); }
+  .searchbar .neg::placeholder { color:var(--mut); }
 </style>
 </head>
 <body>
@@ -94,6 +107,8 @@
   <button class="nav" id="navReview">Review</button>
   <span class="mut" id="status">…</span>
   <span class="sp"></span>
+  <span class="spinner" id="spinner" style="display:none" title="Working…"></span>
+  <button class="upload" id="indexPick" title="Pick a folder and index it"><span class="arr">↑</span> Index folder</button>
   <span class="mut">model</span>
   <select id="model"></select>
 </header>
@@ -101,6 +116,7 @@
 <div class="wrap" id="searchView">
   <div class="searchbar">
     <input id="q" placeholder="Describe what you're looking for — e.g. “a person on a snowy mountain”" autofocus />
+    <input id="neg" class="neg" placeholder="Exclude (concept to push away from)…" title="Subtracted from the query vector — CLIP can't read 'not X' in the main box; this field does it as embedding-space arithmetic" />
     <button class="primary" id="go">Search</button>
   </div>
   <div class="row tools">
@@ -108,7 +124,6 @@
     <button class="pill ico" id="scopeClear" title="Clear scope" style="display:none">✕</button>
     <span class="mut" id="scopemsg"></span>
     <span style="flex:1"></span>
-    <button class="pill" id="indexPick" title="Pick a folder and index it">+ Index folder</button>
     <span class="mut" id="idxmsg"></span>
     <input type="hidden" id="scope" />
   </div>
@@ -171,6 +186,22 @@ const enc = encodeURIComponent;
 let toastT;
 function toast(m){ const t=$("#toast"); t.textContent=m; t.classList.add("show");
   clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"),1800); }
+
+// Global spinner: any fetch in flight > 300ms lights up the header indicator.
+// Covers model-switch (~10–25s), folder indexing, slow searches. Fast warm
+// searches (~30ms) finish before the timer fires, so the spinner stays calm.
+let _inflight=0, _spinT=null;
+const _origFetch = window.fetch.bind(window);
+window.fetch = (...args) => {
+  _inflight++;
+  clearTimeout(_spinT);
+  _spinT = setTimeout(()=>{ if(_inflight>0) document.getElementById("spinner").style.display=""; }, 300);
+  const done = () => {
+    _inflight = Math.max(0, _inflight-1);
+    if(_inflight===0){ clearTimeout(_spinT); const sp=document.getElementById("spinner"); if(sp) sp.style.display="none"; }
+  };
+  return _origFetch(...args).finally(done);
+};
 
 // ---- reverse-image search: copy the image to the clipboard, open Google Lens, ⌘V.
 // $0 (consumer Lens, not the paid Vision API). Nothing leaves the machine until the
@@ -257,10 +288,11 @@ async function search(){
   if(q.length < 2){ $("#results").innerHTML=""; $("#empty").style.display="none"; return; }
   $("#empty").style.display="none";
   const folder=$("#scope").value.trim();
+  const neg=$("#neg").value.trim();
   if(_searchAbort) _searchAbort.abort();
   _searchAbort = new AbortController();
   let r;
-  try { r = await (await fetch(`/api/search?q=${enc(q)}&k=30${folder?`&folder=${enc(folder)}`:""}`, {signal:_searchAbort.signal})).json(); }
+  try { r = await (await fetch(`/api/search?q=${enc(q)}&k=30${folder?`&folder=${enc(folder)}`:""}${neg?`&neg=${enc(neg)}`:""}`, {signal:_searchAbort.signal})).json(); }
   catch(e){ if(e.name==="AbortError") return; throw e; }
   const g=$("#results"); g.innerHTML="";
   if(!r.results.length){ $("#empty").style.display="block";
@@ -290,6 +322,8 @@ async function search(){
 $("#go").onclick=search;
 $("#q").addEventListener("input", liveSearch);
 $("#q").addEventListener("keydown",e=>{ if(e.key==="Enter"){ clearTimeout(_searchTimer); search(); } });
+$("#neg").addEventListener("input", ()=>{ if($("#q").value.trim().length >= 2) liveSearch(); });
+$("#neg").addEventListener("keydown",e=>{ if(e.key==="Enter"){ clearTimeout(_searchTimer); search(); } });
 
 function openDupes(h){
   $("#dupesTitle").textContent = h.name;

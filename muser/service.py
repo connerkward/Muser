@@ -99,12 +99,24 @@ def create_app(model: str = DEFAULT_MODEL):
         return {"added": res.added, "updated": res.updated, "removed": res.removed, "total": res.total}
 
     @app.get("/api/search")
-    def search(q: str, k: int = 24, dedup: bool = True, method: str = "embed", folder: str | None = None):
+    def search(q: str, k: int = 24, dedup: bool = True, method: str = "embed", folder: str | None = None,
+               neg: str | None = None, neg_strength: float = 0.5):
         # method: "embed" (cosine, default), "phash" (perceptual-hash Hamming,
         # robust to recompression/resize/crop), or "both" (collapse on either).
         # folder: restrict results to images under this directory (any depth).
+        # neg: optional text describing concepts to push away from. CLIP/SigLIP
+        # encoders ignore in-prompt negation (bag-of-words effect, see
+        # Yuksekgonul et al. ICLR 2023), so suppression has to happen as
+        # vector arithmetic in the embedding space, not as natural-language "not".
         emb = state.warm()
         qv = emb.embed_queries([q])[0]
+        if neg and neg.strip():
+            import numpy as np
+            nv = emb.embed_queries([neg])[0]
+            qv = qv - neg_strength * nv
+            n = float(np.linalg.norm(qv))
+            if n > 0:
+                qv = qv / n
         if dedup:
             results = state.index.search_dedup(state.model_name, qv, k=k, method=method, folder=folder)
         else:
