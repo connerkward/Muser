@@ -83,13 +83,31 @@
   .card .meta { padding:9px 0 0; }
   .card .name { font-size:12px; color:var(--mut); white-space:nowrap;
                 overflow:hidden; text-overflow:ellipsis; }
-  .card .foot { display:flex; align-items:baseline; gap:13px; flex-wrap:wrap;
-                padding:5px 0 0; }
-  .card .score { font-size:11px; color:var(--mut); font-variant-numeric:tabular-nums; }
+  /* Card action row:
+     The primary action (Add) reads at rest — fg color, dotted underline — so a
+     new user sees that it's clickable without hovering. The four secondary
+     actions (Similar · Lens · TinEye · Reveal) sit beside it as a single quiet,
+     dot-separated strip; they read as one group instead of four floating
+     labels, with underline-on-hover still confirming each is a button. Score
+     moved onto the thumb (top-left `.scoreb`), matching the Interesting/Review
+     views and freeing the foot row for actions only. */
+  .card .foot { display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+                padding:6px 0 0; font-size:11px; row-gap:6px; }
   .card .foot button { background:transparent; border:0; padding:0; color:var(--mut);
-                       font-size:11px; cursor:pointer; border-bottom:1px solid transparent; }
+                       font:inherit; cursor:pointer; border-bottom:1px solid transparent; }
   .card .foot button:hover { color:var(--fg); border-bottom-color:var(--fg); }
-  .card .foot button.add.added { color:var(--fg); border-bottom-color:var(--fg); }
+  /* Primary action (Add): visible at rest. */
+  .card .foot button.add { color:var(--fg);
+                           border-bottom:1px dotted var(--mut); }
+  .card .foot button.add:hover { border-bottom-style:solid; border-bottom-color:var(--fg); }
+  .card .foot button.add.added { border-bottom-style:solid; border-bottom-color:var(--fg); }
+  /* Secondary cluster: read as one group, separated by middle dots, divided
+     from the primary by a thin rule. */
+  .card .foot .more { display:flex; align-items:center; gap:8px; color:var(--mut);
+                      flex-wrap:wrap; row-gap:4px; }
+  .card .foot .more::before { content:""; width:1px; height:11px;
+                              background:var(--line); margin:0 2px; }
+  .card .foot .more > * + *::before { content:"·"; color:var(--line); margin-right:8px; }
   .card .bar { display:none; }
   .copied { color:var(--fg) !important; border-bottom-color:var(--fg) !important; }
   .cart-actions { display:flex; gap:18px; margin-top:22px; padding-top:18px; border-top:1px solid var(--line); }
@@ -285,8 +303,8 @@ const _cart = new Set(JSON.parse(sessionStorage.getItem(CART_KEY) || "[]"));
 function saveCart(){ sessionStorage.setItem(CART_KEY, JSON.stringify([..._cart])); updateCartUI(); }
 function cartHas(p){ return _cart.has(p); }
 function cartToggle(p, btn){
-  if (_cart.has(p)) { _cart.delete(p); btn.textContent = "Add";   btn.classList.remove("added"); }
-  else              { _cart.add(p);    btn.textContent = "Added"; btn.classList.add("added"); }
+  if (_cart.has(p)) { _cart.delete(p); btn.textContent = "+ Add";   btn.classList.remove("added"); }
+  else              { _cart.add(p);    btn.textContent = "× Added"; btn.classList.add("added"); }
   saveCart();
 }
 function updateCartUI(){
@@ -299,7 +317,7 @@ function syncCartButtons(){
     const p = b.dataset.path;
     if (!p) return;
     const on = _cart.has(p);
-    b.textContent = on ? "Added" : "Add";
+    b.textContent = on ? "× Added" : "+ Add";
     b.classList.toggle("added", on);
   });
 }
@@ -468,20 +486,24 @@ function _renderHits(r){
   }
   _hasMore = _mode==="text" && r.results.length >= _k;   // a full page back ⇒ more are ranked below
   r.results.slice(_rendered).forEach(h=>{                // append only the newly-fetched tail (kNN prefix is stable)
-    const pct=Math.max(0,Math.min(100,Math.round(h.score*100)));
+    const conf = h.prob ?? h.score;                       // calibrated P(match) when the model provides it, else raw cosine
+    const pct=Math.max(0,Math.min(100,Math.round(conf*100)));
+    const scoreTitle = h.prob!=null ? "match probability (SigLIP-calibrated)" : "cosine similarity";
     const dupes=h.dupe_count||1;
     const badge = dupes>1 ? `<span class="dupe" title="${dupes} copies — click to see all">${dupes} copies</span>` : "";
     const c=document.createElement("div"); c.className="card";
     c.innerHTML=`
-      <div class="thumb">${badge}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}" title="${h.name}"></div>
+      <div class="thumb"><span class="scoreb" title="${scoreTitle}">${pct}</span>${badge}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}" title="${h.name}"></div>
       <div class="meta"><div class="name" title="${h.path}">${h.name}</div>
         <div class="bar"><i style="width:${pct}%"></i></div></div>
-      <div class="foot"><span class="score">${(h.score*100).toFixed(1)}%</span>
-        <button class="add" data-path="${h.path.replace(/"/g, '&quot;')}" title="Add to selection (session cart)">${cartHas(h.path) ? "Added" : "Add"}</button>
-        <button class="sim" title="Find images visually similar to this one">Similar</button>
-        <button class="lens" title="Copy image + open Google Lens (⌘V to search where it appears)">Lens</button>
-        <button class="orig" title="Copy image + open TinEye (⌘V, sort Oldest = earliest known copy)">TinEye</button>
-        <button class="reveal">Reveal</button></div>`;
+      <div class="foot">
+        <button class="add" data-path="${h.path.replace(/"/g, '&quot;')}" title="Add to selection (session cart)">${cartHas(h.path) ? "× Added" : "+ Add"}</button>
+        <span class="more">
+          <button class="sim" title="Find images visually similar to this one">Similar</button>
+          <button class="lens" title="Copy image + open Google Lens (⌘V to search where it appears)">Lens</button>
+          <button class="orig" title="Copy image + open TinEye (⌘V, sort Oldest = earliest known copy)">TinEye</button>
+          <button class="reveal" title="Reveal in Finder">Reveal</button>
+        </span></div>`;
     c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
     { const btn = c.querySelector(".add"); if (cartHas(h.path)) btn.classList.add("added");
       btn.onclick = () => cartToggle(h.path, btn); }
