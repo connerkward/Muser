@@ -7,6 +7,9 @@ import "./gallery.css";
 export interface Hit {
   path: string;
   score: number;
+  /** SigLIP-calibrated match probability (0–1) when the model provides one; the
+   *  raw cosine `score` is flat/uncalibrated, so prefer this for the displayed %. */
+  prob?: number;
   thumb: string | null;
   /** All paths that are this same image (includes `path`). Length 1 when unique. */
   dupes?: string[];
@@ -143,7 +146,7 @@ export function createGallery(handlers: GalleryHandlers): Gallery {
         Object.assign(document.createElement("span"), { className: "name", textContent: name }),
         Object.assign(document.createElement("span"), {
           className: "score",
-          textContent: `${(hit.score * 100).toFixed(0)}%`,
+          textContent: `${((hit.prob ?? hit.score) * 100).toFixed(0)}%`,
         }),
       );
       card.append(meta);

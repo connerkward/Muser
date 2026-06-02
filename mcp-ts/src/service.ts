@@ -14,6 +14,8 @@ export interface SearchHit {
   path: string;
   name: string;
   score: number;
+  /** SigLIP-calibrated match probability (0–1), present for SigLIP models. */
+  prob?: number;
   /** All file paths that are byte-identical to this image (includes `path`). */
   dupes?: string[];
   /** Number of duplicate files (length of `dupes`). 1 when unique. */

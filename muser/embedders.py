@@ -52,6 +52,29 @@ def _l2(x: np.ndarray) -> np.ndarray:
     return x / np.clip(n, 1e-12, None)
 
 
+def _siglip_calib_params(model):
+    """Locate (exp(logit_scale), logit_bias) on a SigLIP model, else None.
+
+    SigLIP (Zhai et al., ICCV 2023) trains with a sigmoid loss, so its logits are
+    cos · exp(logit_scale) + logit_bias and sigmoid(logit) is a calibrated per-pair
+    match probability. Searches submodules so it works whether the model is the bare
+    SiglipModel or wrapped (e.g. by sentence-transformers)."""
+    import math
+    for mod in model.modules():
+        if hasattr(mod, "logit_scale") and hasattr(mod, "logit_bias"):
+            return (math.exp(float(mod.logit_scale.detach().cpu())),
+                    float(mod.logit_bias.detach().cpu()))
+    return None
+
+
+def _sigmoid_calibrate(cosines, params):
+    """Apply SigLIP's sigmoid calibration; None params (non-SigLIP) → None (use cosine)."""
+    if not params:
+        return None
+    scale, bias = params
+    return 1.0 / (1.0 + np.exp(-(np.asarray(cosines, dtype=np.float32) * scale + bias)))
+
+
 @runtime_checkable
 class Embedder(Protocol):
     """A single-vector image/text embedder in a shared space."""
@@ -74,6 +97,7 @@ class SentenceTransformerEmbedder:
     model_id: str
     dim: int = 0  # filled in after load
     _model: object = field(default=None, repr=False)
+    _calib: object = field(default=None, repr=False)  # (exp_scale, bias) once probed, or () if unsupported
 
     def _load(self):
         if self._model is None:
@@ -94,6 +118,12 @@ class SentenceTransformerEmbedder:
         model = self._load()
         vecs = model.encode(list(queries), batch_size=batch_size, convert_to_numpy=True, show_progress_bar=False)
         return _l2(np.asarray(vecs, dtype=np.float32))
+
+    def calibrate(self, cosines):
+        """SigLIP sigmoid → calibrated P(match); None if the wrapped model isn't SigLIP."""
+        if self._calib is None:
+            self._calib = _siglip_calib_params(self._load()) or ()
+        return _sigmoid_calibrate(cosines, self._calib)
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +237,7 @@ class SigLIP2Embedder:
     max_length: int = 64
     _model: object = field(default=None, repr=False)
     _proc: object = field(default=None, repr=False)
+    _calib: object = field(default=None, repr=False)  # (exp_scale, bias) once probed
 
     def _load(self):
         if self._model is None:
@@ -216,6 +247,12 @@ class SigLIP2Embedder:
             self._model = AutoModel.from_pretrained(self.model_id).to(_device()).eval()
             self._proc = AutoProcessor.from_pretrained(self.model_id)
         return self._model
+
+    def calibrate(self, cosines):
+        """SigLIP sigmoid → calibrated P(match) from the model's own logit_scale/bias."""
+        if self._calib is None:
+            self._calib = _siglip_calib_params(self._load()) or ()
+        return _sigmoid_calibrate(cosines, self._calib)
 
     def embed_images(self, paths: Sequence[str], batch_size: int = 16) -> np.ndarray:
         import torch

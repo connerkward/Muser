@@ -195,11 +195,27 @@ def create_app(model: str = DEFAULT_MODEL):
 
     def _run_search(qv, k, dedup, method, folder):
         if dedup:
-            return state.index.search_dedup(state.model_name, qv, k=k, method=method, folder=folder)
-        return [
-            {"path": p, "name": os.path.basename(p), "score": round(s, 4), "dupes": [p], "dupe_count": 1}
-            for p, s in state.index.search(state.model_name, qv, k=k, folder=folder)
-        ]
+            results = state.index.search_dedup(state.model_name, qv, k=k, method=method, folder=folder)
+        else:
+            results = [
+                {"path": p, "name": os.path.basename(p), "score": round(s, 4), "dupes": [p], "dupe_count": 1}
+                for p, s in state.index.search(state.model_name, qv, k=k, folder=folder)
+            ]
+        _add_prob(results)
+        return results
+
+    def _add_prob(results):
+        # Attach a calibrated match probability (SigLIP sigmoid) per result so the UI's
+        # "%" is a real confidence, not a flat raw cosine. No-op for models without a
+        # per-pair probability — the UI falls back to cosine then.
+        cal = getattr(state.embedder, "calibrate", None)
+        if not results or cal is None:
+            return
+        probs = cal([r["score"] for r in results])
+        if probs is None:
+            return
+        for r, p in zip(results, probs):
+            r["prob"] = round(float(p), 4)
 
     @app.get("/api/search")
     def search(q: str, k: int = 24, dedup: bool = True, method: str = "embed", folder: str | None = None,

@@ -92,7 +92,7 @@ export function createServer(): McpServer {
       const count = k ?? 24;
       const results = await searchWithThumbs(query, count);
       const text = results.length
-        ? results.map((h, i) => `${i + 1}. ${h.path} (${(h.score * 100).toFixed(1)}%)`).join("\n")
+        ? results.map((h, i) => `${i + 1}. ${h.path} (${((h.prob ?? h.score) * 100).toFixed(1)}%)`).join("\n")
         : "No matches found. Index some images first with index_folder.";
       return {
         structuredContent: { folder: folder ?? "", query, results },
