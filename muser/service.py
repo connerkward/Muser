@@ -12,6 +12,7 @@ import json
 import os
 import platform
 import subprocess
+import threading
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -47,17 +48,56 @@ class State:
         # label_index: lazy path → cluster-label cache for the refinement
         # chips on /api/search. Built once from ~/.muser/clusters.json.
         self.label_index = None
+        # Background-task plumbing. Model warm runs in a thread so uvicorn
+        # accepts connections immediately and the page can render its
+        # "loading model" overlay instead of hanging at connect. Indexing
+        # runs the same way so the user gets streamed progress.
+        # `task` is the single in-flight long-running activity reported via
+        # /api/status: {kind:"loading_model", model} | {kind:"indexing",
+        # folder, done, total} | {kind:"indexing_done", added, updated,
+        # total} | {kind:"indexing_error", error} | None.
+        self._ready = threading.Event()
+        self._lock = threading.Lock()
+        self.task: dict | None = None
 
     def warm(self):
-        if self.embedder is None:
-            self.embedder = load_model(self.model_name)
-            self.embedder.embed_queries(["warm up"])  # trigger weight load
+        # Idempotent. Holds a lock so two concurrent first-callers don't both
+        # call load_model.
+        with self._lock:
+            if self.embedder is None:
+                self.embedder = load_model(self.model_name)
+                self.embedder.embed_queries(["warm up"])  # trigger weight load
+            self._ready.set()
+            return self.embedder
+
+    def wait_ready(self, timeout: float | None = None):
+        # Called by request handlers before doing model-dependent work.
+        # Blocks until warm() has populated self.embedder.
+        if not self._ready.is_set():
+            self._ready.wait(timeout=timeout)
         return self.embedder
 
+    def start_warm(self):
+        # Kick off background load. The caller returns immediately; the UI
+        # polls /api/status to know when it's done.
+        self._ready.clear()
+        self.task = {"kind": "loading_model", "model": self.model_name}
+        def _bg():
+            try:
+                self.warm()
+            finally:
+                # Clear only if we're still the loader task — an indexing
+                # task that started later shouldn't be wiped out here.
+                if self.task and self.task.get("kind") == "loading_model":
+                    self.task = None
+        threading.Thread(target=_bg, daemon=True, name="muser-warm").start()
+
     def set_model(self, name: str):
-        self.model_name = name
-        self.embedder = None
-        self.warm()
+        with self._lock:
+            self.model_name = name
+            self.embedder = None
+            self.label_index = None
+        self.start_warm()
 
 
 def _reveal(path: str):
@@ -142,9 +182,11 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.on_event("startup")
     def _startup():
-        print(f"  loading model {state.model_name} ...", flush=True)
-        state.warm()
-        print(f"  ready — {state.index.count(state.model_name)} images indexed for {state.model_name}", flush=True)
+        # Non-blocking: fire the warm in a thread so uvicorn starts accepting
+        # connections in milliseconds. The page can load, see task=loading_model
+        # in /api/status, and render its overlay while weights load.
+        print(f"  loading model {state.model_name} (background) ...", flush=True)
+        state.start_warm()
 
     @app.get("/", response_class=HTMLResponse)
     def home():
@@ -178,21 +220,60 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.get("/api/status")
     def status():
+        # `ready` flips true once the model is warm. `task` is the single
+        # in-flight long-running activity (loading_model / indexing) for the
+        # busy overlay; null when idle. Frontend polls this — 4s idle,
+        # ~400ms when task != null.
         return {
             "model": state.model_name,
             "models": model_names(),
             "indexed": state.index.count(state.model_name),
             "db": str(state.index.db_path),
+            "ready": state._ready.is_set(),
+            "task": state.task,
         }
 
     @app.post("/api/index")
     def do_index(req: IndexReq):
+        # Returns immediately; the actual indexing runs in a thread and
+        # publishes progress through state.task so the busy overlay can
+        # show done/total. UI polls /api/status to follow along.
         folder = os.path.expanduser(req.folder)
         if not os.path.isdir(folder):
             raise HTTPException(400, f"not a folder: {folder}")
-        emb = state.warm()
-        res = state.index.index_folder(folder, state.model_name, emb, recursive=req.recursive)
-        return {"added": res.added, "updated": res.updated, "removed": res.removed, "total": res.total}
+        if state.task is not None:
+            raise HTTPException(409, f"busy: {state.task.get('kind')}")
+        # Need the model warm to embed during indexing.
+        state.wait_ready()
+
+        state.task = {"kind": "indexing", "folder": folder, "done": 0, "total": 0}
+
+        def on_progress(done: int, total: int):
+            # Keep the dict identity stable so the polling JSON updates in place.
+            t = state.task
+            if t and t.get("kind") == "indexing":
+                t["done"] = done
+                t["total"] = total
+
+        def _bg():
+            try:
+                res = state.index.index_folder(
+                    folder, state.model_name, state.embedder,
+                    recursive=req.recursive, on_progress=on_progress,
+                )
+                state.task = {
+                    "kind": "indexing_done", "folder": folder,
+                    "added": res.added, "updated": res.updated,
+                    "removed": res.removed, "total": res.total,
+                }
+            except Exception as e:
+                state.task = {"kind": "indexing_error", "folder": folder, "error": str(e)}
+            # Auto-clear the terminal state after a short window so the next
+            # index attempt isn't blocked by the 409 "busy" check.
+            threading.Timer(4.0, lambda: setattr(state, "task", None)).start()
+
+        threading.Thread(target=_bg, daemon=True, name="muser-index").start()
+        return {"started": True, "folder": folder}
 
     # ---- path → cluster-label map, used for the post-search refinement chips ----
     # Reads ~/.muser/clusters.json once and caches a path → cluster-label dict.
@@ -422,10 +503,15 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.post("/api/model")
     def set_model(req: ModelReq):
+        # Switches the active model and kicks off the new warm in the
+        # background. Returns immediately; UI polls /api/status and shows
+        # the busy overlay until task=null.
         if req.name not in model_names():
             raise HTTPException(400, f"unknown model {req.name}")
+        if state.task and state.task.get("kind") != "loading_model":
+            raise HTTPException(409, f"busy: {state.task.get('kind')}")
         state.set_model(req.name)
-        return {"model": state.model_name, "indexed": state.index.count(state.model_name)}
+        return {"started": True, "model": state.model_name}
 
     # ---- Explore: clusters (read ~/.muser/clusters.json, written by `muser cluster`) ----
     CLUSTERS = Path.home() / ".muser" / "clusters.json"

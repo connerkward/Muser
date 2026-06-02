@@ -116,6 +116,16 @@
   .cart-actions button:hover { color:var(--fg); border-bottom-color:var(--fg); }
   .cart-actions button#cartDownload { color:var(--fg); border-bottom-color:var(--fg); }
   .cart-actions button#cartDownload:hover { opacity:.7; }
+  .busy { position:fixed; inset:0; background:var(--bg); z-index:30;
+          display:flex; align-items:center; justify-content:center; }
+  .busy-card { display:flex; flex-direction:column; align-items:center; gap:14px;
+               max-width:380px; text-align:center; }
+  .busy-card .spinner { width:18px; height:18px; }
+  .busy-text { font:italic 400 18px/1.2 var(--serif); color:var(--fg); }
+  .busy-sub { font-size:12px; color:var(--mut); font-variant-numeric:tabular-nums; }
+  .busy-bar { width:220px; height:1px; background:var(--line); overflow:hidden; }
+  .busy-bar > i { display:block; height:100%; background:var(--fg);
+                  transition:width .2s linear; width:0; }
 
   .empty { color:var(--mut); text-align:center; padding:90px 0;
            font:italic 400 15px/1.4 var(--serif); }
@@ -242,6 +252,14 @@
   <div class="grid" id="reviewGrid"></div>
 </div>
 
+<div id="busy" class="busy" style="display:none">
+  <div class="busy-card">
+    <span class="spinner"></span>
+    <div class="busy-text" id="busyText">Loading…</div>
+    <div class="busy-sub" id="busySub"></div>
+    <div class="busy-bar" id="busyBar" style="display:none"><i id="busyBarI"></i></div>
+  </div>
+</div>
 <div class="modal" id="cartModal"><div class="box">
   <span class="x" id="cartClose">×</span>
   <h3>Selection</h3>
@@ -397,16 +415,66 @@ async function engineSearch(path, btn, url, hint){
 }
 const lensSearch   =(path,btn)=>engineSearch(path,btn,"https://lens.google.com/","press ⌘V in the Lens tab");
 
-async function status(){
-  const s = await (await fetch("/api/status")).json();
-  $("#status").textContent = `${s.indexed.toLocaleString()} indexed · ${s.db}`;
-  const sel=$("#model"); sel.innerHTML="";
-  s.models.forEach(m=>{ const o=document.createElement("option"); o.value=o.textContent=m; if(m===s.model)o.selected=true; sel.appendChild(o); });
+// Status polling: drives the busy overlay (cold-start, model-switch, indexing
+// progress) and keeps the header counts fresh. Idle cadence is slow (4s);
+// while a task is running we poll fast (~400ms) so the progress bar moves.
+let _busy = false;
+let _pollT = null;
+async function pollStatus(){
+  let s;
+  try { s = await (await fetch("/api/status")).json(); }
+  catch(e){ clearTimeout(_pollT); _pollT = setTimeout(pollStatus, 2000); return; }
+  renderStatus(s);
+  const delay = s.task ? 400 : 4000;
+  clearTimeout(_pollT); _pollT = setTimeout(pollStatus, delay);
+}
+function renderStatus(s){
+  const wasBusy = _busy;
+  _busy = !s.ready || (!!s.task && s.task.kind === "loading_model");
+  $("#status").textContent = `${(s.indexed ?? 0).toLocaleString()} indexed · ${s.db}`;
+  const sel = $("#model");
+  if (s.models && sel.options.length !== s.models.length) {
+    sel.innerHTML = "";
+    s.models.forEach(m => {
+      const o = document.createElement("option");
+      o.value = o.textContent = m;
+      if (m === s.model) o.selected = true;
+      sel.appendChild(o);
+    });
+  } else if (sel.value !== s.model) {
+    sel.value = s.model;
+  }
+  const busy = $("#busy"), bar = $("#busyBar"), barI = $("#busyBarI");
+  if (s.task) {
+    busy.style.display = "";
+    bar.style.display = "none";
+    const t = s.task;
+    if (t.kind === "loading_model") {
+      $("#busyText").textContent = "Loading model";
+      $("#busySub").textContent = t.model;
+    } else if (t.kind === "indexing") {
+      const tot = t.total || 0, done = t.done || 0;
+      $("#busyText").textContent = `Indexing ${t.folder.split("/").slice(-2).join("/")}`;
+      $("#busySub").textContent = tot ? `${done.toLocaleString()} / ${tot.toLocaleString()}` : "scanning…";
+      if (tot) { bar.style.display = ""; barI.style.width = `${Math.round((done/tot)*100)}%`; }
+    } else if (t.kind === "indexing_done") {
+      $("#busyText").textContent = "Indexed";
+      $("#busySub").textContent = `+${t.added} added · ${t.updated} updated · ${t.total} total`;
+    } else if (t.kind === "indexing_error") {
+      $("#busyText").textContent = "Index failed";
+      $("#busySub").textContent = t.error;
+    }
+  } else if (s.ready) {
+    busy.style.display = "none";
+  }
+  // Transitioned out of busy → refresh the folder list and discovery chips
+  // (a new index may have added folders/clusters).
+  if (wasBusy && !_busy) { loadFolders(); loadClusterChips(); }
 }
 $("#model").onchange = async e => {
-  toast("switching model…");
-  await fetch("/api/model",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name:e.target.value})});
-  await status(); toast("model ready");
+  await fetch("/api/model", {method:"POST", headers:{"content-type":"application/json"},
+                             body: JSON.stringify({name: e.target.value})});
+  pollStatus();  // pick up the new loading_model task immediately
 };
 
 // ---- folder scope: limit search to images under one indexed directory ----
@@ -459,6 +527,7 @@ function ensureSentinel(){                          // a 1px marker kept just be
   $("#results").after(s);                          // re-anchor below the grid as it grows
 }
 async function search(){
+  if (_busy) return;  // overlay covers UI while the model is loading
   const q=$("#q").value.trim();
   if(q.length < 2){ $("#results").innerHTML=""; $("#empty").style.display="none"; _lastKey=""; _rendered=0; return; }
   $("#empty").style.display="none";
@@ -521,6 +590,7 @@ function _renderHits(r){
 }
 
 async function searchImage(path){
+  if (_busy) return;
   if(_searchAbort) _searchAbort.abort();
   _searchAbort = new AbortController();
   $("#empty").style.display="none";
@@ -680,17 +750,16 @@ async function openCluster(method,id,label,sub,size){
   });
 }
 
-$("#indexPick").onclick=async()=>{
-  const folder = await pickFolder("index"); if(!folder) return;
-  $("#idxmsg").textContent=`indexing ${folder.split("/").slice(-2).join("/")}… (first run loads the model)`;
-  try{
-    const r=await (await fetch("/api/index",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({folder})})).json();
-    $("#idxmsg").textContent=`+${r.added} added · ${r.updated} updated · ${r.total} total`;
-    await status(); await loadFolders();
-  }catch(e){ $("#idxmsg").textContent="index failed (check path)"; }
+$("#indexPick").onclick = async () => {
+  const folder = await pickFolder("index"); if (!folder) return;
+  try {
+    await fetch("/api/index", {method:"POST", headers:{"content-type":"application/json"},
+                                body: JSON.stringify({folder})});
+    pollStatus();  // pick up the indexing task immediately for the busy overlay
+  } catch (e) { toast("index failed (check path)"); }
 };
 
-status(); loadFolders(); loadClusterChips();
+pollStatus(); loadFolders(); loadClusterChips();
 </script>
 </body>
 </html>
