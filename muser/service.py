@@ -44,10 +44,8 @@ class State:
         self.model_name = model
         self.embedder = None
         self.index = MuserIndex()
-        # label_index is populated lazily — embeds cluster labels for
-        # /api/suggest (autocomplete) and the refinement chips on /api/search.
-        # Invalidated whenever the active model changes (different embedding
-        # space → label vectors no longer comparable to image vectors).
+        # label_index: lazy path → cluster-label cache for the refinement
+        # chips on /api/search. Built once from ~/.muser/clusters.json.
         self.label_index = None
 
     def warm(self):
@@ -59,7 +57,6 @@ class State:
     def set_model(self, name: str):
         self.model_name = name
         self.embedder = None
-        self.label_index = None
         self.warm()
 
 
@@ -126,47 +123,27 @@ def create_app(model: str = DEFAULT_MODEL):
         res = state.index.index_folder(folder, state.model_name, emb, recursive=req.recursive)
         return {"added": res.added, "updated": res.updated, "removed": res.removed, "total": res.total}
 
-    # ---- cluster-label index: powers /api/suggest + the refinement chips ----
-    # Embeds each cluster label (from ~/.muser/clusters.json) into the current
-    # model's text space ONCE. Suggest = cosine(typed-text, label-matrix).
-    # Refine = look up which clusters the top-K result paths belong to.
-    def _label_index():
-        # Builds a vocabulary of (text → cluster) entries. Each cluster contributes
-        # BOTH its short label ("car / sports car") AND its sublabel sentence
-        # ("there is a car with a seat and a window") — same display label, but
-        # the sentence-form gives suggest a finer-grained matching surface. At
-        # query time, results are deduplicated by display label, best score wins.
-        import numpy as np
+    # ---- path → cluster-label map, used for the post-search refinement chips ----
+    # Reads ~/.muser/clusters.json once and caches a path → cluster-label dict.
+    # No embedding pass — the only consumer is _refinements, which does pure
+    # bucket-counting on result paths.
+    def _path_to_label():
         if state.label_index is not None:
             return state.label_index
         clusters_file = Path.home() / ".muser" / "clusters.json"
         if not clusters_file.exists():
-            state.label_index = {"entries": [], "vectors": None, "path_to_label": {}}
+            state.label_index = {}
             return state.label_index
         c = json.loads(clusters_file.read_text())
         m_name = "hdbscan" if "hdbscan" in c["methods"] else next(iter(c["methods"]))
         m = c["methods"][m_name]
-        entries, seen = [], set()
         path_to_label = {}
         for cl in m["clusters"]:
-            if cl["id"] == -1 or cl["label"] in seen:  # skip "misc / unclustered"
+            if cl["id"] == -1:  # skip "misc / unclustered"
                 continue
-            seen.add(cl["label"])
-            size = cl["size"]
-            entries.append({"text": cl["label"], "display": cl["label"], "size": size})
-            sub = (cl.get("sublabel") or "").strip()
-            if sub and sub != cl["label"]:
-                entries.append({"text": sub, "display": cl["label"], "size": size})
             for p in m["members"].get(str(cl["id"]), []):
                 path_to_label[p] = cl["label"]
-        if not entries:
-            state.label_index = {"entries": [], "vectors": None, "path_to_label": path_to_label}
-            return state.label_index
-        emb = state.warm()
-        vecs = emb.embed_queries([e["text"] for e in entries])
-        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
-        vecs = vecs / np.where(norms > 0, norms, 1.0)
-        state.label_index = {"entries": entries, "vectors": vecs, "path_to_label": path_to_label}
+        state.label_index = path_to_label
         return state.label_index
 
     def _refinements(result_paths, query):
@@ -174,12 +151,12 @@ def create_app(model: str = DEFAULT_MODEL):
         # results belong to? Most-common labels (minus any that effectively
         # ARE the query) become the "you might also try" chips.
         from collections import Counter
-        li = _label_index()
-        if not li["path_to_label"]:
+        ptl = _path_to_label()
+        if not ptl:
             return []
         cnts = Counter()
         for p in result_paths[:20]:
-            lbl = li["path_to_label"].get(p)
+            lbl = ptl.get(p)
             if lbl:
                 cnts[lbl] += 1
         q_lower = query.lower().strip()
@@ -254,34 +231,6 @@ def create_app(model: str = DEFAULT_MODEL):
         refinements = _refinements([r["path"] for r in results], os.path.basename(path))
         return {"query": f"image: {os.path.basename(path)}", "ref_path": path,
                 "model": state.model_name, "results": results, "refinements": refinements}
-
-    @app.get("/api/suggest")
-    def suggest(q: str, k: int = 8):
-        # Autocomplete grounded in the index: typed text → nearest cluster
-        # vocabulary entries (labels + sublabels) by cosine similarity.
-        # Dedup by display label so each cluster is at most one suggestion.
-        import numpy as np
-        li = _label_index()
-        q = (q or "").strip()
-        if not li["entries"] or not q:
-            return {"suggestions": []}
-        emb = state.warm()
-        qv = emb.embed_queries([q])[0]
-        n = float(np.linalg.norm(qv))
-        if n > 0:
-            qv = qv / n
-        scores = li["vectors"] @ qv
-        best = {}  # display -> (score, size)
-        for i in np.argsort(scores)[::-1]:
-            e = li["entries"][i]
-            if e["display"] in best:
-                continue
-            best[e["display"]] = (float(scores[i]), e["size"])
-            if len(best) >= k:
-                break
-        return {"suggestions": [
-            {"label": lbl, "score": s, "size": sz} for lbl, (s, sz) in best.items()
-        ]}
 
     @app.get("/api/folders")
     def folders():

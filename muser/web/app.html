@@ -144,18 +144,7 @@
                               font-size:11px; cursor:pointer; border-bottom:1px solid transparent; }
   .modal .file .frow button:hover { color:var(--fg); border-bottom-color:var(--fg); }
 
-  .suggest { position:absolute; top:calc(100% + 1px); left:0; right:120px;
-             background:var(--bg); border:1px solid var(--line); z-index:8;
-             max-height:280px; overflow:auto; }
-  .suggest .item { padding:9px 14px; cursor:pointer; font-size:13px;
-                   display:flex; justify-content:space-between; align-items:baseline;
-                   border-bottom:1px solid var(--line); }
-  .suggest .item:last-child { border-bottom:0; }
-  .suggest .item:hover, .suggest .item.on { background:var(--paper); }
-  .suggest .cnt { color:var(--mut); font-size:11px; font-variant-numeric:tabular-nums; }
-
-  body.has-query .chip::before,
-  body.has-query .suggest .item::before { content:"+ "; color:var(--mut); }
+  body.has-query .chip::before { content:"+ "; color:var(--mut); }
   body.has-query .chip.refine::before { content:"→ "; }
 
   .cluster { cursor:pointer; background:transparent; border:0; padding:0; text-align:left;
@@ -197,7 +186,6 @@
     <input id="q" placeholder="Describe what you're looking for — e.g. “a person on a snowy mountain”" autocomplete="off" autofocus />
     <input id="neg" class="neg" placeholder="Exclude (concept to push away from)…" title="Subtracted from the query vector — CLIP can't read 'not X' in the main box; this field does it as embedding-space arithmetic" autocomplete="off" />
     <button class="primary" id="go">Search</button>
-    <div class="suggest" id="suggest" style="display:none"></div>
   </div>
   <div class="chips" id="chips"></div>
   <div class="row tools">
@@ -523,7 +511,7 @@ async function searchImage(path){
   if(_searchAbort) _searchAbort.abort();
   _searchAbort = new AbortController();
   $("#empty").style.display="none";
-  $("#q").value = ""; $("#neg").value = ""; hideSuggest();
+  $("#q").value = ""; $("#neg").value = "";
   toast(`Searching by image: ${path.split("/").pop()}`);
   _mode="image"; _lastKey=""; _rendered=0; _hasMore=false; $("#results").innerHTML="";   // image-similar: fixed top-N, no scroll-load
   let r;
@@ -533,13 +521,12 @@ async function searchImage(path){
 }
 
 // applyQuery: if the query box is empty, replace; if it's non-empty, append.
-// Lets chips/suggestions act as drill-down filters on the current query
+// Lets chips act as drill-down filters on the current query
 // instead of always starting over.
 function applyQuery(text){
   const cur = $("#q").value.trim();
   $("#q").value = cur ? cur + " " + text : text;
   document.body.classList.add("has-query");
-  hideSuggest();
   clearTimeout(_searchTimer);
   search();
 }
@@ -585,46 +572,13 @@ function renderRefinements(refs){
 }
 
 // ---- autocomplete: nearest cluster labels to the typed query ----
-let _sugT = null, _sugAbort = null;
-function liveSuggest(){
-  clearTimeout(_sugT);
-  _sugT = setTimeout(async()=>{
-    const q = $("#q").value.trim();
-    if (q.length < 2) { hideSuggest(); return; }
-    if (_sugAbort) _sugAbort.abort();
-    _sugAbort = new AbortController();
-    try {
-      const r = await (await fetch(`/api/suggest?q=${enc(q)}&k=8`, {signal:_sugAbort.signal})).json();
-      renderSuggest(r.suggestions || []);
-    } catch(e){ if(e.name !== "AbortError") throw e; }
-  }, 140);
-}
-function hideSuggest(){ $("#suggest").style.display = "none"; }
-function renderSuggest(items){
-  const el = $("#suggest");
-  if (!items.length){ hideSuggest(); return; }
-  el.innerHTML = "";
-  items.forEach(s => {
-    const d = document.createElement("div");
-    d.className = "item";
-    d.innerHTML = `<span>${s.label}</span><span class="cnt">${s.size ? s.size.toLocaleString() : ""}</span>`;
-    // mousedown (not click) fires before the input's blur, so we don't race the hide.
-    d.onmousedown = (e) => { e.preventDefault(); applyQuery(s.label); };
-    el.appendChild(d);
-  });
-  el.style.display = "";
-}
-
-$("#go").onclick = () => { hideSuggest(); search(); };
+$("#go").onclick = search;
 $("#q").addEventListener("input", ()=>{
   document.body.classList.toggle("has-query", $("#q").value.trim().length > 0);
-  liveSearch(); liveSuggest();
+  liveSearch();
 });
-$("#q").addEventListener("focus", liveSuggest);
-$("#q").addEventListener("blur",  ()=> setTimeout(hideSuggest, 150));
 $("#q").addEventListener("keydown", e => {
-  if (e.key === "Enter") { clearTimeout(_searchTimer); hideSuggest(); search(); }
-  else if (e.key === "Escape") { hideSuggest(); }
+  if (e.key === "Enter") { clearTimeout(_searchTimer); search(); }
 });
 $("#neg").addEventListener("input",   ()=>{ if($("#q").value.trim().length >= 2) liveSearch(); });
 $("#neg").addEventListener("keydown", e=>{ if(e.key==="Enter"){ clearTimeout(_searchTimer); search(); } });
