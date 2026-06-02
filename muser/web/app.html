@@ -368,6 +368,16 @@ async function engineSearch(path, btn, url, hint){
   const orig = btn && btn.textContent;
   try{
     if(btn) btn.disabled=true;
+    // Clipboard image-write needs a SECURE CONTEXT. 127.0.0.1 and *.localhost qualify;
+    // http://muser.local does NOT (.local isn't a trustworthy origin), so the API is
+    // absent there. Degrade gracefully: open the engine + the image to drag in, and
+    // point at the secure origin where one-click copy works.
+    if(!(window.isSecureContext && navigator.clipboard && window.ClipboardItem)){
+      window.open(url,"_blank");
+      window.open(`/api/image?path=${enc(path)}`,"_blank");
+      toast("Clipboard needs a secure origin — open this page at muser.localhost (or 127.0.0.1:7777). Image opened to drag in.");
+      return;
+    }
     const png=await blobToPng(await (await fetch(`/api/image?path=${enc(path)}`)).blob());
     await navigator.clipboard.write([new ClipboardItem({"image/png":png})]);
     if(btn){ btn.textContent="✓ Copied"; btn.classList.add("copied"); }
