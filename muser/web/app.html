@@ -240,15 +240,22 @@ function scopeMsg(){
   const n=folderCounts[f];
   $("#scopemsg").textContent = n!=null ? `↳ ${n.toLocaleString()} images in scope` : "↳ scoped (re-search to apply)";
 }
-$("#scope").addEventListener("input",scopeMsg);
+$("#scope").addEventListener("input",()=>{ scopeMsg(); if($("#q").value.trim().length >= 2) liveSearch(); });
 $("#scope").addEventListener("change",()=>{ scopeMsg(); if($("#q").value.trim()) search(); });
 $("#scopeClear").onclick=()=>{ $("#scope").value=""; scopeMsg(); if($("#q").value.trim()) search(); };
 
+let _searchAbort=null, _searchTimer=null;
+function liveSearch(){ clearTimeout(_searchTimer); _searchTimer=setTimeout(search, 180); }
 async function search(){
-  const q=$("#q").value.trim(); if(!q) return;
+  const q=$("#q").value.trim();
+  if(q.length < 2){ $("#results").innerHTML=""; $("#empty").style.display="none"; return; }
   $("#empty").style.display="none";
   const folder=$("#scope").value.trim();
-  const r = await (await fetch(`/api/search?q=${enc(q)}&k=30${folder?`&folder=${enc(folder)}`:""}`)).json();
+  if(_searchAbort) _searchAbort.abort();
+  _searchAbort = new AbortController();
+  let r;
+  try { r = await (await fetch(`/api/search?q=${enc(q)}&k=30${folder?`&folder=${enc(folder)}`:""}`, {signal:_searchAbort.signal})).json(); }
+  catch(e){ if(e.name==="AbortError") return; throw e; }
   const g=$("#results"); g.innerHTML="";
   if(!r.results.length){ $("#empty").style.display="block";
     $("#empty").textContent = folder ? "No matches in this folder — try clearing the scope (✕) to search everywhere."
@@ -275,7 +282,8 @@ async function search(){
   });
 }
 $("#go").onclick=search;
-$("#q").addEventListener("keydown",e=>{ if(e.key==="Enter") search(); });
+$("#q").addEventListener("input", liveSearch);
+$("#q").addEventListener("keydown",e=>{ if(e.key==="Enter"){ clearTimeout(_searchTimer); search(); } });
 
 function openDupes(h){
   $("#dupesTitle").textContent = h.name;
