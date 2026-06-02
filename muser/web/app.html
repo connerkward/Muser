@@ -114,6 +114,9 @@
   .suggest .cnt { color:var(--mut); font-size:11px; }
   .card .sim { font-size:11px; padding:4px 8px; color:var(--mut); white-space:nowrap; }
   .card .sim:hover { color:var(--acc); border-color:var(--acc); }
+  /* drill-down: when a query is already typed, chips/suggestions are additive */
+  body.has-query .chip::before,
+  body.has-query .suggest .item::before { content:"+ "; color:var(--mut); margin-right:2px; }
 </style>
 </head>
 <body>
@@ -363,6 +366,18 @@ async function searchImage(path){
   _renderHits(r);
 }
 
+// applyQuery: if the query box is empty, replace; if it's non-empty, append.
+// Lets chips/suggestions act as drill-down filters on the current query
+// instead of always starting over.
+function applyQuery(text){
+  const cur = $("#q").value.trim();
+  $("#q").value = cur ? cur + " " + text : text;
+  document.body.classList.add("has-query");
+  hideSuggest();
+  clearTimeout(_searchTimer);
+  search();
+}
+
 // ---- chips: cluster discovery (no query) + post-search refinements ----
 let _clusterChips = [];
 async function loadClusterChips(){
@@ -384,7 +399,7 @@ function renderClusterChips(){
     const b = document.createElement("button");
     b.className = "chip"; b.textContent = c.label;
     b.title = `${c.size.toLocaleString()} images in this cluster — click to search`;
-    b.onclick = () => { $("#q").value = c.label; hideSuggest(); clearTimeout(_searchTimer); search(); };
+    b.onclick = () => applyQuery(c.label);
     el.appendChild(b);
   });
 }
@@ -398,7 +413,7 @@ function renderRefinements(refs){
     const b = document.createElement("button");
     b.className = "chip refine"; b.textContent = r.label;
     b.title = `${r.count} of the top results live in this cluster`;
-    b.onclick = () => { $("#q").value = r.label; hideSuggest(); clearTimeout(_searchTimer); search(); };
+    b.onclick = () => applyQuery(r.label);
     el.appendChild(b);
   });
 }
@@ -428,14 +443,17 @@ function renderSuggest(items){
     d.className = "item";
     d.innerHTML = `<span>${s.label}</span><span class="cnt">${s.size ? s.size.toLocaleString() : ""}</span>`;
     // mousedown (not click) fires before the input's blur, so we don't race the hide.
-    d.onmousedown = (e) => { e.preventDefault(); $("#q").value = s.label; hideSuggest(); clearTimeout(_searchTimer); search(); };
+    d.onmousedown = (e) => { e.preventDefault(); applyQuery(s.label); };
     el.appendChild(d);
   });
   el.style.display = "";
 }
 
 $("#go").onclick = () => { hideSuggest(); search(); };
-$("#q").addEventListener("input", ()=>{ liveSearch(); liveSuggest(); });
+$("#q").addEventListener("input", ()=>{
+  document.body.classList.toggle("has-query", $("#q").value.trim().length > 0);
+  liveSearch(); liveSuggest();
+});
 $("#q").addEventListener("focus", liveSuggest);
 $("#q").addEventListener("blur",  ()=> setTimeout(hideSuggest, 150));
 $("#q").addEventListener("keydown", e => {

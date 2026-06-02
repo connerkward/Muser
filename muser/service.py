@@ -109,37 +109,42 @@ def create_app(model: str = DEFAULT_MODEL):
     # model's text space ONCE. Suggest = cosine(typed-text, label-matrix).
     # Refine = look up which clusters the top-K result paths belong to.
     def _label_index():
+        # Builds a vocabulary of (text → cluster) entries. Each cluster contributes
+        # BOTH its short label ("car / sports car") AND its sublabel sentence
+        # ("there is a car with a seat and a window") — same display label, but
+        # the sentence-form gives suggest a finer-grained matching surface. At
+        # query time, results are deduplicated by display label, best score wins.
         import numpy as np
         if state.label_index is not None:
             return state.label_index
         clusters_file = Path.home() / ".muser" / "clusters.json"
         if not clusters_file.exists():
-            state.label_index = {"labels": [], "vectors": None, "path_to_label": {}, "size": {}}
+            state.label_index = {"entries": [], "vectors": None, "path_to_label": {}}
             return state.label_index
         c = json.loads(clusters_file.read_text())
         m_name = "hdbscan" if "hdbscan" in c["methods"] else next(iter(c["methods"]))
         m = c["methods"][m_name]
-        labels, sizes, seen = [], [], set()
+        entries, seen = [], set()
         path_to_label = {}
         for cl in m["clusters"]:
             if cl["id"] == -1 or cl["label"] in seen:  # skip "misc / unclustered"
                 continue
             seen.add(cl["label"])
-            labels.append(cl["label"])
-            sizes.append(cl["size"])
+            size = cl["size"]
+            entries.append({"text": cl["label"], "display": cl["label"], "size": size})
+            sub = (cl.get("sublabel") or "").strip()
+            if sub and sub != cl["label"]:
+                entries.append({"text": sub, "display": cl["label"], "size": size})
             for p in m["members"].get(str(cl["id"]), []):
                 path_to_label[p] = cl["label"]
-        if not labels:
-            state.label_index = {"labels": [], "vectors": None, "path_to_label": path_to_label, "size": {}}
+        if not entries:
+            state.label_index = {"entries": [], "vectors": None, "path_to_label": path_to_label}
             return state.label_index
         emb = state.warm()
-        vecs = emb.embed_queries(labels)
+        vecs = emb.embed_queries([e["text"] for e in entries])
         norms = np.linalg.norm(vecs, axis=1, keepdims=True)
         vecs = vecs / np.where(norms > 0, norms, 1.0)
-        state.label_index = {
-            "labels": labels, "vectors": vecs, "path_to_label": path_to_label,
-            "size": dict(zip(labels, sizes)),
-        }
+        state.label_index = {"entries": entries, "vectors": vecs, "path_to_label": path_to_label}
         return state.label_index
 
     def _refinements(result_paths, query):
@@ -214,12 +219,13 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.get("/api/suggest")
     def suggest(q: str, k: int = 8):
-        # Autocomplete grounded in the index: typed text → nearest cluster labels
-        # by cosine similarity. Vocabulary is whatever clusters exist on disk.
+        # Autocomplete grounded in the index: typed text → nearest cluster
+        # vocabulary entries (labels + sublabels) by cosine similarity.
+        # Dedup by display label so each cluster is at most one suggestion.
         import numpy as np
         li = _label_index()
         q = (q or "").strip()
-        if not li["labels"] or not q:
+        if not li["entries"] or not q:
             return {"suggestions": []}
         emb = state.warm()
         qv = emb.embed_queries([q])[0]
@@ -227,10 +233,16 @@ def create_app(model: str = DEFAULT_MODEL):
         if n > 0:
             qv = qv / n
         scores = li["vectors"] @ qv
-        top = scores.argsort()[::-1][:k]
+        best = {}  # display -> (score, size)
+        for i in np.argsort(scores)[::-1]:
+            e = li["entries"][i]
+            if e["display"] in best:
+                continue
+            best[e["display"]] = (float(scores[i]), e["size"])
+            if len(best) >= k:
+                break
         return {"suggestions": [
-            {"label": li["labels"][i], "score": float(scores[i]), "size": li["size"].get(li["labels"][i], 0)}
-            for i in top
+            {"label": lbl, "score": s, "size": sz} for lbl, (s, sz) in best.items()
         ]}
 
     @app.get("/api/folders")
