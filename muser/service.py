@@ -40,6 +40,11 @@ class State:
         self.model_name = model
         self.embedder = None
         self.index = MuserIndex()
+        # label_index is populated lazily — embeds cluster labels for
+        # /api/suggest (autocomplete) and the refinement chips on /api/search.
+        # Invalidated whenever the active model changes (different embedding
+        # space → label vectors no longer comparable to image vectors).
+        self.label_index = None
 
     def warm(self):
         if self.embedder is None:
@@ -50,6 +55,7 @@ class State:
     def set_model(self, name: str):
         self.model_name = name
         self.embedder = None
+        self.label_index = None
         self.warm()
 
 
@@ -98,6 +104,76 @@ def create_app(model: str = DEFAULT_MODEL):
         res = state.index.index_folder(folder, state.model_name, emb, recursive=req.recursive)
         return {"added": res.added, "updated": res.updated, "removed": res.removed, "total": res.total}
 
+    # ---- cluster-label index: powers /api/suggest + the refinement chips ----
+    # Embeds each cluster label (from ~/.muser/clusters.json) into the current
+    # model's text space ONCE. Suggest = cosine(typed-text, label-matrix).
+    # Refine = look up which clusters the top-K result paths belong to.
+    def _label_index():
+        import numpy as np
+        if state.label_index is not None:
+            return state.label_index
+        clusters_file = Path.home() / ".muser" / "clusters.json"
+        if not clusters_file.exists():
+            state.label_index = {"labels": [], "vectors": None, "path_to_label": {}, "size": {}}
+            return state.label_index
+        c = json.loads(clusters_file.read_text())
+        m_name = "hdbscan" if "hdbscan" in c["methods"] else next(iter(c["methods"]))
+        m = c["methods"][m_name]
+        labels, sizes, seen = [], [], set()
+        path_to_label = {}
+        for cl in m["clusters"]:
+            if cl["id"] == -1 or cl["label"] in seen:  # skip "misc / unclustered"
+                continue
+            seen.add(cl["label"])
+            labels.append(cl["label"])
+            sizes.append(cl["size"])
+            for p in m["members"].get(str(cl["id"]), []):
+                path_to_label[p] = cl["label"]
+        if not labels:
+            state.label_index = {"labels": [], "vectors": None, "path_to_label": path_to_label, "size": {}}
+            return state.label_index
+        emb = state.warm()
+        vecs = emb.embed_queries(labels)
+        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+        vecs = vecs / np.where(norms > 0, norms, 1.0)
+        state.label_index = {
+            "labels": labels, "vectors": vecs, "path_to_label": path_to_label,
+            "size": dict(zip(labels, sizes)),
+        }
+        return state.label_index
+
+    def _refinements(result_paths, query):
+        # Dense-vector pseudo-relevance feedback: which clusters do the top
+        # results belong to? Most-common labels (minus any that effectively
+        # ARE the query) become the "you might also try" chips.
+        from collections import Counter
+        li = _label_index()
+        if not li["path_to_label"]:
+            return []
+        cnts = Counter()
+        for p in result_paths[:20]:
+            lbl = li["path_to_label"].get(p)
+            if lbl:
+                cnts[lbl] += 1
+        q_lower = query.lower().strip()
+        out = []
+        for lbl, cnt in cnts.most_common():
+            ll = lbl.lower()
+            if q_lower and (q_lower in ll or ll in q_lower):
+                continue
+            out.append({"label": lbl, "count": cnt})
+            if len(out) >= 5:
+                break
+        return out
+
+    def _run_search(qv, k, dedup, method, folder):
+        if dedup:
+            return state.index.search_dedup(state.model_name, qv, k=k, method=method, folder=folder)
+        return [
+            {"path": p, "name": os.path.basename(p), "score": round(s, 4), "dupes": [p], "dupe_count": 1}
+            for p, s in state.index.search(state.model_name, qv, k=k, folder=folder)
+        ]
+
     @app.get("/api/search")
     def search(q: str, k: int = 24, dedup: bool = True, method: str = "embed", folder: str | None = None,
                neg: str | None = None, neg_strength: float = 0.5):
@@ -117,14 +193,45 @@ def create_app(model: str = DEFAULT_MODEL):
             n = float(np.linalg.norm(qv))
             if n > 0:
                 qv = qv / n
-        if dedup:
-            results = state.index.search_dedup(state.model_name, qv, k=k, method=method, folder=folder)
-        else:
-            results = [
-                {"path": p, "name": os.path.basename(p), "score": round(s, 4), "dupes": [p], "dupe_count": 1}
-                for p, s in state.index.search(state.model_name, qv, k=k, folder=folder)
-            ]
-        return {"query": q, "model": state.model_name, "results": results}
+        results = _run_search(qv, k, dedup, method, folder)
+        refinements = _refinements([r["path"] for r in results], q)
+        return {"query": q, "model": state.model_name, "results": results, "refinements": refinements}
+
+    @app.get("/api/search-image")
+    def search_image(path: str, k: int = 24, dedup: bool = True, method: str = "embed", folder: str | None = None):
+        # Image-to-image search: embed the file at `path`, find nearest neighbors
+        # in the index. Works for any file PIL can open — doesn't need to be indexed.
+        if not os.path.exists(path):
+            raise HTTPException(404, f"no such image: {path}")
+        emb = state.warm()
+        qv = emb.embed_images([path])[0]
+        results = _run_search(qv, k, dedup, method, folder)
+        # Filter the reference image itself out of its own results.
+        results = [r for r in results if r["path"] != path]
+        refinements = _refinements([r["path"] for r in results], os.path.basename(path))
+        return {"query": f"image: {os.path.basename(path)}", "ref_path": path,
+                "model": state.model_name, "results": results, "refinements": refinements}
+
+    @app.get("/api/suggest")
+    def suggest(q: str, k: int = 8):
+        # Autocomplete grounded in the index: typed text → nearest cluster labels
+        # by cosine similarity. Vocabulary is whatever clusters exist on disk.
+        import numpy as np
+        li = _label_index()
+        q = (q or "").strip()
+        if not li["labels"] or not q:
+            return {"suggestions": []}
+        emb = state.warm()
+        qv = emb.embed_queries([q])[0]
+        n = float(np.linalg.norm(qv))
+        if n > 0:
+            qv = qv / n
+        scores = li["vectors"] @ qv
+        top = scores.argsort()[::-1][:k]
+        return {"suggestions": [
+            {"label": li["labels"][i], "score": float(scores[i]), "size": li["size"].get(li["labels"][i], 0)}
+            for i in top
+        ]}
 
     @app.get("/api/folders")
     def folders():
