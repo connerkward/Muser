@@ -78,6 +78,11 @@
   .cluster .sub { font-size:11px; color:var(--mut); padding:2px 11px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .cluster .cnt { font-size:11px; color:var(--acc); font-weight:600; padding:5px 11px 10px; }
   #cback { margin-bottom:4px; }
+  .tools { gap:8px; margin:6px 0 14px; }
+  .pill { font-size:12px; padding:5px 11px; border-radius:999px; background:transparent;
+          color:var(--mut); border:1px solid var(--line); }
+  .pill:hover { color:var(--fg); border-color:var(--acc); }
+  .pill.ico { padding:5px 8px; }
 </style>
 </head>
 <body>
@@ -98,17 +103,14 @@
     <input id="q" placeholder="Describe what you're looking for — e.g. “a person on a snowy mountain”" autofocus />
     <button class="primary" id="go">Search</button>
   </div>
-  <div class="row" id="scopeRow">
-    <span class="mut">scope</span>
-    <input class="folder" id="scope" list="folderlist" placeholder="All folders — type or pick a folder to limit the search…" />
-    <datalist id="folderlist"></datalist>
-    <button id="scopeClear" title="Search all folders">✕</button>
+  <div class="row tools">
+    <button class="pill" id="scopePick" title="Limit search to a folder">📂 <span id="scopeLabel">All folders</span></button>
+    <button class="pill ico" id="scopeClear" title="Clear scope" style="display:none">✕</button>
     <span class="mut" id="scopemsg"></span>
-  </div>
-  <div class="row">
-    <input class="folder" id="folder" placeholder="Folder to index (absolute path)…" />
-    <button id="index">Index folder</button>
+    <span style="flex:1"></span>
+    <button class="pill" id="indexPick" title="Pick a folder and index it">+ Index folder</button>
     <span class="mut" id="idxmsg"></span>
+    <input type="hidden" id="scope" />
   </div>
   <div id="results" class="grid"></div>
   <div id="empty" class="empty">Index a folder, then search it.</div>
@@ -225,14 +227,19 @@ async function loadFolders(){
   try{
     const r = await (await fetch("/api/folders")).json();
     folderCounts = {};
-    const dl=$("#folderlist"); dl.innerHTML="";
-    r.folders.forEach(f=>{
-      folderCounts[f.folder]=f.count;
-      const o=document.createElement("option");
-      o.value=f.folder; o.label=`${f.count.toLocaleString()} imgs`;
-      dl.appendChild(o);
-    });
+    r.folders.forEach(f=>{ folderCounts[f.folder]=f.count; });
   }catch(e){}
+}
+async function pickFolder(kind){
+  const r = await (await fetch(`/api/pick-folder?kind=${kind}`,{method:"POST"})).json();
+  return r.cancelled ? null : r.path;
+}
+function setScope(p){
+  $("#scope").value = p || "";
+  $("#scopeLabel").textContent = p ? p.split("/").slice(-2).join("/") || p : "All folders";
+  $("#scopeClear").style.display = p ? "" : "none";
+  scopeMsg();
+  if($("#q").value.trim().length >= 2) liveSearch();
 }
 function scopeMsg(){
   const f=$("#scope").value.trim();
@@ -240,9 +247,8 @@ function scopeMsg(){
   const n=folderCounts[f];
   $("#scopemsg").textContent = n!=null ? `↳ ${n.toLocaleString()} images in scope` : "↳ scoped (re-search to apply)";
 }
-$("#scope").addEventListener("input",()=>{ scopeMsg(); if($("#q").value.trim().length >= 2) liveSearch(); });
-$("#scope").addEventListener("change",()=>{ scopeMsg(); if($("#q").value.trim()) search(); });
-$("#scopeClear").onclick=()=>{ $("#scope").value=""; scopeMsg(); if($("#q").value.trim()) search(); };
+$("#scopePick").onclick = async()=>{ const p = await pickFolder("scope"); if(p) setScope(p); };
+$("#scopeClear").onclick = ()=> setScope("");
 
 let _searchAbort=null, _searchTimer=null;
 function liveSearch(){ clearTimeout(_searchTimer); _searchTimer=setTimeout(search, 180); }
@@ -372,9 +378,9 @@ async function openCluster(method,id,label,sub,size){
   });
 }
 
-$("#index").onclick=async()=>{
-  const folder=$("#folder").value.trim(); if(!folder) return;
-  $("#idxmsg").textContent="indexing… (first run loads the model)";
+$("#indexPick").onclick=async()=>{
+  const folder = await pickFolder("index"); if(!folder) return;
+  $("#idxmsg").textContent=`indexing ${folder.split("/").slice(-2).join("/")}… (first run loads the model)`;
   try{
     const r=await (await fetch("/api/index",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({folder})})).json();
     $("#idxmsg").textContent=`+${r.added} added · ${r.updated} updated · ${r.total} total`;

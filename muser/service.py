@@ -118,6 +118,27 @@ def create_app(model: str = DEFAULT_MODEL):
     def folders():
         return {"folders": state.index.folders(state.model_name)}
 
+    @app.post("/api/pick-folder")
+    def pick_folder(kind: str = "scope"):
+        # Pops a native folder picker on the server (== this machine, since
+        # muser serve is local-only). Returns {path} or {cancelled: true}.
+        # `kind` selects one of two fixed prompts — no string injection into AppleScript.
+        prompts = {
+            "scope": "Limit search to which folder?",
+            "index": "Pick a folder to index",
+        }
+        prompt = prompts.get(kind, "Choose a folder")
+        if platform.system() != "Darwin":
+            raise HTTPException(501, "native folder picker is macOS-only for now")
+        try:
+            out = subprocess.run(
+                ["osascript", "-e", f'POSIX path of (choose folder with prompt "{prompt}")'],
+                capture_output=True, text=True, timeout=300, check=True,
+            ).stdout.strip().rstrip("/")
+            return {"path": out}
+        except subprocess.CalledProcessError:
+            return {"cancelled": True}
+
     @app.get("/api/thumb")
     def thumb(path: str, size: int = 260):
         from .embedders import _load_rgb
