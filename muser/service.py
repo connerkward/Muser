@@ -87,17 +87,25 @@ def create_app(model: str = DEFAULT_MODEL):
     def home():
         return WEB.read_text()
 
-    # SVG favicon: italic lowercase 'm', matches the wordmark. Honors
-    # prefers-color-scheme via inline <style> (Safari / Chromium support
-    # this in SVG favicons). Served at /favicon.ico so the browser's
-    # implicit fetch resolves instead of 404'ing — modern browsers accept
-    # image/svg+xml at that path.
+    # SVG favicon: solid-fill knockout mark — italic lowercase 'm' carved
+    # out of a charcoal square. Single-character favicons need the solid
+    # field to carry weight at 16px; an outlined glyph alone reads as a
+    # squiggle at tab size. The wordmark connection still holds because
+    # the glyph is the same italic lowercase 'm' used in the header.
+    # prefers-color-scheme inverts fg/bg so the mark stays legible against
+    # both light and dark browser chrome (Safari + Chromium honor the
+    # media query inside SVG favicons).
     _FAVICON_SVG = (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
-        '<style>text{fill:#1a1815;font-family:Georgia,serif}'
-        '@media(prefers-color-scheme:dark){text{fill:#ece6d6}}</style>'
-        '<text x="50%" y="74%" font-style="italic" font-size="30" '
-        'text-anchor="middle">m</text></svg>'
+        '<style>'
+        '.bg{fill:#1a1815}.fg{fill:#f5f1e8}'
+        '@media(prefers-color-scheme:dark){.bg{fill:#ece6d6}.fg{fill:#16140f}}'
+        '</style>'
+        '<rect width="32" height="32" rx="4" class="bg"/>'
+        '<text x="16" y="16" font-family="Georgia,serif" font-style="italic" '
+        'font-size="24" text-anchor="middle" dominant-baseline="central" '
+        'class="fg">m</text>'
+        '</svg>'
     ).encode("utf-8")
 
     @app.get("/favicon.ico")
