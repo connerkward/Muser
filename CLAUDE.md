@@ -75,7 +75,15 @@ pass over the 17.9k uniques, so reserved for selective lookups, not wired in.
   the shipped default must be a 2026 frontier model.
 - Big/corrupt images: `_load_rgb` disables PIL's bomb guard (trusted local files)
   and downscales to ≤1024px before encoding.
-- MPS is used automatically on Apple Silicon.
+- MPS is used automatically on Apple Silicon (CUDA on NVIDIA, CPU otherwise).
+- **Cross-platform:** core (index/search/serve/web/CLI/MCP) runs on macOS/Windows/Linux.
+  OS-specific bits branch on `platform.system()` and degrade to a clear 501 when the tool
+  is absent: `_reveal` (open -R / explorer /select / FileManager1 D-Bus + xdg-open),
+  `_copy_image_to_clipboard` (osascript / PowerShell WinForms / wl-copy|xclip),
+  `/api/pick-folder` (osascript / FolderBrowserDialog / zenity|kdialog). The MLX backend
+  (`jina-v4-mlx`) is Apple-Silicon-only — gated out of the registry via an import-free
+  `find_spec` probe, and the `mac` extra carries `sys_platform`/`platform_machine` markers
+  so `uv` installs cleanly off-Apple. UI hint copy: "⌘V (macOS) / Ctrl+V (Win/Linux)".
 
 ## Status
 

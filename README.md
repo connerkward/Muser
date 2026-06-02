@@ -1,89 +1,98 @@
 # Muser
 
-Index, vectorize, and search a folder of images **by natural language**. Muser embeds
-every image with [CLIP](https://github.com/openai/CLIP) (running locally, on-device, via
-[`@huggingface/transformers`](https://github.com/huggingface/transformers.js)) and stores
-the vectors in an embedded [LanceDB](https://lancedb.com) table. Then you can search with a
-text query like _"a dog on a beach at sunset"_ and get back the closest-matching photos —
-no API keys, fully offline.
+Index, vectorize, and search a folder of images **by natural language** — fully local,
+no API keys, offline. Muser embeds every image with a CLIP/SigLIP-family model (running
+on-device via [transformers](https://github.com/huggingface/transformers)) and stores the
+vectors in an embedded [LanceDB](https://lancedb.com) table. Search with a text query like
+_"a dog on a beach at sunset"_ and get back the closest-matching photos.
 
-Muser ships two surfaces over the same core:
+Three surfaces over one core (a warm local service that owns the model + index):
 
-- **`muser`** — a command-line tool to index and search.
+- **`muser`** — a CLI to index, search, benchmark.
+- **`muser serve`** — the embedded service + a browser **search UI** at `http://127.0.0.1:7777`.
 - **`muser-mcp`** — an [MCP](https://modelcontextprotocol.io) server (an _MCP App_) that
-  searches images and renders the matches in an interactive gallery inside the host.
+  searches and renders matches in an interactive gallery inside the host (e.g. Claude Desktop).
 
 ## How it works
 
-Images are embedded with the CLIP **vision** encoder at index time; text queries are
-embedded with the CLIP **text** encoder at search time. Both land in the same shared
-embedding space, so a description retrieves visually matching images. Each indexed folder
-gets its own LanceDB index at `<folder>/.muser`.
+Images are embedded with the model's **vision** encoder at index time; text queries with
+its **text** encoder at search time. Both land in one shared space, so a description
+retrieves visually matching images (cosine over L2-normalized vectors). State lives in a
+single LanceDB at `~/.muser/db`, one table per model. Default model: **`siglip2-b`**
+(Apache-2.0, strong quality/speed). See [`CLAUDE.md`](CLAUDE.md) for architecture and
+[`REQUIREMENTS.md`](REQUIREMENTS.md) for scope.
 
 ## Requirements
 
-- [Bun](https://bun.sh) ≥ 1.3
+- **Python 3.12** and [uv](https://docs.astral.sh/uv/)
 
 ## Install
 
 ```bash
 git clone https://github.com/connerkward/Muser
 cd Muser
-bun install   # also builds the MCP UI (postinstall)
+uv pip install -e .
+# Apple Silicon only, optional MLX backend: uv pip install -e '.[mac]'
 ```
+
+First index/search downloads the model weights once (siglip2-b ≈ 1 GB).
 
 ## CLI usage
 
 ```bash
-# Index a folder (recursive by default). First run downloads the CLIP model (~150 MB).
-bun src/cli.ts index ~/Pictures/screenshots
+# Index a folder (recursive). Re-running is incremental (mtime-based; prunes deleted files).
+uv run muser index ~/Pictures/screenshots
 
-# Search it
-bun src/cli.ts search "a login screen with a blue button" --in ~/Pictures/screenshots
+# Search the whole index, or scope to a folder
+uv run muser search "a login screen with a blue button"
+uv run muser search "sunset over water" --in ~/Pictures -k 5
 
-# Limit results / get JSON
-bun src/cli.ts search "sunset over water" --in ~/Pictures -k 5 --json
+# List models / run the retrieval-eval benchmark
+uv run muser models
+uv run muser bench
 
-# Index stats
-bun src/cli.ts info --in ~/Pictures/screenshots
+# Launch the embedded service + web search UI (http://127.0.0.1:7777)
+uv run muser serve
 ```
 
-Re-running `index` is incremental: unchanged files are skipped, changed files re-embedded,
-deleted files pruned.
-
-After `bun link` you can call `muser` / `muser-mcp` directly instead of `bun src/...`.
+Paths accept `~` (expands per-OS) and forward slashes on every platform.
 
 ## MCP usage
 
-Add to your MCP host (e.g. Claude Desktop) config:
+Add to your MCP host (e.g. Claude Desktop) config — the server is a console script, so
+no path or runtime prefix is needed:
 
 ```json
-{
-  "mcpServers": {
-    "muser": { "command": "bun", "args": ["/absolute/path/to/Muser/src/mcp.ts"] }
-  }
-}
+{ "mcpServers": { "muser": { "command": "muser-mcp" } } }
 ```
 
-Tools exposed:
+| Tool            | Purpose                                                        |
+| --------------- | -------------------------------------------------------------- |
+| `index_folder`  | Index / re-index a folder of images.                           |
+| `index_info`    | Report index stats.                                            |
+| `search_images` | Search by description and open the gallery UI (an _MCP App_).  |
 
-| Tool            | Purpose                                                              |
-| --------------- | ------------------------------------------------------------------- |
-| `index_folder`  | Index/re-index a folder of images.                                  |
-| `index_info`    | Report index stats for a folder.                                    |
-| `search_images` | Search by description and open the gallery UI (an _MCP App_).       |
+The MCP server is a thin HTTP client of `muser serve` and auto-spawns it if it's not
+already running. Run over HTTP instead of stdio with `muser-mcp --http`
+(`http://127.0.0.1:8000/mcp`).
 
-Run over HTTP instead of stdio with `bun src/mcp.ts --http` (default port `3939`).
+## Platform support
 
-## Releasing
+Core (index, search, `serve`, `web`, CLI, MCP) is **cross-platform** (macOS, Windows,
+Linux). The default install is portable; the `mac` extra (MLX backend) is Apple-Silicon
+-only and auto-skips elsewhere via environment markers. Hardware acceleration: CUDA on
+NVIDIA, Apple MPS on Apple Silicon, CPU otherwise (chosen automatically).
 
-Versioning and changelogs are managed with [Changesets](https://github.com/changesets/changesets):
+OS-integration niceties degrade gracefully when the platform tool is missing:
 
-```bash
-bun run changeset      # describe a change
-bun run version        # apply pending changesets -> bump version + CHANGELOG
-bun run release        # build + publish
-```
+| Feature | macOS | Windows | Linux |
+| --- | --- | --- | --- |
+| Reveal in file manager | `open -R` | `explorer /select,` | FileManager1 D-Bus → `xdg-open` |
+| Copy image to clipboard (Lens button) | `osascript` | PowerShell (WinForms) | `wl-copy` / `xclip` |
+| Native folder picker | `osascript` | `FolderBrowserDialog` | `zenity` / `kdialog` |
+
+On Linux, install `xclip` (X11) or `wl-clipboard` (Wayland) for the clipboard button, and
+`zenity` or `kdialog` for the native folder picker; otherwise type a path into the scope box.
 
 ## License
 
