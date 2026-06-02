@@ -124,7 +124,7 @@ export function createGallery(handlers: GalleryHandlers): Gallery {
         thumbWrap.className = "thumb";
         const badge = Object.assign(document.createElement("span"), {
           className: "dupe",
-          textContent: `⧉ ${dupeCount}`,
+          textContent: `${dupeCount} copies`,
           title: `${dupeCount} copies — click to see all`,
         });
         badge.addEventListener("click", (e) => {

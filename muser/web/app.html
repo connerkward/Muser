@@ -5,123 +5,154 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Muser — semantic image search</title>
 <style>
-  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --fg:#e7e9ee; --mut:#8b93a3; --acc:#46c8a0; --acc2:#d6a85b; }
+  :root {
+    --bg:#f5f1e8; --paper:#ece6d6; --fg:#1a1815; --mut:#7c7569; --line:#d6cebb;
+    --serif: ui-serif, "Iowan Old Style", "Charter", Georgia, serif;
+    --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#16140f; --paper:#1f1c16; --fg:#ece6d6; --mut:#80796b; --line:#2b2820; }
+  }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg);
-         font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
-  header { display:flex; align-items:center; gap:16px; padding:14px 22px;
-           border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:5; }
-  header h1 { font-size:16px; margin:0; font-weight:650; letter-spacing:.2px; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.55 var(--sans);
+         -webkit-font-smoothing:antialiased; }
+
+  header { display:flex; align-items:baseline; gap:22px; padding:18px 28px 16px;
+           border-bottom:1px solid var(--line); }
+  header h1 { font:italic 400 22px/1 var(--serif); margin:0; letter-spacing:-.01em;
+              text-transform:lowercase; }
   header .sp { flex:1; }
-  .mut { color:var(--mut); font-size:13px; }
-  select, input, button { font:inherit; color:var(--fg); background:var(--panel);
-           border:1px solid var(--line); border-radius:9px; padding:9px 12px; outline:none; }
-  select:focus, input:focus { border-color:var(--acc); }
+
+  .nav { background:transparent; border:0; padding:2px 0; color:var(--mut);
+         font-size:13px; cursor:pointer; border-bottom:1px solid transparent; }
+  .nav:hover { color:var(--fg); }
+  .nav.on { color:var(--fg); border-bottom-color:var(--fg); }
+
+  .mut { color:var(--mut); font-size:12px; }
+
+  input, select, button { font:inherit; color:var(--fg); background:transparent;
+         border:1px solid var(--line); padding:9px 12px; outline:none; border-radius:2px; }
+  input:focus, select:focus { border-color:var(--fg); }
   button { cursor:pointer; }
-  button.primary { background:var(--acc); color:#06231a; border-color:var(--acc); font-weight:650; }
-  button:hover { filter:brightness(1.08); }
-  .wrap { max-width:1200px; margin:0 auto; padding:22px; }
-  .searchbar { display:flex; gap:10px; margin-bottom:8px; }
-  .searchbar input { flex:1; font-size:16px; padding:13px 16px; }
-  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:10px 0 18px; }
-  .row input.folder { flex:1; min-width:240px; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:14px; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden;
-          display:flex; flex-direction:column; }
-  .card .thumb { position:relative; aspect-ratio:1; background:#0a0c10; display:flex; align-items:center; justify-content:center; cursor:zoom-in; }
-  .card .thumb img { width:100%; height:100%; object-fit:cover; }
-  .dupe { position:absolute; top:6px; right:6px; background:rgba(0,0,0,.72); color:#fff; font-size:11px;
-          font-weight:600; padding:3px 8px; border-radius:20px; cursor:pointer; border:1px solid var(--line); }
-  .dupe:hover { background:var(--acc); color:#06231a; border-color:var(--acc); }
-  .scoreb { position:absolute; top:6px; left:6px; background:rgba(0,0,0,.72); color:var(--acc); font-size:11px;
-            font-weight:700; padding:3px 8px; border-radius:20px; border:1px solid var(--line); }
-  .card .meta { padding:8px 10px; display:flex; flex-direction:column; gap:4px; }
-  .card .name { font-size:12px; color:var(--mut); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .card .bar { height:5px; border-radius:3px; background:var(--line); overflow:hidden; }
-  .card .bar > i { display:block; height:100%; background:var(--acc); }
-  .card .foot { display:flex; justify-content:space-between; align-items:center; padding:0 10px 9px; }
-  .card .score { font-size:12px; color:var(--acc); font-weight:600; }
-  .card .reveal { font-size:11px; padding:4px 8px; }
-  .card .foot { gap:6px; flex-wrap:wrap; }
-  .card .lens, .card .orig { font-size:11px; padding:4px 8px; white-space:nowrap; transition:background .15s, color .15s; }
-  .lens { color:var(--acc); border-color:var(--acc); }
-  .orig { color:var(--acc2); border-color:var(--acc2); }
-  .copied { background:var(--acc) !important; color:#06231a !important; border-color:var(--acc) !important;
-            animation:lenspop .34s cubic-bezier(.3,1.4,.5,1); }
-  .lens:disabled, .orig:disabled { cursor:default; }
-  @keyframes lenspop { 0%{transform:scale(1)} 45%{transform:scale(1.14)} 100%{transform:scale(1)} }
-  .empty { color:var(--mut); text-align:center; padding:60px 0; }
-  .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--panel);
-           border:1px solid var(--line); padding:10px 16px; border-radius:10px; opacity:0; transition:.2s; }
-  .toast.show { opacity:1; }
-  .modal { position:fixed; inset:0; background:rgba(0,0,0,.72); display:none; align-items:center; justify-content:center; z-index:20; }
-  .modal.show { display:flex; }
-  .modal .box { background:var(--panel); border:1px solid var(--line); border-radius:14px; max-width:980px; width:92%; max-height:86vh; overflow:auto; padding:20px; }
-  .modal h3 { margin:0; font-size:15px; }
-  .modal .x { float:right; cursor:pointer; color:var(--mut); font-size:18px; }
-  .modal .files { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; margin-top:16px; }
-  .modal .file { background:var(--bg); border:1px solid var(--line); border-radius:10px; overflow:hidden; display:flex; flex-direction:column; }
-  .modal .file img { width:100%; aspect-ratio:1; object-fit:cover; cursor:zoom-in; }
-  .modal .file .fn { font-size:10px; color:var(--mut); padding:6px; word-break:break-all; flex:1; }
-  .modal .file button { font-size:11px; border-radius:0; border:0; border-top:1px solid var(--line); padding:6px; }
-  .modal .file .frow { display:flex; }
-  .modal .file .frow button { flex:1; }
-  .modal .file .frow button + button { border-left:1px solid var(--line); }
-  .modal .file .lens { color:var(--acc); }
-  .nav { background:transparent; border:1px solid transparent; padding:7px 12px; color:var(--mut); }
-  .nav.on { background:var(--panel); border-color:var(--line); color:var(--fg); }
-  .cluster { cursor:pointer; }
-  .cluster:hover { border-color:var(--acc); }
-  .cluster .mos { display:grid; grid-template-columns:1fr 1fr; gap:1px; aspect-ratio:1; background:#0a0c10; }
-  .cluster .mos img { width:100%; height:100%; object-fit:cover; }
-  .cluster .lab { font-size:13px; font-weight:600; padding:9px 11px 0; text-transform:capitalize; }
-  .cluster .sub { font-size:11px; color:var(--mut); padding:2px 11px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .cluster .cnt { font-size:11px; color:var(--acc); font-weight:600; padding:5px 11px 10px; }
-  #cback { margin-bottom:4px; }
-  .tools { gap:8px; margin:6px 0 14px; }
-  .pill { font-size:12px; padding:5px 11px; border-radius:999px; background:transparent;
-          color:var(--mut); border:1px solid var(--line); }
-  .pill:hover { color:var(--fg); border-color:var(--acc); }
-  .pill.ico { padding:5px 8px; }
-  .upload { font-size:13px; font-weight:600; padding:7px 14px; border-radius:999px;
-            border:1px solid var(--line); color:var(--mut); background:transparent;
-            display:inline-flex; align-items:center; gap:6px; }
-  .upload:hover { border-color:var(--acc); color:var(--acc); }
-  .upload .arr { font-size:14px; line-height:1; }
-  .spinner { width:14px; height:14px; border:2px solid var(--line);
-             border-top-color:var(--acc); border-radius:50%;
-             animation:spin .8s linear infinite; display:inline-block; }
-  @keyframes spin { to { transform:rotate(360deg); } }
-  .searchbar .neg { flex:0 1 240px; font-size:14px; padding:13px 14px;
-                    border-color:var(--line); }
-  .searchbar .neg:focus { border-color:var(--acc2); }
+  button.primary { background:var(--fg); color:var(--bg); border-color:var(--fg);
+                   padding-left:18px; padding-right:18px; }
+  button.primary:hover { opacity:.85; }
+
+  .wrap { max-width:1280px; margin:0 auto; padding:30px 28px 80px; }
+
+  .searchbar { position:relative; display:flex; gap:8px; margin-bottom:6px; }
+  .searchbar input { flex:1; font-size:15px; padding:11px 14px; }
+  .searchbar .neg { flex:0 1 230px; }
   .searchbar .neg::placeholder { color:var(--mut); }
-  .searchbar { position:relative; }
-  .chips { display:flex; flex-wrap:wrap; gap:6px; margin:4px 0 10px; min-height:28px; }
-  .chips .lbl { color:var(--mut); font-size:11px; padding:5px 4px 5px 0; }
-  .chip { font-size:12px; padding:5px 11px; border-radius:999px;
-          background:transparent; color:var(--mut); border:1px solid var(--line);
-          cursor:pointer; white-space:nowrap; }
-  .chip:hover { color:var(--fg); border-color:var(--acc); }
-  .chip.refine { color:var(--acc2); border-color:#3a3328; }
-  .chip.refine:hover { border-color:var(--acc2); }
-  .suggest { position:absolute; top:100%; left:0; right:120px; margin-top:4px;
-             background:var(--panel); border:1px solid var(--line); border-radius:10px;
-             z-index:8; max-height:260px; overflow:auto; padding:4px; }
-  .suggest .item { padding:7px 11px; border-radius:7px; cursor:pointer; font-size:13px;
-                   display:flex; justify-content:space-between; align-items:center; }
-  .suggest .item:hover, .suggest .item.on { background:var(--bg); color:var(--acc); }
-  .suggest .cnt { color:var(--mut); font-size:11px; }
-  .card .sim { font-size:11px; padding:4px 8px; color:var(--mut); white-space:nowrap; }
-  .card .sim:hover { color:var(--acc); border-color:var(--acc); }
-  /* drill-down: when a query is already typed, chips/suggestions are additive */
+
+  .chips { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 14px;
+           margin:14px 0 22px; min-height:20px; }
+  .chips .lbl { color:var(--mut); font-size:10px; letter-spacing:.08em;
+                text-transform:uppercase; margin-right:2px; }
+  .chip { background:transparent; border:0; padding:0; color:var(--mut);
+          font-size:13px; cursor:pointer; border-bottom:1px solid transparent; }
+  .chip:hover { color:var(--fg); border-bottom-color:var(--fg); }
+  .chip.refine::before { content:"→ "; color:var(--mut); }
+
+  .tools { display:flex; align-items:center; gap:18px; margin:0 0 22px;
+           font-size:12px; color:var(--mut); }
+  .tools button { background:transparent; border:0; padding:0; color:var(--mut);
+                  font-size:12px; cursor:pointer; border-bottom:1px solid transparent; }
+  .tools button:hover { color:var(--fg); border-bottom-color:var(--fg); }
+
+  .upload { background:transparent; border:0; padding:0; color:var(--fg);
+            font-size:13px; cursor:pointer; border-bottom:1px solid var(--fg); }
+  .upload:hover { opacity:.7; }
+
+  .spinner { width:10px; height:10px; border:1.5px solid var(--line);
+             border-top-color:var(--fg); border-radius:50%;
+             animation:spin .9s linear infinite; display:inline-block; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr));
+          gap:34px 16px; }
+  .card { background:transparent; border:0; display:flex; flex-direction:column; }
+  .card .thumb { position:relative; aspect-ratio:1; background:var(--paper);
+                 cursor:zoom-in; overflow:hidden; }
+  .card .thumb img { width:100%; height:100%; object-fit:cover; }
+  .dupe { position:absolute; top:8px; right:8px; background:rgba(0,0,0,.72); color:#fff;
+          font-size:10px; padding:2px 7px; border:0; cursor:pointer; }
+  .scoreb { position:absolute; top:8px; left:8px; background:rgba(0,0,0,.72); color:#fff;
+            font-size:10px; padding:2px 7px; border:0; font-variant-numeric:tabular-nums; }
+  .card .meta { padding:9px 0 0; }
+  .card .name { font-size:12px; color:var(--mut); white-space:nowrap;
+                overflow:hidden; text-overflow:ellipsis; }
+  .card .foot { display:flex; align-items:baseline; gap:13px; flex-wrap:wrap;
+                padding:5px 0 0; }
+  .card .score { font-size:11px; color:var(--mut); font-variant-numeric:tabular-nums; }
+  .card .foot button { background:transparent; border:0; padding:0; color:var(--mut);
+                       font-size:11px; cursor:pointer; border-bottom:1px solid transparent; }
+  .card .foot button:hover { color:var(--fg); border-bottom-color:var(--fg); }
+  .card .bar { display:none; }
+  .copied { color:var(--fg) !important; border-bottom-color:var(--fg) !important; }
+
+  .empty { color:var(--mut); text-align:center; padding:90px 0;
+           font:italic 400 15px/1.4 var(--serif); }
+
+  .toast { position:fixed; bottom:22px; left:50%; transform:translateX(-50%);
+           background:var(--fg); color:var(--bg); padding:7px 14px; font-size:12px;
+           opacity:0; transition:.2s; }
+  .toast.show { opacity:1; }
+
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.55); display:none;
+           align-items:center; justify-content:center; z-index:20; padding:16px; }
+  .modal.show { display:flex; }
+  .modal .box { background:var(--bg); max-width:980px; width:100%; max-height:86vh;
+                overflow:auto; padding:26px 28px; border:1px solid var(--line); }
+  .modal h3 { margin:0; font:italic 400 19px/1.2 var(--serif); }
+  .modal .x { float:right; cursor:pointer; color:var(--mut); font-size:20px; line-height:1; }
+  .modal .files { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr));
+                  gap:24px 14px; margin-top:18px; }
+  .modal .file { background:transparent; border:0; display:flex; flex-direction:column; }
+  .modal .file img { width:100%; aspect-ratio:1; object-fit:cover; cursor:zoom-in;
+                     background:var(--paper); }
+  .modal .file .fn { font-size:10px; color:var(--mut); padding:6px 0;
+                     word-break:break-all; flex:1; }
+  .modal .file .frow { display:flex; gap:13px; padding:2px 0 0; }
+  .modal .file .frow button { background:transparent; border:0; padding:0; color:var(--mut);
+                              font-size:11px; cursor:pointer; border-bottom:1px solid transparent; }
+  .modal .file .frow button:hover { color:var(--fg); border-bottom-color:var(--fg); }
+
+  .suggest { position:absolute; top:calc(100% + 1px); left:0; right:120px;
+             background:var(--bg); border:1px solid var(--line); z-index:8;
+             max-height:280px; overflow:auto; }
+  .suggest .item { padding:9px 14px; cursor:pointer; font-size:13px;
+                   display:flex; justify-content:space-between; align-items:baseline;
+                   border-bottom:1px solid var(--line); }
+  .suggest .item:last-child { border-bottom:0; }
+  .suggest .item:hover, .suggest .item.on { background:var(--paper); }
+  .suggest .cnt { color:var(--mut); font-size:11px; font-variant-numeric:tabular-nums; }
+
   body.has-query .chip::before,
-  body.has-query .suggest .item::before { content:"+ "; color:var(--mut); margin-right:2px; }
+  body.has-query .suggest .item::before { content:"+ "; color:var(--mut); }
+  body.has-query .chip.refine::before { content:"→ "; }
+
+  .cluster { cursor:pointer; background:transparent; border:0; padding:0; text-align:left;
+             display:flex; flex-direction:column; }
+  .cluster .mos { display:grid; grid-template-columns:1fr 1fr; gap:1px; aspect-ratio:1;
+                  background:var(--paper); }
+  .cluster .mos img { width:100%; height:100%; object-fit:cover; }
+  .cluster .lab { font-size:13px; color:var(--fg); padding:9px 0 0;
+                  text-transform:capitalize; border-bottom:1px solid transparent;
+                  align-self:flex-start; }
+  .cluster:hover .lab { border-bottom-color:var(--fg); }
+  .cluster .sub { font:italic 400 12px/1.4 var(--serif); color:var(--mut); padding:3px 0 0;
+                  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cluster .cnt { font-size:11px; color:var(--mut); padding:3px 0 0;
+                  font-variant-numeric:tabular-nums; }
+  #cback { margin-bottom:8px; background:transparent; border:0; padding:0; color:var(--mut);
+           font-size:12px; cursor:pointer; }
+  #cback:hover { color:var(--fg); }
 </style>
 </head>
 <body>
 <header>
-  <h1>🖼️ Muser</h1>
+  <h1>Muser</h1>
   <button class="nav on" id="navSearch">Search</button>
   <button class="nav" id="navExplore">Explore</button>
   <button class="nav" id="navInteresting">Interesting</button>
@@ -129,7 +160,7 @@
   <span class="mut" id="status">…</span>
   <span class="sp"></span>
   <span class="spinner" id="spinner" style="display:none" title="Working…"></span>
-  <button class="upload" id="indexPick" title="Pick a folder and index it"><span class="arr">↑</span> Index folder</button>
+  <button class="upload" id="indexPick" title="Pick a folder and index it">Index folder</button>
   <span class="mut">model</span>
   <select id="model"></select>
 </header>
@@ -143,8 +174,9 @@
   </div>
   <div class="chips" id="chips"></div>
   <div class="row tools">
-    <button class="pill" id="scopePick" title="Limit search to a folder">📂 <span id="scopeLabel">All folders</span></button>
-    <button class="pill ico" id="scopeClear" title="Clear scope" style="display:none">✕</button>
+    <span>Scope:</span>
+    <button id="scopePick" title="Limit search to a folder"><span id="scopeLabel">All folders</span></button>
+    <button id="scopeClear" title="Clear scope" style="display:none">×</button>
     <span class="mut" id="scopemsg"></span>
     <span style="flex:1"></span>
     <span class="mut" id="idxmsg"></span>
@@ -332,16 +364,16 @@ function _renderHits(r){
   r.results.forEach(h=>{
     const pct=Math.max(0,Math.min(100,Math.round(h.score*100)));
     const dupes=h.dupe_count||1;
-    const badge = dupes>1 ? `<span class="dupe" title="${dupes} copies — click to see all">⧉ ${dupes}</span>` : "";
+    const badge = dupes>1 ? `<span class="dupe" title="${dupes} copies — click to see all">${dupes} copies</span>` : "";
     const c=document.createElement("div"); c.className="card";
     c.innerHTML=`
       <div class="thumb">${badge}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}" title="${h.name}"></div>
       <div class="meta"><div class="name" title="${h.path}">${h.name}</div>
         <div class="bar"><i style="width:${pct}%"></i></div></div>
       <div class="foot"><span class="score">${(h.score*100).toFixed(1)}%</span>
-        <button class="sim" title="Find images visually similar to this one">🔎 Similar</button>
-        <button class="lens" title="Copy image + open Google Lens (⌘V to search where it appears)">⌖ Source</button>
-        <button class="orig" title="Copy image + open TinEye (⌘V, sort Oldest = earliest known copy)">⏱ Origin</button>
+        <button class="sim" title="Find images visually similar to this one">Similar</button>
+        <button class="lens" title="Copy image + open Google Lens (⌘V to search where it appears)">Lens</button>
+        <button class="orig" title="Copy image + open TinEye (⌘V, sort Oldest = earliest known copy)">TinEye</button>
         <button class="reveal">Reveal</button></div>`;
     c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
     c.querySelector(".sim").onclick=()=>searchImage(h.path);
@@ -469,7 +501,7 @@ function openDupes(h){
   const f=$("#dupesFiles"); f.innerHTML="";
   h.dupes.forEach(p=>{
     const d=document.createElement("div"); d.className="file";
-    d.innerHTML=`<img loading="lazy" src="/api/thumb?path=${enc(p)}" title="${p}"><div class="fn">${p}</div><div class="frow"><button class="lens">⌖ Source</button><button class="orig">⏱ Origin</button><button class="rev">Reveal</button></div>`;
+    d.innerHTML=`<img loading="lazy" src="/api/thumb?path=${enc(p)}" title="${p}"><div class="fn">${p}</div><div class="frow"><button class="lens">Lens</button><button class="orig">TinEye</button><button class="rev">Reveal</button></div>`;
     d.querySelector("img").onclick=()=>window.open(`/api/image?path=${enc(p)}`,"_blank");
     d.querySelector(".lens").onclick=e=>lensSearch(p,e.currentTarget);
     d.querySelector(".orig").onclick=e=>originSearch(p,e.currentTarget);
@@ -501,12 +533,12 @@ async function loadScores(gridSel,msgSel,metricSel){
   if(!r.built){ $(msgSel).textContent="Not built yet — run:  muser score"; return; }
   $(msgSel).textContent=`${r.total.toLocaleString()} images · sorted by ${metric} (highest first)`;
   r.items.forEach(h=>{
-    const dupe = (h.dupe_count||1)>1 ? `<span class="dupe" title="${h.dupe_count} copies">⧉ ${h.dupe_count}</span>` : "";
+    const dupe = (h.dupe_count||1)>1 ? `<span class="dupe" title="${h.dupe_count} copies">${h.dupe_count} copies</span>` : "";
     const c=document.createElement("div"); c.className="card";
     c.innerHTML=`<div class="thumb"><span class="scoreb">${Math.round(h.score*100)}</span>${dupe}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}"></div>
       <div class="meta"><div class="name" title="${h.path}">${h.name}</div></div>
-      <div class="foot"><button class="lens" title="Copy image + open Google Lens (⌘V to search where it appears)">⌖ Source</button>
-        <button class="orig" title="Copy image + open TinEye (⌘V, sort Oldest = earliest known copy)">⏱ Origin</button></div>`;
+      <div class="foot"><button class="lens" title="Copy image + open Google Lens (⌘V to search where it appears)">Lens</button>
+        <button class="orig" title="Copy image + open TinEye (⌘V, sort Oldest = earliest known copy)">TinEye</button></div>`;
     c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
     c.querySelector(".lens").onclick=e=>lensSearch(h.path,e.currentTarget);
     c.querySelector(".orig").onclick=e=>originSearch(h.path,e.currentTarget);
