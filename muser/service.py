@@ -166,8 +166,13 @@ def _copy_image_to_clipboard(path: str) -> bool:
                 cmd = ["xclip", "-selection", "clipboard", "-t", "image/png"]
             else:
                 return False
-            return subprocess.run(cmd, input=data, capture_output=True).returncode == 0
-        except FileNotFoundError:
+            # Both tools FORK a daemon to keep owning the selection. Must NOT capture
+            # stdout/stderr — the daemon inherits the pipe and never closes it, so a
+            # PIPE-based run() would block on EOF forever. DEVNULL + timeout avoids that.
+            return subprocess.run(
+                cmd, input=data, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15
+            ).returncode == 0
+        except (FileNotFoundError, subprocess.TimeoutExpired):
             return False
     finally:
         os.unlink(tmp.name)
