@@ -34,7 +34,10 @@ See `REQUIREMENTS.md` for scope/decisions.
   tab** — `/api/ai` lists every flagged image from a persisted library scan
   (`~/.muser/c2pa.json`, incremental by mtime+size, parallel; same sidecar pattern as
   `scores.json`/`clusters.json`), `POST /api/ai/scan` runs that scan in the background
-  with progress, and `muser detect` does it headless. Positive-only and a **lower bound** —
+  with progress, and `muser detect` does it headless. **Auto-trigger:** indexing a folder
+  (web "Index folder", `muser index`, or `--local`) automatically runs the detector over the
+  just-indexed subtree when it finishes — incremental, so only new/changed files spawn
+  c2patool, and it's scoped to that folder (not a full re-scan). Positive-only and a **lower bound** —
   only cloud generators (OpenAI/Firefly/Google) ship credentials; local SD/Flux/ComfyUI
   output carries none, so `ai=False`/absence ≠ "confirmed real". Degrades to
   `available:false` (no badge, no tab results) when the binary is absent.

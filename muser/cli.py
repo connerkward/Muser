@@ -111,6 +111,15 @@ def index(
         f"{res.total} total  ({time.time()-t0:.1f}s)"
     )
 
+    # Auto-run the C2PA AI detector over the just-indexed files (incremental — only
+    # new/changed files spawn c2patool). No-op if c2patool isn't installed.
+    from .c2pa import ai_images, available, scan
+
+    if available():
+        folder_paths = idx.paths(model, under=folder)
+        scan(folder_paths, progress=lambda d, t, f: con.print(f"  C2PA scan {d}/{t} — {f} AI-flagged", end="\r"))
+        con.print(f"\n  C2PA: {len(ai_images())} AI-generated image(s) flagged in your library")
+
 
 @app.command()
 def search(
@@ -213,11 +222,10 @@ def detect(model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to s
         raise typer.Exit(1)
     from .index import MuserIndex
 
-    t = MuserIndex()._open(model)
-    if t is None:
+    paths = MuserIndex().paths(model)
+    if not paths:
         con.print(f"[red]no index for model[/] {model} — run `muser index <folder>` first")
         raise typer.Exit(1)
-    paths = [r["path"] for r in t.search().select(["path"]).limit(100_000_000).to_list()]
 
     def prog(done, total, found):
         con.print(f"  scanning {done}/{total} — {found} AI-flagged", end="\r")

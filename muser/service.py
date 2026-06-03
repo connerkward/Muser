@@ -324,6 +324,7 @@ def create_app(model: str = DEFAULT_MODEL):
                 t["total"] = total
 
         def _bg():
+            ok = False
             try:
                 res = state.index.index_folder(
                     folder, state.model_name, state.embedder,
@@ -334,14 +335,40 @@ def create_app(model: str = DEFAULT_MODEL):
                     "added": res.added, "updated": res.updated,
                     "removed": res.removed, "total": res.total,
                 }
+                ok = True
             except Exception as e:
                 state.task = {"kind": "indexing_error", "folder": folder, "error": str(e)}
             # Auto-clear the terminal state after a short window so the next
             # index attempt isn't blocked by the 409 "busy" check.
             threading.Timer(4.0, lambda: setattr(state, "task", None)).start()
+            # Then auto-run the C2PA AI detector over the just-indexed files. Runs
+            # inline (this thread is already a daemon) AFTER the task auto-clears, so
+            # the busy overlay isn't held by the scan; progress shows in the AI tab.
+            # No-op if c2patool is absent or a scan is already in flight; incremental,
+            # so only genuinely new/changed files spawn a subprocess.
+            if ok:
+                _scan_c2pa(folder)
 
         threading.Thread(target=_bg, daemon=True, name="muser-index").start()
         return {"started": True, "folder": folder}
+
+    def _scan_c2pa(folder: str | None = None):
+        # Shared by the post-index hook and POST /api/ai/scan. `folder=None` scans the
+        # whole index; a folder restricts to that subtree (post-index path).
+        from . import c2pa as c2
+        if not c2.available() or state.c2pa.get("scanning"):
+            return
+        paths = state.index.paths(state.model_name, under=folder)
+        if not paths:
+            return
+        state.c2pa = {"scanning": True, "done": 0, "total": len(paths), "found": 0}
+
+        def _prog(done, total, found):
+            state.c2pa.update(done=done, total=total, found=found)
+        try:
+            c2.scan(paths, progress=_prog)
+        finally:
+            state.c2pa["scanning"] = False
 
     # ---- path → cluster-label map, used for the post-search refinement chips ----
     # Reads ~/.muser/clusters.json once and caches a path → cluster-label dict.
@@ -610,22 +637,9 @@ def create_app(model: str = DEFAULT_MODEL):
             raise HTTPException(501, "c2patool not installed — `brew install c2patool`")
         if state.c2pa["scanning"]:
             return {"started": False, "scanning": True}
-        t = state.index._open(state.model_name)
-        if t is None:
-            return {"started": False, "total": 0}
-        paths = [r["path"] for r in t.search().select(["path"]).limit(100_000_000).to_list()]
-        state.c2pa = {"scanning": True, "done": 0, "total": len(paths), "found": 0}
-
-        def _prog(done, total, found):
-            state.c2pa.update(done=done, total=total, found=found)
-
-        def _bg():
-            try:
-                c2.scan(paths, progress=_prog)
-            finally:
-                state.c2pa["scanning"] = False
-        threading.Thread(target=_bg, daemon=True, name="muser-c2pa-scan").start()
-        return {"started": True, "total": len(paths)}
+        total = state.index.count(state.model_name)
+        threading.Thread(target=_scan_c2pa, daemon=True, name="muser-c2pa-scan").start()
+        return {"started": True, "total": total}
 
     @app.get("/api/c2pa")
     def c2pa(path: str):

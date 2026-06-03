@@ -59,6 +59,17 @@ class MuserIndex:
         t = self._open(model)
         return t.count_rows() if t else 0
 
+    def paths(self, model: str, under: str | None = None) -> list[str]:
+        """All indexed image paths for a model, optionally restricted to a folder subtree."""
+        t = self._open(model)
+        if t is None:
+            return []
+        out = [r["path"] for r in t.search().select(["path"]).limit(100_000_000).to_list()]
+        if under:
+            pre = os.path.join(under, "")
+            out = [p for p in out if p == under or p.startswith(pre)]
+        return out
+
     def folders(self, model: str, min_count: int = 2, limit: int = 400) -> list[dict]:
         """Indexed directories (each ancestor that contains images, any depth) with
         image counts, for the UI's folder-scope picker. Drops any folder holding *every*
