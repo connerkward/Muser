@@ -185,6 +185,23 @@
   body.has-query .chip::before { content:"+ "; color:var(--mut); }
   body.has-query .chip.refine::before { content:"→ "; }
 
+  /* Mini search bar: a sliver that slides in from the top when the main
+     searchbar scrolls out of view, so search is never more than a tab away
+     while you're deep in the gallery. Slides in via translateY; under
+     Reduce Motion it snaps. Wordmark on left, compact input on right. */
+  .mini { position:fixed; top:0; left:0; right:0; z-index:25;
+          background:var(--bg); border-bottom:1px solid var(--line);
+          padding:9px 28px; display:flex; align-items:center; gap:18px;
+          transform:translateY(-100%);
+          transition:transform 220ms cubic-bezier(0.22, 1, 0.36, 1); }
+  .mini.on { transform:translateY(0); }
+  .mini h2 { font:italic 400 16px/1 var(--serif); margin:0;
+             letter-spacing:-.01em; text-transform:lowercase; color:var(--fg); }
+  .mini input { flex:1; font-size:13px; padding:7px 12px; max-width:640px; }
+  @media (prefers-reduced-motion: reduce) {
+    .mini { transition:none; }
+  }
+
   .cluster { cursor:pointer; background:transparent; border:0; padding:0; text-align:left;
              display:flex; flex-direction:column; }
   .cluster .mos { display:grid; grid-template-columns:1fr 1fr; gap:1px; aspect-ratio:1;
@@ -204,6 +221,10 @@
 </style>
 </head>
 <body>
+<div class="mini" id="mini">
+  <h2>muser</h2>
+  <input id="qMini" placeholder="Search…" autocomplete="off" />
+</div>
 <header>
   <h1>Muser</h1>
   <button class="nav on" id="navSearch">Search</button>
@@ -739,6 +760,7 @@ function renderRefinements(refs){
 $("#go").onclick = search;
 $("#q").addEventListener("input", ()=>{
   document.body.classList.toggle("has-query", $("#q").value.trim().length > 0);
+  $("#qMini").value = $("#q").value;     // mirror main → mini
   liveSearch();
 });
 $("#q").addEventListener("keydown", e => {
@@ -746,6 +768,22 @@ $("#q").addEventListener("keydown", e => {
 });
 $("#neg").addEventListener("input",   ()=>{ if($("#q").value.trim().length >= 2) liveSearch(); });
 $("#neg").addEventListener("keydown", e=>{ if(e.key==="Enter"){ clearTimeout(_searchTimer); search(); } });
+
+// Mini search: drives the same #q under the hood, so all the existing
+// debounce / search / chip / refinement plumbing comes along for free.
+$("#qMini").addEventListener("input", () => {
+  $("#q").value = $("#qMini").value;     // mirror mini → main
+  document.body.classList.toggle("has-query", $("#qMini").value.trim().length > 0);
+  liveSearch();
+});
+$("#qMini").addEventListener("keydown", e => {
+  if (e.key === "Enter") { clearTimeout(_searchTimer); search(); }
+});
+// Show mini when the main searchbar scrolls above the viewport top.
+new IntersectionObserver(
+  (entries) => { $("#mini").classList.toggle("on", !entries[0].isIntersecting); },
+  { rootMargin: "0px" },
+).observe(document.querySelector(".searchbar"));
 
 function openDupes(h){
   $("#dupesTitle").textContent = h.name;
