@@ -90,11 +90,6 @@ button:disabled { opacity: 0.4; cursor: default; }
   from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-/* Reduce Motion: WCAG allows opacity-only fades; suppress translate. */
-@media (prefers-reduced-motion: reduce) {
-  .card { animation: card-in-fade 140ms ease-out both; }
-  @keyframes card-in-fade { from { opacity: 0 } to { opacity: 1 } }
-}
 .card img,
 .card .noimg {
   display: block;

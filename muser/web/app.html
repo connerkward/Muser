@@ -78,12 +78,6 @@
     from { opacity:0; transform:translateY(4px); }
     to   { opacity:1; transform:translateY(0); }
   }
-  /* Reduce Motion: WCAG allows opacity-only fades; suppress the translate
-     and shorten the duration. Still gives the user visible feedback. */
-  @media (prefers-reduced-motion: reduce) {
-    .card { animation:card-in-fade 140ms ease-out both; }
-    @keyframes card-in-fade { from { opacity:0 } to { opacity:1 } }
-  }
 
   /* Skeleton loaders: paper-colored squares that pulse in the grid while
      a search is pending. Sit in the same grid cells the real cards will
@@ -93,9 +87,6 @@
   @keyframes skel-pulse {
     0%, 100% { opacity:1; }
     50%      { opacity:0.55; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .skeleton { animation:none; opacity:0.7; }
   }
   .card .thumb { position:relative; aspect-ratio:1; background:var(--paper);
                  cursor:zoom-in; overflow:hidden; }
@@ -206,10 +197,6 @@
   .mini #negMini { flex:0 1 180px; min-width:120px; }
   .mini #negMini::placeholder { color:var(--mut); }
   .mini button.primary { font-size:13px; padding:7px 14px; }
-  @media (prefers-reduced-motion: reduce) {
-    .mini, .mini > * { transition:none; }
-    .mini > *, .mini.on > * { opacity:1; }
-  }
 
   .cluster { cursor:pointer; background:transparent; border:0; padding:0; text-align:left;
              display:flex; flex-direction:column; }
