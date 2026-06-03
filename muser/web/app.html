@@ -192,11 +192,19 @@
   .mini.on > * { opacity:1; }
   .mini h2 { font:italic 400 16px/1 var(--serif); margin:0;
              letter-spacing:-.01em; text-transform:lowercase; color:var(--fg); }
+  .mini-nav { display:flex; gap:14px; }
+  .mini-nav button.nav { font-size:12px; padding:2px 0; }
   .mini input { font-size:13px; padding:7px 12px; }
   .mini #qMini { flex:1; min-width:160px; }
   .mini #negMini { flex:0 1 180px; min-width:120px; }
   .mini #negMini::placeholder { color:var(--mut); }
   .mini button.primary { font-size:13px; padding:7px 14px; }
+  /* Search inputs only meaningful on the Search tab; hide on others so the
+     mini bar shows just wordmark + nav and isn't visually crowded. Typing
+     into qMini from any tab auto-switches to Search and runs the query. */
+  body:not(.view-search) .mini #qMini,
+  body:not(.view-search) .mini #negMini,
+  body:not(.view-search) .mini #goMini { display:none; }
 
   .cluster { cursor:pointer; background:transparent; border:0; padding:0; text-align:left;
              display:flex; flex-direction:column; }
@@ -219,6 +227,13 @@
 <body>
 <div class="mini" id="mini">
   <h2>muser</h2>
+  <nav class="mini-nav">
+    <button class="nav" data-view="search">Search</button>
+    <button class="nav" data-view="explore">Explore</button>
+    <button class="nav" data-view="interesting">Interesting</button>
+    <button class="nav" data-view="review">Review</button>
+    <button class="nav" data-view="ai">AI</button>
+  </nav>
   <input id="qMini" placeholder="Search…" autocomplete="off" />
   <input id="negMini" placeholder="Exclude…" autocomplete="off" />
   <button class="primary" id="goMini">Search</button>
@@ -786,20 +801,14 @@ $("#negMini").addEventListener("keydown", e => {
   if (e.key === "Enter") { clearTimeout(_searchTimer); search(); }
 });
 $("#goMini").onclick = search;
-// Show mini when the main searchbar scrolls above the viewport top — but
-// ONLY on the Search tab. On other tabs the searchbar is display:none, which
-// the IO also reports as not-intersecting; without this guard the mini bar
-// floated into AI/Explore/Interesting/Review where it has nothing to do.
+// Show mini whenever the main <header> scrolls above the viewport top —
+// on every tab. The header is the universal sentinel (always present in
+// the DOM regardless of which view is active), so the same mini behavior
+// works for Search / Explore / Interesting / Review / AI.
 new IntersectionObserver(
-  (entries) => {
-    if ($("#searchView").style.display === "none") {
-      $("#mini").classList.remove("on");
-      return;
-    }
-    $("#mini").classList.toggle("on", !entries[0].isIntersecting);
-  },
+  (entries) => { $("#mini").classList.toggle("on", !entries[0].isIntersecting); },
   { rootMargin: "0px" },
-).observe(document.querySelector(".searchbar"));
+).observe(document.querySelector("header"));
 
 function openDupes(h){
   $("#dupesTitle").textContent = h.name;
@@ -824,18 +833,24 @@ const NAVS={search:"navSearch",explore:"navExplore",interesting:"navInteresting"
 function showView(v){
   for(const k in VIEWS) $("#"+VIEWS[k]).style.display = k===v?"":"none";
   for(const k in NAVS) $("#"+NAVS[k]).className="nav"+(k===v?" on":"");
+  // Mirror the active view to body class so the mini can CSS-toggle which
+  // controls are visible (search inputs only on Search tab) and to the
+  // mini-nav so the active tab is underlined there too.
+  for(const k in VIEWS) document.body.classList.remove("view-"+k);
+  document.body.classList.add("view-"+v);
+  document.querySelectorAll(".mini-nav button").forEach(b => {
+    b.classList.toggle("on", b.dataset.view === v);
+  });
   if(v!=="ai") clearAIPoll();
   if(v==="explore" && !$("#clusterGrid").children.length) loadClusters();
   if(v==="interesting") loadScores("#scoreGrid","#imsg","#imetric");
   if(v==="review") loadScores("#reviewGrid","#rmsg","#rcat");
   if(v==="ai") loadAI();
-  // The mini search bar only makes sense on the Search tab — the other tabs
-  // don't have a main searchbar to "shrink." When leaving Search we force-off;
-  // when returning to Search the IntersectionObserver re-fires (because the
-  // observed .searchbar element flipped from display:none to display:"") and
-  // sets the correct state for the current scroll position.
-  if (v !== "search") $("#mini").classList.remove("on");
 }
+// Wire the mini-nav buttons to the same showView pipeline.
+document.querySelectorAll(".mini-nav button").forEach(b => {
+  b.onclick = () => showView(b.dataset.view);
+});
 for(const k in NAVS) $("#"+NAVS[k]).onclick=()=>showView(k);
 
 // ---- AI tab: images whose C2PA Content Credentials declare AI origin ----
@@ -955,7 +970,7 @@ $("#indexPick").onclick = async () => {
   } catch (e) { toast("index failed (check path)"); }
 };
 
-pollStatus(); loadFolders(); loadClusterChips();
+pollStatus(); loadFolders(); loadClusterChips(); showView("search");
 </script>
 </body>
 </html>
