@@ -1,0 +1,68 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      # Fixed, cacheable model dir (cross-platform; ~ doesn't expand reliably on Windows).
+      HF_HOME: ${{ github.workspace }}/.hf-cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv (pin Python 3.12)
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Cache Hugging Face models (clip-b32)
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.hf-cache
+          key: hf-${{ runner.os }}-clip-b32-v1
+
+      # Linux clipboard tool (xclip) + a virtual display (xvfb) so the headless runner
+      # can actually exercise the X11 clipboard branch; dbus for the reveal path.
+      - name: Linux GUI deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xclip xvfb dbus-x11
+
+      - name: Install Muser
+        shell: bash
+        run: |
+          uv venv
+          uv pip install -e .
+          # Verify the Apple-only extra RESOLVES on every OS (no-op off Apple Silicon).
+          uv pip install -e ".[mac]"
+          uv pip install pytest
+
+      - name: Test — Linux (under virtual display)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: xvfb-run -a uv run --no-sync python -m pytest tests/ -v
+
+      - name: Test — macOS / Windows
+        if: runner.os != 'Linux'
+        shell: bash
+        run: uv run --no-sync python -m pytest tests/ -v
+
+      - name: Smoke — CLI entrypoints resolve
+        shell: bash
+        run: |
+          uv run --no-sync muser --help
+          uv run --no-sync muser models
