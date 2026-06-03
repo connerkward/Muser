@@ -308,6 +308,11 @@
 
 <script>
 const $ = s => document.querySelector(s);
+// Retina-aware thumb size: grid cards are ~280 CSS px wide at the upper end;
+// asking the server for size × DPR keeps the image crisp on any display.
+// Capped at 3× so silly DPR reports don't blow up bandwidth.
+const DPR = Math.min(window.devicePixelRatio || 1, 3);
+const THUMB = Math.round(280 * DPR);
 const enc = encodeURIComponent;
 let toastT;
 function toast(m){ const t=$("#toast"); t.textContent=m; t.classList.add("show");
@@ -607,7 +612,7 @@ function _renderHits(r){
     const badge = dupes>1 ? `<span class="dupe" title="${dupes} copies — click to see all">${dupes} copies</span>` : "";
     const c=document.createElement("div"); c.className="card";
     c.innerHTML=`
-      <div class="thumb"><span class="scoreb" title="${scoreTitle}">${pct}</span>${badge}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}" title="${h.name}"></div>
+      <div class="thumb"><span class="scoreb" title="${scoreTitle}">${pct}</span>${badge}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}&size=${THUMB}" title="${h.name}"></div>
       <div class="meta"><div class="name" title="${h.path}">${h.name}</div>
         <div class="bar"><i style="width:${pct}%"></i></div></div>
       <div class="foot">
