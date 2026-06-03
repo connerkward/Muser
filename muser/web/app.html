@@ -104,6 +104,10 @@
           font-size:10px; padding:2px 7px; border:0; cursor:pointer; }
   .scoreb { position:absolute; top:8px; left:8px; background:rgba(0,0,0,.72); color:#fff;
             font-size:10px; padding:2px 7px; border:0; font-variant-numeric:tabular-nums; }
+  /* C2PA provenance flag — bottom-left, clear of scoreb (TL) and dupe (TR). Amber =
+     "Content Credentials declare AI"; honest "?" because absence proves nothing. */
+  .aiflag { position:absolute; bottom:8px; left:8px; background:rgba(180,120,0,.92); color:#fff;
+            font-size:10px; font-weight:600; letter-spacing:.02em; padding:2px 7px; cursor:help; }
   .card .meta { padding:9px 0 0; }
   .card .name { font-size:12px; color:var(--mut); white-space:nowrap;
                 overflow:hidden; text-overflow:ellipsis; }
@@ -621,10 +625,33 @@ function _renderHits(r){
     c.querySelector(".reveal").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:h.path})}); toast("revealed in Finder"); };
     if(dupes>1) c.querySelector(".dupe").onclick=e=>{ e.stopPropagation(); openDupes(h); };
     g.appendChild(c);
+    c2paFlag(c, h.path);
   });
   _rendered = r.results.length;
   ensureSentinel();
   renderRefinements(r.refinements || []);
+}
+
+// C2PA provenance badge: lazily ask the service whether this file's signed Content
+// Credentials declare it AI-generated; if so, pin an "AI?" flag on the thumb. Fired
+// fire-and-forget per card (server caches by path+mtime). Once we learn c2patool isn't
+// installed we stop asking — no badge, no wasted round-trips.
+let _c2paOff = false;
+async function c2paFlag(card, path){
+  if(_c2paOff) return;
+  try{
+    const v = await (await fetch(`/api/c2pa?path=${enc(path)}`)).json();
+    if(v && v.available === false){ _c2paOff = true; return; }
+    if(!v || !v.ai) return;
+    const t = card.querySelector(".thumb");
+    if(!t || t.querySelector(".aiflag")) return;
+    const b = document.createElement("span");
+    b.className = "aiflag";
+    b.textContent = "AI?";
+    const how = v.kind === "composite" ? "AI-edited" : "AI-generated";
+    b.title = `Content Credentials (C2PA) declare this ${how}${v.tool ? " — " + v.tool : ""}`;
+    t.appendChild(b);
+  }catch(e){}
 }
 
 async function searchImage(path){

@@ -472,13 +472,17 @@ def create_app(model: str = DEFAULT_MODEL):
                                      "type a path into the scope box instead")
 
     @app.get("/api/thumb")
-    def thumb(path: str, size: int = 260):
+    def thumb(path: str, size: int = 540):
+        # Default sized for a Retina card slot: grid cards are ~220–280 CSS
+        # px wide, ×2 device-pixel-ratio = ~440–560 physical px. Frontend
+        # additionally passes size=Math.round(280*dpr) so DPR=3 screens
+        # ride higher and DPR=1 saves bandwidth.
         from .embedders import _load_rgb
 
         try:
             img = _load_rgb(path, max_side=size)
             buf = io.BytesIO()
-            img.save(buf, "JPEG", quality=80)
+            img.save(buf, "JPEG", quality=82)
             return Response(buf.getvalue(), media_type="image/jpeg")
         except Exception:
             raise HTTPException(404, "thumb failed")
@@ -488,6 +492,15 @@ def create_app(model: str = DEFAULT_MODEL):
         if not os.path.isfile(path):
             raise HTTPException(404, "not found")
         return FileResponse(path)
+
+    @app.get("/api/c2pa")
+    def c2pa(path: str):
+        # Content Credentials provenance check. Returns {available, ai, kind, tool};
+        # the UI shows an "AI?" badge only when ai is truthy. Deterministic, $0,
+        # local — but positive-only: ai=False means "no provenance says AI", not
+        # "confirmed real". No-op (available=False) when c2patool isn't installed.
+        from .c2pa import verdict
+        return verdict(path)
 
     @app.post("/api/reveal")
     def reveal(req: PathReq):

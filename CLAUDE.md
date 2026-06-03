@@ -24,7 +24,14 @@ See `REQUIREMENTS.md` for scope/decisions.
   the model once and owns the index; serves JSON API + the web search UI
   (`muser/web/app.html`). Warm search ≈ 30 ms. Endpoints: /api/search, /api/index,
   /api/thumb (PIL), /api/image, /api/reveal (open -R), /api/model, /api/status,
-  /api/folders. **Folder-scoped search:** `/api/search?folder=<dir>` restricts
+  /api/folders, /api/c2pa. **AI-origin badge (C2PA):** `/api/c2pa?path=<file>`
+  shells out to `c2patool` (optional, `brew install c2patool`) and reports whether the
+  file's signed Content Credentials *declare* it AI-generated/-edited (IPTC
+  `trainedAlgorithmicMedia` / `compositeWithTrainedAlgorithmicMedia`). The web UI lazily
+  queries it per result and pins an amber **"AI?"** badge when so. Positive-only and
+  deterministic — `ai=False` means "no provenance says AI", **not** "confirmed real"
+  (local SD/Flux/ComfyUI output carries no C2PA); degrades to `available:false` (no badge)
+  when the binary is absent. Logic in `muser/c2pa.py`. **Folder-scoped search:** `/api/search?folder=<dir>` restricts
   results to images under that directory (any depth) — pushed into LanceDB as a
   `prefilter` half-open range on `path` (`>= dir/ AND < dir⁺`, so wildcard chars
   like `_` can't false-match). The web UI has a **scope** box (datalist of indexed
