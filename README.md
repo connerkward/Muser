@@ -1,5 +1,7 @@
 # Muser
 
+[![CI](https://github.com/connerkward/Muser/actions/workflows/ci.yml/badge.svg)](https://github.com/connerkward/Muser/actions/workflows/ci.yml)
+
 Index, vectorize, and search a folder of images **by natural language** — fully local,
 no API keys, offline. Muser embeds every image with a CLIP/SigLIP-family model (running
 on-device via [transformers](https://github.com/huggingface/transformers)) and stores the
@@ -93,6 +95,25 @@ OS-integration niceties degrade gracefully when the platform tool is missing:
 
 On Linux, install `xclip` (X11) or `wl-clipboard` (Wayland) for the clipboard button, and
 `zenity` or `kdialog` for the native folder picker; otherwise type a path into the scope box.
+
+## Testing
+
+A GitHub Actions matrix ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the
+test suite on **ubuntu / windows / macos** on every push: package install (incl. the
+Apple-only extra resolving as a no-op off Apple Silicon), per-platform MLX gating, the
+server-side clipboard branch (Linux runs under `xvfb` + `xclip`, so the real X11 path
+executes), `_reveal`, the CLI entrypoints, and a CPU end-to-end index+search. Run locally:
+
+```bash
+uv run --with pytest --with pytest-timeout python -m pytest tests/ -v
+```
+
+### Known limitation
+
+Folder-scoped search compares paths case-sensitively, but NTFS and APFS are
+case-insensitive — so scoping with different casing than what was indexed (e.g.
+`C:\Users\Me\Photos` vs a stored `...\me\photos`) can return no results. The fix needs a
+normalized path-key column (a schema change + re-index); exact-case scoping works today.
 
 ## License
 

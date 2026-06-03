@@ -103,6 +103,17 @@ pass over the 17.9k uniques, so reserved for selective lookups, not wired in.
   (`jina-v4-mlx`) is Apple-Silicon-only — gated out of the registry via an import-free
   `find_spec` probe, and the `mac` extra carries `sys_platform`/`platform_machine` markers
   so `uv` installs cleanly off-Apple. UI hint copy: "⌘V (macOS) / Ctrl+V (Win/Linux)".
+  Verified green on ubuntu/windows/macos via `.github/workflows/ci.yml` (`tests/`).
+- **Headless-Linux subprocess gotchas (do NOT reintroduce):** (1) `xclip`/`wl-copy` fork a
+  daemon that keeps owning the selection and *inherits stdout* — so `capture_output=True`
+  deadlocks `subprocess.run` on pipe EOF forever; use `DEVNULL` + a `timeout`. (2)
+  `dbus-send --print-reply` blocks when no FileManager1 service answers; always pass a
+  `timeout`. Both surfaced as multi-hour CI hangs before the fix. CI runs pytest with
+  `--timeout=180` so any new hang fails fast with a stack trace instead of stalling.
+- **Known limitation — case-sensitive folder scoping:** the `/api/search?folder=` path
+  prefilter compares case-sensitively, but NTFS/APFS are case-insensitive, so scoping with
+  altered casing returns 0 results. Proper fix = a normalized `pathkey` column (schema
+  change + re-index); not yet done.
 
 ## Status
 
