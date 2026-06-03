@@ -73,8 +73,11 @@
   .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr));
           gap:34px 16px; }
   .card { background:transparent; border:0; display:flex; flex-direction:column;
-          animation:card-in 180ms ease-out both; }
-  @keyframes card-in { from { opacity:0 } to { opacity:1 } }
+          animation:card-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+  @keyframes card-in {
+    from { opacity:0; transform:translateY(4px); }
+    to   { opacity:1; transform:translateY(0); }
+  }
   @media (prefers-reduced-motion: reduce) { .card { animation:none; } }
   .card .thumb { position:relative; aspect-ratio:1; background:var(--paper);
                  cursor:zoom-in; overflow:hidden; }
