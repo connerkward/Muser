@@ -786,9 +786,18 @@ $("#negMini").addEventListener("keydown", e => {
   if (e.key === "Enter") { clearTimeout(_searchTimer); search(); }
 });
 $("#goMini").onclick = search;
-// Show mini when the main searchbar scrolls above the viewport top.
+// Show mini when the main searchbar scrolls above the viewport top — but
+// ONLY on the Search tab. On other tabs the searchbar is display:none, which
+// the IO also reports as not-intersecting; without this guard the mini bar
+// floated into AI/Explore/Interesting/Review where it has nothing to do.
 new IntersectionObserver(
-  (entries) => { $("#mini").classList.toggle("on", !entries[0].isIntersecting); },
+  (entries) => {
+    if ($("#searchView").style.display === "none") {
+      $("#mini").classList.remove("on");
+      return;
+    }
+    $("#mini").classList.toggle("on", !entries[0].isIntersecting);
+  },
   { rootMargin: "0px" },
 ).observe(document.querySelector(".searchbar"));
 
@@ -820,6 +829,12 @@ function showView(v){
   if(v==="interesting") loadScores("#scoreGrid","#imsg","#imetric");
   if(v==="review") loadScores("#reviewGrid","#rmsg","#rcat");
   if(v==="ai") loadAI();
+  // The mini search bar only makes sense on the Search tab — the other tabs
+  // don't have a main searchbar to "shrink." When leaving Search we force-off;
+  // when returning to Search the IntersectionObserver re-fires (because the
+  // observed .searchbar element flipped from display:none to display:"") and
+  // sets the correct state for the current scroll position.
+  if (v !== "search") $("#mini").classList.remove("on");
 }
 for(const k in NAVS) $("#"+NAVS[k]).onclick=()=>showView(k);
 
