@@ -78,7 +78,21 @@ button:disabled { opacity: 0.4; cursor: default; }
   gap: 28px 14px;
   margin-top: 18px;
 }
-.card { background: transparent; border: 0; cursor: pointer; display: flex; flex-direction: column; }
+.card {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  animation: card-in 180ms ease-out both;
+}
+@keyframes card-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .card { animation: none; }
+}
 .card img,
 .card .noimg {
   display: block;
