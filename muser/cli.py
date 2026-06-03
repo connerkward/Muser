@@ -208,12 +208,20 @@ def score(model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to sc
 
 
 @app.command()
-def detect(model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to scan")):
+def detect(
+    folder: str = typer.Option(None, "--in", help="Restrict the scan to images under this folder"),
+    model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to scan"),
+):
     """Scan the index for AI-generated images via C2PA Content Credentials (writes ~/.muser/c2pa.json).
+
+    Runs fully standalone — no running `muser serve` required, and no embedding model is
+    loaded; it only reads indexed paths from LanceDB and shells out to c2patool. Safe to run
+    while the service is up too (LanceDB allows concurrent readers). The web UI's "AI" tab
+    reads the same ~/.muser/c2pa.json this writes.
 
     Positive-only: flags images whose signed provenance declares AI origin (OpenAI,
     Firefly, Google…). Local SD/Flux/ComfyUI output carries no credentials, so this
-    is a lower bound, not every AI image. Results show in the web UI's "AI" tab.
+    is a lower bound, not every AI image.
     """
     from .c2pa import ai_images, available, scan
 
@@ -222,9 +230,11 @@ def detect(model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to s
         raise typer.Exit(1)
     from .index import MuserIndex
 
-    paths = MuserIndex().paths(model)
+    under = str(Path(folder).expanduser()) if folder else None
+    paths = MuserIndex().paths(model, under=under)
     if not paths:
-        con.print(f"[red]no index for model[/] {model} — run `muser index <folder>` first")
+        where = f" under {under}" if under else ""
+        con.print(f"[red]no indexed images[/]{where} for model {model} — run `muser index <folder>` first")
         raise typer.Exit(1)
 
     def prog(done, total, found):
