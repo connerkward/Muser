@@ -199,6 +199,37 @@ def score(model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to sc
 
 
 @app.command()
+def detect(model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to scan")):
+    """Scan the index for AI-generated images via C2PA Content Credentials (writes ~/.muser/c2pa.json).
+
+    Positive-only: flags images whose signed provenance declares AI origin (OpenAI,
+    Firefly, Google…). Local SD/Flux/ComfyUI output carries no credentials, so this
+    is a lower bound, not every AI image. Results show in the web UI's "AI" tab.
+    """
+    from .c2pa import ai_images, available, scan
+
+    if not available():
+        con.print("[red]c2patool not installed[/] — `brew install c2patool` (or `cargo install c2patool`)")
+        raise typer.Exit(1)
+    from .index import MuserIndex
+
+    t = MuserIndex()._open(model)
+    if t is None:
+        con.print(f"[red]no index for model[/] {model} — run `muser index <folder>` first")
+        raise typer.Exit(1)
+    paths = [r["path"] for r in t.search().select(["path"]).limit(100_000_000).to_list()]
+
+    def prog(done, total, found):
+        con.print(f"  scanning {done}/{total} — {found} AI-flagged", end="\r")
+
+    scan(paths, progress=prog)
+    ai = ai_images()
+    con.print(f"\n[bold]{len(ai)}[/] AI-generated image(s) found via C2PA over {len(paths)} indexed.")
+    for h in ai[:25]:
+        con.print(f"  [dim]{h['kind'] or 'ai':9}[/] {h['name']}  [dim]{h['tool'] or ''}[/]")
+
+
+@app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", help="Bind address"),
     port: int = typer.Option(7777, help="Port"),

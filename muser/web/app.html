@@ -210,6 +210,7 @@
   <button class="nav" id="navExplore">Explore</button>
   <button class="nav" id="navInteresting">Interesting</button>
   <button class="nav" id="navReview">Review</button>
+  <button class="nav" id="navAI">AI</button>
   <span class="mut" id="status">…</span>
   <span class="sp"></span>
   <span class="spinner" id="spinner" style="display:none" title="Working…"></span>
@@ -278,6 +279,16 @@
   </div>
   <div style="font-size:11px;color:#caa468;margin-bottom:14px">⚠︎ Heuristic zero-shot flags for reviewing your <i>own</i> library — not a classifier or a verdict. Highest-scoring first; skim and decide.</div>
   <div class="grid" id="reviewGrid"></div>
+</div>
+
+<div class="wrap" id="aiView" style="display:none">
+  <div class="row" style="margin-bottom:8px;display:flex;align-items:center;gap:14px">
+    <span class="mut" id="aimsg">…</span>
+    <span style="flex:1"></span>
+    <button id="aiScan" style="display:none">Scan library</button>
+  </div>
+  <div style="font-size:11px;color:#caa468;margin-bottom:14px">Images whose signed <b>C2PA Content Credentials</b> declare AI origin (OpenAI, Adobe Firefly, Google…). Positive-only — local Stable Diffusion / Flux / ComfyUI output carries no credentials, so this is a <i>lower bound</i>, not every AI image.</div>
+  <div class="grid" id="aiGrid"></div>
 </div>
 
 <div id="busy" class="busy" style="display:none">
@@ -754,16 +765,71 @@ $("#dupesClose").onclick=()=>$("#dupes").classList.remove("show");
 $("#dupes").onclick=e=>{ if(e.target.id==="dupes") $("#dupes").classList.remove("show"); };
 
 // ---- view switching (Search / Explore / Interesting / Review) ----
-const VIEWS={search:"searchView",explore:"exploreView",interesting:"interestingView",review:"reviewView"};
-const NAVS={search:"navSearch",explore:"navExplore",interesting:"navInteresting",review:"navReview"};
+const VIEWS={search:"searchView",explore:"exploreView",interesting:"interestingView",review:"reviewView",ai:"aiView"};
+const NAVS={search:"navSearch",explore:"navExplore",interesting:"navInteresting",review:"navReview",ai:"navAI"};
 function showView(v){
   for(const k in VIEWS) $("#"+VIEWS[k]).style.display = k===v?"":"none";
   for(const k in NAVS) $("#"+NAVS[k]).className="nav"+(k===v?" on":"");
+  if(v!=="ai") clearAIPoll();
   if(v==="explore" && !$("#clusterGrid").children.length) loadClusters();
   if(v==="interesting") loadScores("#scoreGrid","#imsg","#imetric");
   if(v==="review") loadScores("#reviewGrid","#rmsg","#rcat");
+  if(v==="ai") loadAI();
 }
 for(const k in NAVS) $("#"+NAVS[k]).onclick=()=>showView(k);
+
+// ---- AI tab: images whose C2PA Content Credentials declare AI origin ----
+// Backed by a one-time, persisted library scan (~/.muser/c2pa.json) — probing
+// every file live on each open isn't feasible. The tab reads the cache and can
+// trigger/poll a background scan with progress.
+let _aiPoll=null;
+function clearAIPoll(){ if(_aiPoll){ clearInterval(_aiPoll); _aiPoll=null; } }
+async function loadAI(){
+  let r; try{ r=await (await fetch("/api/ai")).json(); }catch(e){ return; }
+  const msg=$("#aimsg"), btn=$("#aiScan");
+  if(!r.available){
+    msg.textContent="c2patool not installed — install it (e.g. `brew install c2patool`) to detect AI-tagged images.";
+    btn.style.display="none"; $("#aiGrid").innerHTML=""; clearAIPoll(); return;
+  }
+  btn.style.display=""; btn.disabled=r.scanning;
+  btn.textContent=r.built?"Rescan":"Scan library"; btn.onclick=startAIScan;
+  if(r.scanning){
+    const pct=r.total?Math.round(r.done/r.total*100):0;
+    const bar="["+"#".repeat(pct/10|0)+"-".repeat(10-(pct/10|0))+"]";
+    msg.textContent=`scanning ${bar} ${r.done.toLocaleString()}/${r.total.toLocaleString()} (${pct}%) — ${r.found} AI-flagged so far`;
+    if(!_aiPoll) _aiPoll=setInterval(loadAI,800);
+  } else {
+    clearAIPoll();
+    msg.textContent = !r.built
+      ? "Not scanned yet — click Scan to check your library’s Content Credentials."
+      : `${(r.items||[]).length.toLocaleString()} AI-generated image(s) found via C2PA`;
+  }
+  renderAI(r.items||[]);
+}
+async function startAIScan(){
+  $("#aiScan").disabled=true;
+  try{ await fetch("/api/ai/scan",{method:"POST"}); }catch(e){ toast("scan failed"); }
+  loadAI();
+}
+function renderAI(items){
+  const g=$("#aiGrid");
+  if(g.dataset.n==String(items.length) && g.children.length) return;  // avoid re-render churn while polling
+  g.dataset.n=items.length; g.innerHTML="";
+  items.forEach(h=>{
+    const how = h.kind==="composite" ? "AI-edited" : "AI";
+    const c=document.createElement("div"); c.className="card";
+    c.innerHTML=`<div class="thumb"><span class="aiflag" title="C2PA declares this ${h.kind==="composite"?"AI-edited":"AI-generated"}${h.tool?" — "+h.tool:""}">${how}?</span><img loading="lazy" src="/api/thumb?path=${enc(h.path)}"></div>
+      <div class="meta"><div class="name" title="${h.path}">${h.name}</div></div>
+      <div class="foot"><button class="sim" title="Find visually similar">Similar</button>
+        <span class="more"><button class="lens" title="Copy image + open Google Lens">Lens</button>
+        <button class="reveal" title="Reveal in Finder">Reveal</button></span></div>`;
+    c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
+    c.querySelector(".sim").onclick=()=>{ showView("search"); searchImage(h.path); };
+    c.querySelector(".lens").onclick=e=>lensSearch(h.path,e.currentTarget);
+    c.querySelector(".reveal").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:h.path})}); toast("revealed in Finder"); };
+    g.appendChild(c);
+  });
+}
 
 async function loadScores(gridSel,msgSel,metricSel){
   const metric=$(metricSel).value;

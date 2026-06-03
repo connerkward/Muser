@@ -59,6 +59,9 @@ class State:
         self._ready = threading.Event()
         self._lock = threading.Lock()
         self.task: dict | None = None
+        # C2PA library-scan progress for the "AI" tab. Separate from `task` so the
+        # long scan doesn't trip the model/index busy overlay. Polled by /api/ai.
+        self.c2pa = {"scanning": False, "done": 0, "total": 0, "found": 0}
 
     def warm(self):
         # Idempotent. Holds a lock so two concurrent first-callers don't both
@@ -98,6 +101,66 @@ class State:
             self.embedder = None
             self.label_index = None
         self.start_warm()
+
+
+def _smart_crop_square(img, target: int):
+    """Crop a square out of `img` framed around its most edge-dense window,
+    then resize to target × target.
+
+    For near-square images this collapses to ImageOps.fit (a centered crop).
+    For ultra-wide / tall images we'd otherwise lose resolution: `_load_rgb`
+    only caps the long side, so a 4000×1000 image at max_side=540 becomes
+    540×135 — and the card's `object-fit: cover` crop then has only 135 source
+    lines of vertical resolution to work with. By cropping to a square *first*
+    (at full source resolution) and *then* resizing, the rendered card always
+    gets the full target × target = ~540² source pixels.
+
+    Auto-framing uses a cheap edge-energy proxy: |dx| + |dy| on a 400-px-max
+    working copy, summed across the cropped axis, cumulative-sum trick to find
+    the best window in O(n). No model, no extra deps. Works well on the kinds
+    of imagery in this corpus (creative/AI-gen/photo); doesn't try to be
+    face-aware. Cost: ~few ms per image; amortized to zero by the disk cache.
+    """
+    import numpy as np
+    from PIL import Image, ImageOps
+
+    W, H = img.size
+    if abs(W - H) <= 4:  # already-square: just centered fit
+        return ImageOps.fit(img, (target, target), Image.LANCZOS, centering=(0.5, 0.5))
+
+    # Low-res working copy for the saliency pass — full-res is wasteful.
+    work = img.copy()
+    work.thumbnail((400, 400), Image.BILINEAR)
+    wW, wH = work.size
+    gray = np.asarray(work.convert("L"), dtype=np.int16)
+    gx = np.abs(np.diff(gray, axis=1, prepend=gray[:, :1]))
+    gy = np.abs(np.diff(gray, axis=0, prepend=gray[:1, :]))
+    energy = (gx + gy).astype(np.float32)
+
+    if wW > wH:  # landscape — slide horizontally
+        col = energy.sum(axis=0)
+        cum = np.concatenate(([0.0], col.cumsum()))
+        win = wH
+        scores = cum[win:] - cum[:-win]
+        best_w = int(scores.argmax()) if scores.size else 0
+        side = H  # crop a full-height square out of source
+        x0 = int(round(best_w * (W / wW)))
+        x0 = max(0, min(x0, W - side))
+        y0 = 0
+        crop = img.crop((x0, y0, x0 + side, y0 + side))
+    else:  # portrait — slide vertically
+        row = energy.sum(axis=1)
+        cum = np.concatenate(([0.0], row.cumsum()))
+        win = wW
+        scores = cum[win:] - cum[:-win]
+        best_h = int(scores.argmax()) if scores.size else 0
+        side = W
+        y0 = int(round(best_h * (H / wH)))
+        y0 = max(0, min(y0, H - side))
+        x0 = 0
+        crop = img.crop((x0, y0, x0 + side, y0 + side))
+
+    return crop.resize((target, target), Image.LANCZOS)
 
 
 def _reveal(path: str):
@@ -471,19 +534,50 @@ def create_app(model: str = DEFAULT_MODEL):
             raise HTTPException(501, "native folder picker unavailable on this platform — "
                                      "type a path into the scope box instead")
 
+    # On-disk thumb cache. Keyed on (path, mtime, size) so editing a file
+    # invalidates its cached thumbs but the same (path, size) for an
+    # unchanged file always hits. Lives at ~/.muser/thumb_cache; delete
+    # the dir to invalidate everything. Versioned key prefix so we can
+    # bust the cache when the crop algorithm changes.
+    THUMB_CACHE = Path.home() / ".muser" / "thumb_cache"
+    THUMB_CACHE.mkdir(parents=True, exist_ok=True)
+    THUMB_KEY_VERSION = "v2-smartcrop"
+
     @app.get("/api/thumb")
     def thumb(path: str, size: int = 540):
-        # Default sized for a Retina card slot: grid cards are ~220–280 CSS
-        # px wide, ×2 device-pixel-ratio = ~440–560 physical px. Frontend
-        # additionally passes size=Math.round(280*dpr) so DPR=3 screens
-        # ride higher and DPR=1 saves bandwidth.
-        from .embedders import _load_rgb
-
+        # Frontend asks for size=Math.round(280*devicePixelRatio); 540 is the
+        # safe default for DPR=2. The thumb is a smart-cropped *square* (focal
+        # window picked by edge energy), so the card's `object-fit: cover` is
+        # already a no-op and ultra-wide / tall sources don't get squashed.
+        if not os.path.isfile(path):
+            raise HTTPException(404, "not found")
         try:
-            img = _load_rgb(path, max_side=size)
-            buf = io.BytesIO()
-            img.save(buf, "JPEG", quality=82)
-            return Response(buf.getvalue(), media_type="image/jpeg")
+            mtime = int(os.path.getmtime(path))
+        except OSError:
+            raise HTTPException(404, "stat failed")
+        import hashlib
+        key = hashlib.blake2b(
+            f"{THUMB_KEY_VERSION}|{path}|{mtime}|{size}".encode(),
+            digest_size=12,
+        ).hexdigest()
+        cached = THUMB_CACHE / f"{key}.jpg"
+        # The URL key changes when mtime or size changes, so we can be
+        # aggressive with the browser cache. A week is generous.
+        headers = {"Cache-Control": "public, max-age=604800, immutable"}
+        if cached.exists():
+            return FileResponse(cached, media_type="image/jpeg", headers=headers)
+        from .embedders import _load_rgb
+        try:
+            # Decode at a working res that's big enough to crop a square from
+            # the short side then resize to `size`. max_side = 2 * size covers
+            # most aspect ratios; ultra-wide (e.g. 16:1) would still benefit
+            # but the bandwidth cost of decoding the original is prohibitive.
+            img = _load_rgb(path, max_side=max(size * 2, 1024))
+            sq = _smart_crop_square(img, size)
+            tmp = cached.with_suffix(".jpg.tmp")
+            sq.save(tmp, "JPEG", quality=82, optimize=False)
+            tmp.replace(cached)  # atomic swap so partial writes never serve
+            return FileResponse(cached, media_type="image/jpeg", headers=headers)
         except Exception:
             raise HTTPException(404, "thumb failed")
 
@@ -492,6 +586,46 @@ def create_app(model: str = DEFAULT_MODEL):
         if not os.path.isfile(path):
             raise HTTPException(404, "not found")
         return FileResponse(path)
+
+    @app.get("/api/ai")
+    def ai_list():
+        # The "AI" tab. Returns AI-flagged images from the persisted C2PA scan plus
+        # live scan progress. Positive-only and a lower bound — only cloud generators
+        # (OpenAI/Firefly/Google) ship Content Credentials; local SD/Flux carry none.
+        from . import c2pa as c2
+        avail = c2.available()
+        return {
+            "available": avail,
+            "built": c2.cache_exists(),
+            "items": c2.ai_images() if avail else [],
+            **state.c2pa,
+        }
+
+    @app.post("/api/ai/scan")
+    def ai_scan():
+        # Kick off a background C2PA scan over every indexed path. Idempotent while
+        # one is running. Progress lands in state.c2pa, surfaced via /api/ai.
+        from . import c2pa as c2
+        if not c2.available():
+            raise HTTPException(501, "c2patool not installed — `brew install c2patool`")
+        if state.c2pa["scanning"]:
+            return {"started": False, "scanning": True}
+        t = state.index._open(state.model_name)
+        if t is None:
+            return {"started": False, "total": 0}
+        paths = [r["path"] for r in t.search().select(["path"]).limit(100_000_000).to_list()]
+        state.c2pa = {"scanning": True, "done": 0, "total": len(paths), "found": 0}
+
+        def _prog(done, total, found):
+            state.c2pa.update(done=done, total=total, found=found)
+
+        def _bg():
+            try:
+                c2.scan(paths, progress=_prog)
+            finally:
+                state.c2pa["scanning"] = False
+        threading.Thread(target=_bg, daemon=True, name="muser-c2pa-scan").start()
+        return {"started": True, "total": len(paths)}
 
     @app.get("/api/c2pa")
     def c2pa(path: str):

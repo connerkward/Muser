@@ -19,19 +19,26 @@ See `REQUIREMENTS.md` for scope/decisions.
   table per model (`img__<model>`), cosine over L2-normalized vectors.
   Incremental by mtime; skips corrupt files.
 - `muser/cli.py` — `muser` entrypoint (typer): `index`, `search`, `bench`,
-  `models`, `serve`, `web`.
+  `models`, `cluster`, `score`, `detect`, `serve`, `web`. `detect` runs the C2PA
+  library scan headless (writes `~/.muser/c2pa.json`; same data the web "AI" tab uses).
 - `muser/service.py` — **embedded service** (`muser serve`): FastAPI app that warms
   the model once and owns the index; serves JSON API + the web search UI
   (`muser/web/app.html`). Warm search ≈ 30 ms. Endpoints: /api/search, /api/index,
   /api/thumb (PIL), /api/image, /api/reveal (open -R), /api/model, /api/status,
-  /api/folders, /api/c2pa. **AI-origin badge (C2PA):** `/api/c2pa?path=<file>`
-  shells out to `c2patool` (optional, `brew install c2patool`) and reports whether the
-  file's signed Content Credentials *declare* it AI-generated/-edited (IPTC
-  `trainedAlgorithmicMedia` / `compositeWithTrainedAlgorithmicMedia`). The web UI lazily
-  queries it per result and pins an amber **"AI?"** badge when so. Positive-only and
-  deterministic — `ai=False` means "no provenance says AI", **not** "confirmed real"
-  (local SD/Flux/ComfyUI output carries no C2PA); degrades to `available:false` (no badge)
-  when the binary is absent. Logic in `muser/c2pa.py`. **Folder-scoped search:** `/api/search?folder=<dir>` restricts
+  /api/folders, /api/c2pa, /api/ai, /api/ai/scan. **AI-origin detection (C2PA):**
+  `c2patool` (optional, `brew install c2patool`) reads a file's signed Content
+  Credentials and reports whether they *declare* it AI-generated/-edited (IPTC
+  `trainedAlgorithmicMedia` / `compositeWithTrainedAlgorithmicMedia`). Two surfaces,
+  both in `muser/c2pa.py`: (1) **per-result badge** — `/api/c2pa?path=` is queried lazily
+  by the web UI, pinning an amber **"AI?"** badge on flagged search results; (2) **"AI"
+  tab** — `/api/ai` lists every flagged image from a persisted library scan
+  (`~/.muser/c2pa.json`, incremental by mtime+size, parallel; same sidecar pattern as
+  `scores.json`/`clusters.json`), `POST /api/ai/scan` runs that scan in the background
+  with progress, and `muser detect` does it headless. Positive-only and a **lower bound** —
+  only cloud generators (OpenAI/Firefly/Google) ship credentials; local SD/Flux/ComfyUI
+  output carries none, so `ai=False`/absence ≠ "confirmed real". Degrades to
+  `available:false` (no badge, no tab results) when the binary is absent.
+  **Folder-scoped search:** `/api/search?folder=<dir>` restricts
   results to images under that directory (any depth) — pushed into LanceDB as a
   `prefilter` half-open range on `path` (`>= dir/ AND < dir⁺`, so wildcard chars
   like `_` can't false-match). The web UI has a **scope** box (datalist of indexed

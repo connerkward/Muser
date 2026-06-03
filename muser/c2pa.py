@@ -26,6 +26,8 @@ import json
 import os
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 # IPTC digitalSourceType codes that mean "AI was involved". Matched as a
 # case-insensitive substring against the whole report, so the check survives
@@ -111,3 +113,87 @@ def verdict(path: str) -> dict:
             pass
     _cache[key] = res
     return res
+
+
+# ---------------------------------------------------------------------------
+# Library scan — the "AI images" tab. Probing 27k+ files on every tab open is a
+# non-starter (one subprocess each), so a scan runs once over the whole index and
+# persists verdicts to ~/.muser/c2pa.json, mirroring scores.json / clusters.json.
+# Incremental: a file unchanged by (mtime, size) is skipped on re-scan. The scan
+# is subprocess-bound, so a thread pool parallelizes it (GIL released in execve).
+# ---------------------------------------------------------------------------
+
+CACHE_JSON = Path.home() / ".muser" / "c2pa.json"
+
+
+def cache_exists() -> bool:
+    return CACHE_JSON.exists()
+
+
+def _load_cache() -> dict:
+    try:
+        return json.loads(CACHE_JSON.read_text()).get("entries", {})
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_cache(entries: dict) -> None:
+    CACHE_JSON.parent.mkdir(parents=True, exist_ok=True)
+    CACHE_JSON.write_text(json.dumps({"version": 1, "entries": entries}))
+
+
+def ai_images() -> list[dict]:
+    """AI-positive entries from the persisted scan, newest-tagged first, existing files only."""
+    out = []
+    for p, e in _load_cache().items():
+        if e.get("ai") and os.path.exists(p):
+            out.append({"path": p, "name": os.path.basename(p),
+                        "kind": e.get("kind"), "tool": e.get("tool")})
+    return out
+
+
+def scan(paths, progress=None, workers: int = 12) -> dict:
+    """Probe every path's Content Credentials, persisting verdicts. Returns the cache.
+
+    ``progress(done, total, found)`` is called as it goes. Unchanged files are
+    skipped via the persisted (mtime, size); only new/changed files spawn c2patool.
+    """
+    if not available():
+        return {}
+    cache = _load_cache()
+    total, done, found, changed = len(paths), 0, 0, False
+
+    todo = []
+    for p in paths:
+        try:
+            st = os.stat(p)
+        except OSError:
+            done += 1
+            continue
+        e = cache.get(p)
+        if e and e.get("m") == st.st_mtime_ns and e.get("s") == st.st_size:
+            done += 1
+            found += bool(e.get("ai"))
+            continue
+        todo.append((p, st))
+    if progress:
+        progress(done, total, found)
+
+    def work(item):
+        p, st = item
+        return p, st, verdict(p)
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for p, st, v in ex.map(work, todo):
+            cache[p] = {"m": st.st_mtime_ns, "s": st.st_size,
+                        "ai": bool(v.get("ai")), "kind": v.get("kind"), "tool": v.get("tool")}
+            changed = True
+            done += 1
+            found += bool(v.get("ai"))
+            if progress and done % 50 == 0:
+                progress(done, total, found)
+    if changed:
+        _save_cache(cache)
+    if progress:
+        progress(done, total, found)
+    return cache
