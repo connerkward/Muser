@@ -17,6 +17,7 @@ jobs:
   test:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25   # hard ceiling so a hang fails fast instead of burning hours
     strategy:
       fail-fast: false
       matrix:
@@ -52,17 +53,18 @@ jobs:
           uv pip install -e .
           # Verify the Apple-only extra RESOLVES on every OS (no-op off Apple Silicon).
           uv pip install -e ".[mac]"
-          uv pip install pytest
+          uv pip install pytest pytest-timeout
 
+      # --timeout fails (with a stack dump of the hung thread) instead of hanging the job.
       - name: Test — Linux (under virtual display)
         if: runner.os == 'Linux'
         shell: bash
-        run: xvfb-run -a uv run --no-sync python -m pytest tests/ -v
+        run: xvfb-run -a uv run --no-sync python -m pytest tests/ -v --timeout=180 --timeout-method=thread
 
       - name: Test — macOS / Windows
         if: runner.os != 'Linux'
         shell: bash
-        run: uv run --no-sync python -m pytest tests/ -v
+        run: uv run --no-sync python -m pytest tests/ -v --timeout=180 --timeout-method=thread
 
       - name: Smoke — CLI entrypoints resolve
         shell: bash

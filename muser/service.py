@@ -179,10 +179,13 @@ def _reveal(path: str):
                  "--dest=org.freedesktop.FileManager1", "/org/freedesktop/FileManager1",
                  "org.freedesktop.FileManager1.ShowItems",
                  f"array:string:file://{path}", "string:"],
-                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                check=True, timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            subprocess.run(["xdg-open", os.path.dirname(path)], check=False)
+        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            try:
+                subprocess.run(["xdg-open", os.path.dirname(path)], check=False, timeout=10)
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass
 
 
 def _copy_image_to_clipboard(path: str) -> bool:
