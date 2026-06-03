@@ -197,7 +197,11 @@
   .mini.on { transform:translateY(0); }
   .mini h2 { font:italic 400 16px/1 var(--serif); margin:0;
              letter-spacing:-.01em; text-transform:lowercase; color:var(--fg); }
-  .mini input { flex:1; font-size:13px; padding:7px 12px; max-width:640px; }
+  .mini input { font-size:13px; padding:7px 12px; }
+  .mini #qMini { flex:1; min-width:160px; }
+  .mini #negMini { flex:0 1 180px; min-width:120px; }
+  .mini #negMini::placeholder { color:var(--mut); }
+  .mini button.primary { font-size:13px; padding:7px 14px; }
   @media (prefers-reduced-motion: reduce) {
     .mini { transition:none; }
   }
@@ -224,6 +228,8 @@
 <div class="mini" id="mini">
   <h2>muser</h2>
   <input id="qMini" placeholder="Search…" autocomplete="off" />
+  <input id="negMini" placeholder="Exclude…" autocomplete="off" />
+  <button class="primary" id="goMini">Search</button>
 </div>
 <header>
   <h1>Muser</h1>
@@ -763,13 +769,14 @@ $("#q").addEventListener("input", ()=>{
   $("#qMini").value = $("#q").value;     // mirror main → mini
   liveSearch();
 });
+$("#neg").addEventListener("input", () => { $("#negMini").value = $("#neg").value; });
 $("#q").addEventListener("keydown", e => {
   if (e.key === "Enter") { clearTimeout(_searchTimer); search(); }
 });
 $("#neg").addEventListener("input",   ()=>{ if($("#q").value.trim().length >= 2) liveSearch(); });
 $("#neg").addEventListener("keydown", e=>{ if(e.key==="Enter"){ clearTimeout(_searchTimer); search(); } });
 
-// Mini search: drives the same #q under the hood, so all the existing
+// Mini search: drives the same #q / #neg under the hood, so all the existing
 // debounce / search / chip / refinement plumbing comes along for free.
 $("#qMini").addEventListener("input", () => {
   $("#q").value = $("#qMini").value;     // mirror mini → main
@@ -779,6 +786,14 @@ $("#qMini").addEventListener("input", () => {
 $("#qMini").addEventListener("keydown", e => {
   if (e.key === "Enter") { clearTimeout(_searchTimer); search(); }
 });
+$("#negMini").addEventListener("input", () => {
+  $("#neg").value = $("#negMini").value;
+  if ($("#q").value.trim().length >= 2) liveSearch();
+});
+$("#negMini").addEventListener("keydown", e => {
+  if (e.key === "Enter") { clearTimeout(_searchTimer); search(); }
+});
+$("#goMini").onclick = search;
 // Show mini when the main searchbar scrolls above the viewport top.
 new IntersectionObserver(
   (entries) => { $("#mini").classList.toggle("on", !entries[0].isIntersecting); },
