@@ -85,24 +85,17 @@
     @keyframes card-in-fade { from { opacity:0 } to { opacity:1 } }
   }
 
-  /* Search progress: a hair-thin bar under the searchbar with a dark
-     segment sliding across, indeterminate. Fades in over 80ms so warm
-     searches (~30ms) don't flash a fully-opaque bar. */
-  .searching-bar { position:relative; height:1px; background:var(--line);
-                   margin:0 0 14px; overflow:hidden; opacity:0;
-                   transition:opacity 80ms ease; pointer-events:none; }
-  .searching-bar.on { opacity:1; }
-  .searching-bar::before { content:""; position:absolute; top:0; bottom:0;
-                           width:30%; background:var(--fg); transform:translateX(-100%);
-                           animation:search-slide 1.1s ease-in-out infinite; }
-  @keyframes search-slide {
-    0%   { transform:translateX(-100%); }
-    100% { transform:translateX(400%); }
+  /* Skeleton loaders: paper-colored squares that pulse in the grid while
+     a search is pending. Sit in the same grid cells the real cards will
+     occupy, so there's no layout shift when results swap in. */
+  .skeleton { aspect-ratio:1; background:var(--paper);
+              animation:skel-pulse 1.4s ease-in-out infinite; }
+  @keyframes skel-pulse {
+    0%, 100% { opacity:1; }
+    50%      { opacity:0.55; }
   }
   @media (prefers-reduced-motion: reduce) {
-    /* Replace the moving segment with a still hairline that's just visible. */
-    .searching-bar::before { animation:none; width:100%; transform:none;
-                             background:var(--mut); }
+    .skeleton { animation:none; opacity:0.7; }
   }
   .card .thumb { position:relative; aspect-ratio:1; background:var(--paper);
                  cursor:zoom-in; overflow:hidden; }
@@ -228,7 +221,6 @@
     <input id="neg" class="neg" placeholder="Exclude (concept to push away from)…" title="Subtracted from the query vector — CLIP can't read 'not X' in the main box; this field does it as embedding-space arithmetic" autocomplete="off" />
     <button class="primary" id="go">Search</button>
   </div>
-  <div class="searching-bar" id="searching"></div>
   <div class="chips" id="chips"></div>
   <div class="row tools">
     <span>Scope:</span>
@@ -558,12 +550,18 @@ function ensureSentinel(){                          // a 1px marker kept just be
   }
   $("#results").after(s);                          // re-anchor below the grid as it grows
 }
-// Searching indicator: refcounted so overlapping searches don't flicker off
-// while one is still in flight. Wraps a fetch in show/hide. The bar's CSS
-// opacity-transitions in over 80ms, so a ~30ms warm search never flashes.
-let _searchingN = 0;
-function searchingOn(){ _searchingN++; $("#searching").classList.add("on"); }
-function searchingOff(){ _searchingN = Math.max(0, _searchingN - 1); if (!_searchingN) $("#searching").classList.remove("on"); }
+// Skeleton placeholders shown in the gallery grid while a search is pending.
+// Same aspect-ratio + paper color as real cards' thumb backgrounds, so when
+// real cards land in their place there's no layout shift.
+function showSkeletons(n = 12){
+  const g = $("#results");
+  g.replaceChildren();
+  for (let i = 0; i < n; i++) {
+    const d = document.createElement("div");
+    d.className = "skeleton";
+    g.appendChild(d);
+  }
+}
 
 async function search(){
   if (_busy) return;  // overlay covers UI while the model is loading
@@ -573,15 +571,13 @@ async function search(){
   const folder=$("#scope").value.trim();
   const neg=$("#neg").value.trim();
   const key=q+"|"+folder+"|"+neg;
-  if(key!==_lastKey){ _k=K_STEP; _lastKey=key; _rendered=0; _hasMore=true; $("#results").innerHTML=""; }  // new query → reset + clear
+  if(key!==_lastKey){ _k=K_STEP; _lastKey=key; _rendered=0; _hasMore=true; showSkeletons(12); }  // new query → reset + show skeletons
   _mode="text"; _loading=true;
   if(_searchAbort) _searchAbort.abort();
   _searchAbort = new AbortController();
   let r;
-  searchingOn();
   try { r = await (await fetch(`/api/search?q=${enc(q)}&k=${_k}${folder?`&folder=${enc(folder)}`:""}${neg?`&neg=${enc(neg)}`:""}`, {signal:_searchAbort.signal})).json(); }
-  catch(e){ searchingOff(); if(e.name==="AbortError") return; _loading=false; throw e; }   // abort: a newer search now owns _loading
-  searchingOff();
+  catch(e){ if(e.name==="AbortError") return; _loading=false; throw e; }   // abort: a newer search now owns _loading
   _renderHits(r);
   _loading=false;
   maybeLoadMore();                                 // short page / tall window: keep filling until the buffer is satisfied
@@ -598,6 +594,7 @@ function _renderHits(r){
     _hasMore=false; renderRefinements([]); return;
   }
   _hasMore = _mode==="text" && r.results.length >= _k;   // a full page back ⇒ more are ranked below
+  if (_rendered === 0) g.replaceChildren();              // first page back: drop skeletons before appending real cards
   r.results.slice(_rendered).forEach(h=>{                // append only the newly-fetched tail (kNN prefix is stable)
     const conf = h.prob ?? h.score;                       // calibrated P(match) when the model provides it, else raw cosine
     const pct=Math.max(0,Math.min(100,Math.round(conf*100)));
@@ -637,12 +634,10 @@ async function searchImage(path){
   $("#empty").style.display="none";
   $("#q").value = ""; $("#neg").value = "";
   toast(`Searching by image: ${path.split("/").pop()}`);
-  _mode="image"; _lastKey=""; _rendered=0; _hasMore=false; $("#results").innerHTML="";   // image-similar: fixed top-N, no scroll-load
+  _mode="image"; _lastKey=""; _rendered=0; _hasMore=false; showSkeletons(12);   // image-similar: fixed top-N, no scroll-load
   let r;
-  searchingOn();
   try { r = await (await fetch(`/api/search-image?path=${enc(path)}&k=120`, {signal:_searchAbort.signal})).json(); }
-  catch(e){ searchingOff(); if(e.name==="AbortError") return; throw e; }
-  searchingOff();
+  catch(e){ if(e.name==="AbortError") return; throw e; }
   _renderHits(r);
 }
 
