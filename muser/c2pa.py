@@ -39,6 +39,7 @@ _COMPOSITE = "compositewithtrainedalgorithmicmedia"  # AI-edited / partly synthe
 # searches over the same results don't re-spawn a subprocess per thumbnail.
 _tool: str | None | bool = False  # False = not yet probed; None = absent; str = path
 _cache: dict[tuple, dict] = {}
+_primed: bool = False
 
 
 def _tool_path() -> str | None:
@@ -140,6 +141,48 @@ def _load_cache() -> dict:
 def _save_cache(entries: dict) -> None:
     CACHE_JSON.parent.mkdir(parents=True, exist_ok=True)
     CACHE_JSON.write_text(json.dumps({"version": 1, "entries": entries}))
+
+
+def prime_cache_from_sidecar() -> int:
+    """Populate the in-memory verdict cache from the persisted scan.
+
+    Called once at service startup so /api/c2pa lookups and search-result
+    enrichment serve from RAM instead of spawning c2patool per request.
+    Returns the number of entries primed. Idempotent.
+    """
+    global _primed
+    if _primed:
+        return len(_cache)
+    if not available():
+        _primed = True
+        return 0
+    primed = 0
+    for p, e in _load_cache().items():
+        m, s = e.get("m"), e.get("s")
+        if m is None or s is None:
+            continue
+        _cache[(p, m, s)] = {"available": True, "ai": bool(e.get("ai")),
+                             "kind": e.get("kind"), "tool": e.get("tool")}
+        primed += 1
+    _primed = True
+    return primed
+
+
+def lookup(path: str) -> dict | None:
+    """Best-effort RAM-only verdict lookup. Returns the cached entry if the
+    file's (mtime, size) match the primed sidecar key; otherwise None.
+
+    Used to enrich search results without ever spawning c2patool — falls back
+    to absence (no badge) when the cache misses, which is the right policy:
+    the next direct /api/c2pa hit will do the real check and populate _cache.
+    """
+    if not _primed or not available():
+        return None
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return _cache.get((path, st.st_mtime_ns, st.st_size))
 
 
 def ai_images() -> list[dict]:

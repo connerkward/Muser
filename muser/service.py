@@ -284,6 +284,14 @@ def create_app(model: str = DEFAULT_MODEL):
         # but calling here too keeps the service self-contained if started standalone.
         from .caption import _load_env_file
         _load_env_file()
+        # Preload the C2PA verdict cache from ~/.muser/c2pa.json so per-result
+        # AI-badge enrichment and /api/c2pa lookups serve from RAM instead of
+        # shelling out to c2patool per request. ~27k entries → few-hundred-ms
+        # startup cost, ~6 seconds removed from every search render.
+        from . import c2pa as _c2pa
+        primed = _c2pa.prime_cache_from_sidecar()
+        if primed:
+            print(f"  primed c2pa cache: {primed} entries", flush=True)
         # Non-blocking: fire the warm in a thread so uvicorn starts accepting
         # connections in milliseconds. The page can load, see task=loading_model
         # in /api/status, and render its overlay while weights load.
@@ -520,6 +528,7 @@ def create_app(model: str = DEFAULT_MODEL):
         _add_prob(results)
         _attach_dims(results, [r["path"] for r in results])
         _attach_scores(results)
+        _attach_c2pa(results)
         return results
 
     # Cache the parsed scores.json by mtime so the Search-tab sort-blend join
@@ -557,6 +566,24 @@ def create_app(model: str = DEFAULT_MODEL):
                 r["aesthetic_v2"] = round(float(row["aesthetic_v2"]), 4)
             if "pickscore" in row:
                 r["pickscore"] = round(float(row["pickscore"]), 4)
+
+    def _attach_c2pa(results):
+        # Inline the C2PA verdict per result so the Search-tab UI doesn't fire
+        # one /api/c2pa fetch per card (24 results × ~5 dupes ≈ 120 round-trips
+        # of ~50ms each = 6 seconds of trailing network on every search).
+        #
+        # The verdict cache is primed from ~/.muser/c2pa.json at service
+        # startup; this is a RAM-only hashmap lookup. Set `c2pa` on every
+        # result the sidecar knew about (positive AND negative) so the client
+        # can render synchronously without a fetch. Misses (file changed since
+        # scan, or no sidecar entry) → key simply absent and the client
+        # falls back to the direct endpoint for those few.
+        from . import c2pa as _c2pa
+        for r in results:
+            v = _c2pa.lookup(r["path"])
+            if v is None:
+                continue
+            r["c2pa"] = {"ai": bool(v.get("ai")), "kind": v.get("kind"), "tool": v.get("tool")}
 
     def _add_prob(results):
         # Attach a calibrated match probability (SigLIP sigmoid) per result so the UI's

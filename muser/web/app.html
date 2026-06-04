@@ -1525,7 +1525,7 @@ function _renderHits(r){
     c.querySelector(".reveal").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:h.path})}); toast("revealed in Finder"); };
     if(dupes>1) c.querySelector(".dupe").onclick=e=>{ e.stopPropagation(); openDupes(h); };
     g.appendChild(c);
-    c2paFlag(c, h.path);
+    c2paFlag(c, h.path, h.c2pa);
   });
   _rendered = r.results.length;
   ensureSentinel();
@@ -1535,25 +1535,39 @@ function _renderHits(r){
   if(_sortBlendActive()) applySortBlend();
 }
 
-// C2PA provenance badge: lazily ask the service whether this file's signed Content
-// Credentials declare it AI-generated; if so, pin an "AI?" flag on the thumb. Fired
-// fire-and-forget per card (server caches by path+mtime). Once we learn c2patool isn't
-// installed we stop asking — no badge, no wasted round-trips.
+// C2PA provenance badge: pin an "AI?" flag on the thumb when the file's signed
+// Content Credentials declare it AI-generated.
+//
+// Path A — prefetched (the common case): /api/search now inlines `c2pa` per
+// result from a RAM-primed sidecar (~/.muser/c2pa.json), so render is synchronous
+// and zero extra round-trips fire. AI-positive hits get the badge; everything
+// else gets nothing (the field is omitted on the wire when ai!=true).
+//
+// Path B — fallback: legacy or unindexed paths arrive without `prefetched`; we
+// then hit /api/c2pa lazily as before. Once we learn c2patool isn't installed
+// we stop asking — no badge, no wasted round-trips.
 let _c2paOff = false;
-async function c2paFlag(card, path){
+function _renderAiBadge(card, v){
+  if(!v || !v.ai) return;
+  const t = card.querySelector(".thumb");
+  if(!t || t.querySelector(".aiflag")) return;
+  const b = document.createElement("span");
+  b.className = "aiflag";
+  b.textContent = "AI?";
+  const how = v.kind === "composite" ? "AI-edited" : "AI-generated";
+  b.title = `Content Credentials (C2PA) declare this ${how}${v.tool ? " — " + v.tool : ""}`;
+  t.appendChild(b);
+}
+async function c2paFlag(card, path, prefetched){
+  // Prefetched can be {ai:false,...} (negative) or {ai:true,...} (positive);
+  // either way the verdict is known and no fetch should fire. Only fall
+  // through to the network when the field is absent (sidecar miss).
+  if(prefetched !== undefined){ _renderAiBadge(card, prefetched); return; }
   if(_c2paOff) return;
   try{
     const v = await (await fetch(`/api/c2pa?path=${enc(path)}`)).json();
     if(v && v.available === false){ _c2paOff = true; return; }
-    if(!v || !v.ai) return;
-    const t = card.querySelector(".thumb");
-    if(!t || t.querySelector(".aiflag")) return;
-    const b = document.createElement("span");
-    b.className = "aiflag";
-    b.textContent = "AI?";
-    const how = v.kind === "composite" ? "AI-edited" : "AI-generated";
-    b.title = `Content Credentials (C2PA) declare this ${how}${v.tool ? " — " + v.tool : ""}`;
-    t.appendChild(b);
+    _renderAiBadge(card, v);
   }catch(e){}
 }
 
