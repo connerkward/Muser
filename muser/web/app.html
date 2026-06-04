@@ -237,6 +237,25 @@
   #cback { margin-bottom:8px; background:transparent; border:0; padding:0; color:var(--mut);
            font-size:12px; cursor:pointer; }
   #cback:hover { color:var(--fg); }
+
+  /* Compose panel: appears above the main searchbar when the user clicks
+     "Compose" on a card. Vector-arithmetic CIR — α·image + β·text. The
+     panel itself is a thin-bordered strip that mirrors the searchbar's
+     rhythm; reference thumb on the left, text + sliders + actions trailing. */
+  .compose { display:none; align-items:center; gap:12px; padding:10px 12px;
+             border:1px solid var(--line); margin-bottom:8px; flex-wrap:wrap; }
+  .compose.on { display:flex; }
+  .compose .lab { font:italic 400 13px/1.2 var(--serif); color:var(--mut); }
+  .compose .ref { width:44px; height:44px; object-fit:cover; background:var(--paper); flex:0 0 auto; }
+  .compose .plus { color:var(--mut); font:italic 400 14px/1 var(--serif); }
+  .compose input.txt { flex:1; min-width:200px; font-size:14px; padding:8px 10px; }
+  .compose .knob { display:flex; align-items:center; gap:6px; color:var(--mut); font-size:11px; }
+  .compose .knob input[type=range] { width:90px; }
+  .compose .knob .v { font-variant-numeric:tabular-nums; min-width:2.2em; text-align:right; }
+  .compose button.primary { font-size:13px; padding:7px 14px; }
+  .compose .x { background:transparent; border:0; color:var(--mut); font-size:16px; line-height:1;
+                cursor:pointer; padding:0 4px; }
+  .compose .x:hover { color:var(--fg); }
 </style>
 </head>
 <body>
@@ -270,6 +289,20 @@
 </header>
 
 <div class="wrap" id="searchView">
+  <div class="compose" id="compose">
+    <span class="lab">compose with</span>
+    <img class="ref" id="composeRef" alt="" />
+    <span class="plus">+</span>
+    <input class="txt" id="composeText" placeholder="describe the modification — e.g. “in blue”, “at night”, “as a sketch”" autocomplete="off" />
+    <span class="knob" title="image weight (α)"><span>α</span>
+      <input type="range" id="composeAlpha" min="0" max="1.5" step="0.05" value="0.5" />
+      <span class="v" id="composeAlphaV">0.50</span></span>
+    <span class="knob" title="text weight (β)"><span>β</span>
+      <input type="range" id="composeBeta" min="0" max="1.5" step="0.05" value="0.5" />
+      <span class="v" id="composeBetaV">0.50</span></span>
+    <button class="primary" id="composeGo">Search</button>
+    <button class="x" id="composeClose" title="Exit compose mode">×</button>
+  </div>
   <div class="searchbar">
     <input id="q" placeholder="Describe what you're looking for — e.g. “a person on a snowy mountain”" autocomplete="off" autofocus />
     <input id="neg" class="neg" placeholder="Exclude (concept to push away from)…" title="Subtracted from the query vector — CLIP can't read 'not X' in the main box; this field does it as embedding-space arithmetic" autocomplete="off" />
@@ -794,6 +827,7 @@ function _renderHits(r){
         <button class="add" data-path="${h.path.replace(/"/g, '&quot;')}" title="Add to selection (session cart)">${cartHas(h.path) ? "× Added" : "+ Add"}</button>
         <span class="more">
           <button class="sim" title="Find images visually similar to this one">Similar</button>
+          <button class="compose" title="Compose: this image + a text modification (e.g. 'in blue', 'at night')">Compose</button>
           <button class="lens" title="Copy image + open Google Lens (⌘V to search where it appears)">Lens</button>
           <button class="reveal" title="Reveal in Finder">Reveal</button>
         </span></div>`;
@@ -801,6 +835,7 @@ function _renderHits(r){
     { const btn = c.querySelector(".add"); if (cartHas(h.path)) btn.classList.add("added");
       btn.onclick = () => cartToggle(h.path, btn); }
     c.querySelector(".sim").onclick=()=>searchImage(h.path);
+    c.querySelector(".compose").onclick=()=>openCompose(h.path);
     c.querySelector(".lens").onclick=e=>lensSearch(h.path,e.currentTarget);
     c.querySelector(".reveal").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:h.path})}); toast("revealed in Finder"); };
     if(dupes>1) c.querySelector(".dupe").onclick=e=>{ e.stopPropagation(); openDupes(h); };
@@ -840,6 +875,7 @@ async function searchImage(path){
   _searchAbort = new AbortController();
   $("#empty").style.display="none";
   $("#q").value = ""; $("#neg").value = "";
+  closeCompose();
   toast(`Searching by image: ${path.split("/").pop()}`);
   _mode="image"; _lastKey=""; _rendered=0; _hasMore=false; showSkeletons(12);   // image-similar: fixed top-N, no scroll-load
   let r;
@@ -847,6 +883,55 @@ async function searchImage(path){
   catch(e){ if(e.name==="AbortError") return; throw e; }
   _renderHits(r);
 }
+
+// ---- Composed Image Retrieval: q = α·embed(img) + β·embed(text) ----
+// Vector-arithmetic baseline (Liu et al., ICCV 2021 / CIRR). Useful for attribute
+// swaps ("red dress" + "in blue") and style mods ("portrait" + "as a sketch");
+// weaker on structural ("same pose, different person"). Opt-in per search; the
+// panel is dismissible and any keystroke into #q exits it.
+let _composeRef = null;
+function openCompose(path){
+  _composeRef = path;
+  $("#composeRef").src = `/api/thumb?path=${enc(path)}&size=120`;
+  $("#composeRef").title = path;
+  $("#compose").classList.add("on");
+  // Default α/β = 0.5/0.5 (textbook starting point). User dials from there.
+  const t = $("#composeText"); t.value=""; t.focus();
+  window.scrollTo({top:0});
+}
+function closeCompose(){
+  _composeRef = null;
+  $("#compose").classList.remove("on");
+}
+async function runCompose(){
+  if (_busy || !_composeRef) return;
+  const text = $("#composeText").value.trim();
+  if (!text) { $("#composeText").focus(); return; }
+  const alpha = parseFloat($("#composeAlpha").value);
+  const beta  = parseFloat($("#composeBeta").value);
+  if(_searchAbort) _searchAbort.abort();
+  _searchAbort = new AbortController();
+  $("#empty").style.display="none";
+  // Stay in compose mode: don't clobber #q (a #q keystroke would exit), but
+  // _mode=image so the infinite-scroll loader stays off (fixed top-N).
+  _mode="image"; _lastKey=""; _rendered=0; _hasMore=false; showSkeletons(12);
+  const ref = _composeRef;
+  toast(`Compose: ${ref.split("/").pop()} + “${text}”`);
+  let r;
+  try {
+    r = await (await fetch(
+      `/api/search-compose?img=${enc(ref)}&text=${enc(text)}&alpha=${alpha}&beta=${beta}&k=120`,
+      {signal:_searchAbort.signal}
+    )).json();
+  } catch(e){ if(e.name==="AbortError") return; throw e; }
+  if (r.detail) { toast("compose failed: " + r.detail); return; }
+  _renderHits(r);
+}
+$("#composeGo").onclick = runCompose;
+$("#composeClose").onclick = closeCompose;
+$("#composeText").addEventListener("keydown", e => { if(e.key==="Enter"){ e.preventDefault(); runCompose(); } });
+$("#composeAlpha").addEventListener("input", () => $("#composeAlphaV").textContent = parseFloat($("#composeAlpha").value).toFixed(2));
+$("#composeBeta").addEventListener("input",  () => $("#composeBetaV").textContent  = parseFloat($("#composeBeta").value).toFixed(2));
 
 // applyQuery: if the query box is empty, replace; if it's non-empty, append.
 // Lets chips act as drill-down filters on the current query
@@ -902,6 +987,8 @@ function renderRefinements(refs){
 // ---- autocomplete: nearest cluster labels to the typed query ----
 $("#go").onclick = search;
 $("#q").addEventListener("input", ()=>{
+  // Typing in the main searchbar exits compose mode — compose is opt-in per-search.
+  if ($("#compose").classList.contains("on")) closeCompose();
   document.body.classList.toggle("has-query", $("#q").value.trim().length > 0);
   $("#qMini").value = $("#q").value;     // mirror main → mini
   liveSearch();

@@ -490,6 +490,35 @@ def create_app(model: str = DEFAULT_MODEL):
         return {"query": f"image: {os.path.basename(path)}", "ref_path": path,
                 "model": state.model_name, "results": results, "refinements": refinements}
 
+    @app.get("/api/search-compose")
+    def search_compose(img: str, text: str, alpha: float = 0.5, beta: float = 0.5,
+                       k: int = 30, dedup: bool = True, method: str = "embed",
+                       folder: str | None = None):
+        # Composed Image Retrieval, vector-arithmetic baseline (CIRR/Liu et al. ICCV 2021):
+        #   q = α·embed_image(img) + β·embed_text(text)  (then L2-normalize)
+        # Works well for attribute swaps ("red dress" + "in blue"); weaker on structural
+        # mods. α=1,β=0 ≡ /api/search-image; α=0,β=1 ≡ /api/search. No new model load —
+        # reuses the warm shared-space embedder.
+        import numpy as np
+        if not os.path.isfile(img):
+            raise HTTPException(404, f"no such image: {img}")
+        if not text or not text.strip():
+            raise HTTPException(400, "text modification is required")
+        emb = state.wait_ready()
+        iv = emb.embed_images([img])[0]
+        tv = emb.embed_queries([text])[0]
+        qv = alpha * iv + beta * tv
+        n = float(np.linalg.norm(qv))
+        if not np.isfinite(n) or n == 0:
+            raise HTTPException(400, "composed vector degenerate (α=β=0?)")
+        qv = qv / n
+        results = _run_search(qv, k, dedup, method, folder)
+        results = [r for r in results if r["path"] != img]
+        refinements = _refinements([r["path"] for r in results], text)
+        return {"query": f"compose: {os.path.basename(img)} + {text!r}",
+                "compose": {"img": img, "text": text, "alpha": alpha, "beta": beta},
+                "model": state.model_name, "results": results, "refinements": refinements}
+
     @app.get("/api/folders")
     def folders():
         # uid the folder *path* itself so the picker has stable React-style keys
