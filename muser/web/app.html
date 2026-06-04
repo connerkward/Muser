@@ -639,16 +639,6 @@ function autosizeTa(ta){
 }
 // Document.querySelector needs CSS-escaping for paths with spaces / unicode.
 function cssEsc(s){ return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/"/g, '\\"'); }
-// Persist the user's backend pick across cart-modal re-renders and across page
-// reloads — most users pick a backend once and stick with it for a session.
-const CAP_BACKEND_KEY = "muserCapBackend";
-function getCapBackend(){
-  const v = localStorage.getItem(CAP_BACKEND_KEY);
-  return (v === "gpt-4o-mini" || v === "joycaption-beta-one") ? v : "gpt-4o-mini";
-}
-function setCapBackend(v){
-  if (v === "gpt-4o-mini" || v === "joycaption-beta-one") localStorage.setItem(CAP_BACKEND_KEY, v);
-}
 function updateCartCapNote(){
   const total = _cart.size;
   let missing = 0;
@@ -657,20 +647,11 @@ function updateCartCapNote(){
   if (!note) return;
   if (total === 0) { note.textContent = ""; return; }
   if (missing === 0) { note.textContent = "Zip includes captions for every item."; return; }
-  // Render a plain "Caption missing (N) →" text-button to match the cart-actions idiom,
-  // paired with a small italic-labelled backend <select>. Inline styles only so this
-  // doesn't depend on a new CSS class.
-  const cur = getCapBackend();
-  const optGpt = `<option value="gpt-4o-mini"${cur==="gpt-4o-mini"?" selected":""}>GPT-4o-mini (cloud, ~$0.001/img)</option>`;
-  const optJoy = `<option value="joycaption-beta-one"${cur==="joycaption-beta-one"?" selected":""}>JoyCaption Beta One (local, free, ~10s/img)</option>`;
+  // Render a plain "Caption missing (N) →" text-button to match the cart-actions idiom.
   note.innerHTML =
     `Zip includes captions where available. Missing: ${missing} of ${total}. ` +
-    `<span style="font-style:italic;color:var(--mut);margin-left:8px">backend:</span> ` +
-    `<select id="capBackend" style="font:inherit;font-style:normal;background:transparent;border:1px solid var(--line);color:var(--fg);padding:1px 4px;margin-left:4px;cursor:pointer">${optGpt}${optJoy}</select> ` +
     `<a href="#" id="cartCapBtn" style="color:#caa468;text-decoration:underline;cursor:pointer;margin-left:6px">` +
     `Caption missing (${missing}) →</a>`;
-  const sel = document.getElementById("capBackend");
-  if (sel) sel.onchange = (e) => setCapBackend(e.target.value);
   const btn = document.getElementById("cartCapBtn");
   if (btn) btn.onclick = (e) => { e.preventDefault(); captionMissingInCart(); };
 }
@@ -686,12 +667,11 @@ async function captionMissingInCart(){
   _capBulkInFlight = true;
   // Kick the status poll fast so the busy overlay shows up immediately.
   pollStatus();
-  const backend = getCapBackend();
   let res;
   try {
     res = await fetch("/api/caption-bulk", {
       method: "POST", headers: {"content-type": "application/json"},
-      body: JSON.stringify({paths: missing, backend}),
+      body: JSON.stringify({paths: missing}),
     });
   } catch (e) {
     _capBulkInFlight = false;
@@ -899,7 +879,7 @@ function renderStatus(s){
     } else if (t.kind === "captioning") {
       const tot = t.total || 0, done = t.done || 0;
       $("#busyText").textContent = "Captioning images";
-      $("#busySub").textContent = tot ? `${done.toLocaleString()} / ${tot.toLocaleString()} · ${t.backend || "gpt-4o-mini"}` : (t.backend || "gpt-4o-mini");
+      $("#busySub").textContent = tot ? `${done.toLocaleString()} / ${tot.toLocaleString()} · gpt-4o-mini` : "gpt-4o-mini";
       if (tot) { bar.style.display = ""; barI.style.width = `${Math.round((done/tot)*100)}%`; }
     }
   } else if (s.ready) {
