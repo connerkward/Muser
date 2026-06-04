@@ -710,11 +710,14 @@ window.fetch = (...args) => {
   _spinT = setTimeout(()=>{
     if(_inflight<=0) return;
     document.getElementById("spinner").style.display="";
+    // Only annotate the slow first-query case (model still loading). Warm
+    // searches keep the quiet bare spinner — a persistent "Searching…" label
+    // on background/infinite-scroll fetches just reads as stuck.
     const lbl = document.getElementById("spinnerLabel");
-    lbl.textContent = _modelReady
-      ? "Searching…"
-      : "Loading model — embedding your first query (one-time, ~10s)";
-    lbl.style.display="";
+    if(!_modelReady){
+      lbl.textContent = "Loading model — embedding your first query (one-time, ~10s)";
+      lbl.style.display="";
+    }
   }, 300);
   const done = () => {
     _inflight = Math.max(0, _inflight-1);
