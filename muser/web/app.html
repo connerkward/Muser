@@ -447,6 +447,8 @@
   <button class="nav" id="navExplore">Explore</button>
   <button class="nav" id="navInteresting">Interesting</button>
   <button class="nav" id="navReview">Review</button>
+  <button class="nav" id="navColor">Color</button>
+  <button class="nav" id="navSkin">Skin&nbsp;tone</button>
   <button class="nav" id="navAI">AI</button>
   <span class="mut" id="status">…</span>
   <span class="sp"></span>
@@ -644,6 +646,32 @@
     <button class="x" id="afilterX" title="Clear filter" style="display:none">×</button>
   </div>
   <div class="grid" id="aiGrid"></div>
+</div>
+
+<div class="wrap" id="colorView" style="display:none">
+  <div class="row" style="margin-bottom:8px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+    <input type="color" id="colorPicker" value="#c83c3c" title="Pick a color"
+           style="width:46px;height:30px;border:1px solid var(--line);background:none;cursor:pointer;padding:0" />
+    <button id="colorGo">Search by color</button>
+    <span class="swatches" id="colorPresets" style="display:flex;gap:6px"></span>
+    <span style="flex:1"></span>
+    <span class="mut" id="colormsg">…</span>
+    <button id="colorScan" style="display:none">Scan library</button>
+  </div>
+  <div style="font-size:11px;color:var(--mut);margin-bottom:14px">Ranks images by how much of the picked color they contain — a separate <b>LAB color-palette index</b>, not the semantic model. Fully local, $0.</div>
+  <div class="grid" id="colorGrid"></div>
+</div>
+
+<div class="wrap" id="skinView" style="display:none">
+  <div class="row" style="margin-bottom:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <span class="mut">Monk&nbsp;Skin&nbsp;Tone:</span>
+    <span class="swatches" id="skinSwatches" style="display:flex;gap:4px"></span>
+    <span style="flex:1"></span>
+    <span class="mut" id="skinmsg">…</span>
+    <button id="skinScan" style="display:none">Scan library</button>
+  </div>
+  <div style="font-size:11px;color:var(--mut);margin-bottom:14px">Faces are detected (YuNet), skin is sampled and mapped to the 10-point <b>Monk Skin Tone</b> scale. Detection is the ceiling — occluded / extreme-angle / tiny faces aren’t counted, and strong color casts shift the sampled tone. A positive signal, not a demographic classifier.</div>
+  <div class="grid" id="skinGrid"></div>
 </div>
 
 <!-- Per-image detail view (#/image/<uid>). All sections are populated by
@@ -2040,9 +2068,9 @@ function openDetail(uid){ showView("image", {uid}); }
 // ---- view switching (Search / Explore / Interesting / Review / AI / Image) ----
 // `image` is a *detail* view (no nav button) — it's only reached from hash
 // routing (#/image/<uid>) or programmatically via openDetail(uid).
-const VIEWS={search:"searchView",explore:"exploreView",interesting:"interestingView",review:"reviewView",ai:"aiView",image:"imageView"};
-const NAVS={search:"navSearch",explore:"navExplore",interesting:"navInteresting",review:"navReview",ai:"navAI"};
-const VIEW_TITLES={search:"Search",explore:"Explore",interesting:"Interesting",review:"Review",ai:"AI",image:"Image"};
+const VIEWS={search:"searchView",explore:"exploreView",interesting:"interestingView",review:"reviewView",color:"colorView",skin:"skinView",ai:"aiView",image:"imageView"};
+const NAVS={search:"navSearch",explore:"navExplore",interesting:"navInteresting",review:"navReview",color:"navColor",skin:"navSkin",ai:"navAI"};
+const VIEW_TITLES={search:"Search",explore:"Explore",interesting:"Interesting",review:"Review",color:"Color",skin:"Skin tone",ai:"AI",image:"Image"};
 // Internal flag: when popstate or initial-route call showView, suppress the
 // pushState so back/forward don't double-stack history entries.
 let _suppressHistory=false;
@@ -2064,6 +2092,8 @@ function showView(v, opts){
   if(v==="explore" && !$("#clusterGrid").children.length) loadClusters();
   if(v==="interesting") loadScores("#scoreGrid","#imsg","#imetric");
   if(v==="review") loadScores("#reviewGrid","#rmsg","#rcat");
+  if(v==="color") loadColor();
+  if(v==="skin") loadSkin();
   if(v==="ai") loadAI();
   if(v==="image" && opts.uid) loadImageDetail(opts.uid);
   // ---- URL + title sync ----
@@ -2207,6 +2237,116 @@ function _renderAICard(h){
   c.querySelector(".lens").onclick = e => lensSearch(h.path, e.currentTarget);
   c.querySelector(".reveal").onclick = async () => { await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:h.path})}); toast("revealed in Finder"); };
   return c;
+}
+
+// ---- Color + Skin-tone tabs ----------------------------------------------
+// Both are facet searches (separate LAB indexes, not the embedder). Each renders
+// a fixed top-k into its own grid via the shared _facetCard.
+function _facetCard(h){
+  const uid = h.uid || "";
+  const pct = Math.max(0, Math.min(100, Math.round((h.score||0)*100)));
+  const c = document.createElement("div"); c.className="card";
+  c.dataset.path = h.path; c.dataset.uid = uid;
+  c.innerHTML = `<div class="thumb"><span class="scoreb" title="match strength">${pct}</span><img loading="lazy" src="/api/thumb?path=${enc(h.path)}&size=${THUMB}" title="${h.name}${uid?' · uid:'+uid:''}"></div>
+    <div class="meta"><div class="name" title="${h.path}">${h.name}</div></div>
+    <div class="foot"><button class="sim" title="Find visually similar">Similar</button>
+      <span class="more"><button class="lens" title="Copy image + open Google Lens">Lens</button>
+      <button class="reveal" title="Reveal in Finder">Reveal</button></span></div>`;
+  c.querySelector(".thumb").onclick = () => uid ? openDetail(uid) : window.open(`/api/image?path=${enc(h.path)}`,"_blank");
+  c.querySelector(".sim").onclick = () => { showView("search"); searchImage(h.path); };
+  c.querySelector(".lens").onclick = e => lensSearch(h.path, e.currentTarget);
+  c.querySelector(".reveal").onclick = async () => { await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:h.path})}); toast("revealed in Finder"); };
+  return c;
+}
+function _renderFacet(gridSel, j){
+  const g = $(gridSel); g.innerHTML = "";
+  (j.results||[]).forEach(h => g.appendChild(_facetCard(h)));
+}
+
+const COLOR_PRESETS = ["#c83c3c","#e08a2a","#e8d44a","#4a9e4a","#3a7bd5","#7a4ad0","#d04a9e","#1a1a1a","#ffffff"];
+let _colorWired = false;
+async function loadColor(){
+  if(!_colorWired){
+    _colorWired = true;
+    $("#colorGo").onclick = searchColor;
+    $("#colorPicker").onchange = searchColor;
+    const ps = $("#colorPresets");
+    COLOR_PRESETS.forEach(hex => {
+      const b = document.createElement("button");
+      b.title = hex; b.style.cssText = `width:22px;height:22px;border:1px solid var(--line);border-radius:4px;background:${hex};cursor:pointer;padding:0`;
+      b.onclick = () => { $("#colorPicker").value = hex; searchColor(); };
+      ps.appendChild(b);
+    });
+    $("#colorScan").onclick = async () => { await fetch("/api/color/scan",{method:"POST"}); pollColorScan(); };
+  }
+  let r; try{ r = await (await fetch("/api/color")).json(); }catch(e){ return; }
+  const msg = $("#colormsg"), btn = $("#colorScan");
+  btn.style.display = ""; btn.disabled = r.scanning; btn.textContent = r.built ? "Rescan" : "Scan library";
+  if(r.scanning){ pollColorScan(); }
+  else { msg.textContent = r.built ? "Pick a color or a swatch to search." : "Not built yet — click Scan library."; }
+}
+let _colorPoll=null;
+async function pollColorScan(){
+  const r = await (await fetch("/api/color")).json();
+  const pct = r.total ? Math.round(r.done/r.total*100) : 0;
+  const bar = "["+"#".repeat(pct/10|0)+"-".repeat(10-(pct/10|0))+"]";
+  $("#colormsg").textContent = r.scanning ? `building ${bar} ${r.done.toLocaleString()}/${r.total.toLocaleString()} (${pct}%)` : "Done — pick a color to search.";
+  $("#colorScan").disabled = r.scanning;
+  if(r.scanning){ if(!_colorPoll) _colorPoll=setInterval(pollColorScan,800); }
+  else { if(_colorPoll){ clearInterval(_colorPoll); _colorPoll=null; } }
+}
+async function searchColor(){
+  const hex = $("#colorPicker").value;
+  const url = new URL("/api/search-color", location.origin);
+  url.searchParams.set("hex", hex); url.searchParams.set("k", 60);
+  const j = await (await fetch(url)).json();
+  $("#colormsg").textContent = `${(j.results||[]).length} image(s) with ${hex}`;
+  _renderFacet("#colorGrid", j);
+}
+
+let _skinWired = false;
+async function loadSkin(){
+  let r; try{ r = await (await fetch("/api/skintone")).json(); }catch(e){ return; }
+  const msg = $("#skinmsg"), btn = $("#skinScan");
+  if(!r.available){
+    msg.textContent = "Face detector unavailable (opencv + YuNet model).";
+    btn.style.display = "none"; $("#skinSwatches").innerHTML = ""; return;
+  }
+  if(!_skinWired){
+    _skinWired = true;
+    $("#skinScan").onclick = async () => { await fetch("/api/skintone/scan",{method:"POST"}); pollSkinScan(); };
+  }
+  // (Re)build the 10 Monk-scale swatch buttons with per-tone counts.
+  const sw = $("#skinSwatches"); sw.innerHTML = "";
+  (r.swatches||[]).forEach((hex,i) => {
+    const n = (r.histogram||[])[i]||0;
+    const b = document.createElement("button");
+    b.title = `Monk Skin Tone ${i+1} — ${n} image(s)`;
+    b.style.cssText = `width:30px;height:26px;border:1px solid var(--line);border-radius:4px;background:${hex};cursor:pointer;padding:0;font-size:9px;color:${i<5?'#333':'#eee'}`;
+    b.textContent = i+1;
+    b.onclick = () => searchSkin(i+1);
+    sw.appendChild(b);
+  });
+  btn.style.display = ""; btn.disabled = r.scanning; btn.textContent = r.built ? "Rescan" : "Scan library";
+  if(r.scanning){ pollSkinScan(); }
+  else { msg.textContent = r.built ? "Pick a tone to search." : "Not built yet — click Scan library."; }
+}
+let _skinPoll=null;
+async function pollSkinScan(){
+  const r = await (await fetch("/api/skintone")).json();
+  const pct = r.total ? Math.round(r.done/r.total*100) : 0;
+  const bar = "["+"#".repeat(pct/10|0)+"-".repeat(10-(pct/10|0))+"]";
+  $("#skinmsg").textContent = r.scanning ? `scanning faces ${bar} ${r.done.toLocaleString()}/${r.total.toLocaleString()} (${pct}%)` : "Done — pick a tone to search.";
+  $("#skinScan").disabled = r.scanning;
+  if(r.scanning){ if(!_skinPoll) _skinPoll=setInterval(pollSkinScan,800); }
+  else { if(_skinPoll){ clearInterval(_skinPoll); _skinPoll=null; } loadSkin(); }
+}
+async function searchSkin(tone){
+  const url = new URL("/api/search-skintone", location.origin);
+  url.searchParams.set("tone", tone); url.searchParams.set("k", 60);
+  const j = await (await fetch(url)).json();
+  $("#skinmsg").textContent = `${(j.results||[]).length} image(s) near Monk Skin Tone ${tone}`;
+  _renderFacet("#skinGrid", j);
 }
 
 // AI tab uses client-side chunking: /api/ai returns the full positive list

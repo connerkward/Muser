@@ -34,6 +34,9 @@ dependencies = [
     "scikit-learn>=1.8.0",
     "open_clip_torch>=2.30",
     "spandrel>=0.4.2",
+    # Color-palette LAB conversion + YuNet face detection for skin-tone search.
+    # Headless build: no GUI/Qt libs (right for a server + CI).
+    "opencv-python-headless>=4.9",
 ]
 
 [project.scripts]
@@ -55,7 +58,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["muser"]
-artifacts = ["muser/web/*.html"]
+artifacts = ["muser/web/*.html", "muser/assets/*.onnx"]
 
 [tool.uv]
 # Pin a Python with mature torch/transformers wheels (3.14 has no torch wheels yet).

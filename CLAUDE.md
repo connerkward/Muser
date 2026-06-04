@@ -65,6 +65,29 @@ See `REQUIREMENTS.md` for scope/decisions.
   "Caption missing (N)" button POSTs to `/api/caption-bulk`, which drives the
   existing busy overlay via `state.task = {"kind": "captioning", done, total}`.
   `/api/caption?path=…` returns the latest caption for a single file.
+- `muser/facets.py` — shared sidecar scaffolding for **per-image precomputed facets**
+  (the c2pa.py cache pattern factored out): a `~/.muser/<name>.json` keyed by path with
+  `m`(mtime_ns)+`s`(size) for incremental skip, a thread-pool `scan(paths, compute)`, and a
+  RAM cache primed once for O(1) enrichment/ranking. c2pa.py keeps its own copy (shipped,
+  untouched); new facets build on this.
+- `muser/color.py` — **color search** (a *separate LAB-palette index, not the embedder*).
+  Per image: median-cut dominant-color palette → CIE-LAB swatches + fractions, persisted to
+  `~/.muser/color.json`. `search(rgb)` ranks by `Σ frac·sim(palette,query)` (LAB ΔE, decays
+  at `COLOR_TAU`). `available()` always True. CLI `muser color [--query "#rrggbb"] [--in dir]`
+  (no query → build), API `/api/search-color?hex=`, `/api/color[/scan]`, web **Color** tab
+  (picker + preset swatches). Fully local, $0, no model load.
+- `muser/skintone.py` — **skin-tone search** on the 10-point **Monk Skin Tone** scale.
+  Faces detected via OpenCV **YuNet** (tiny bundled ONNX in `muser/assets/`, MIT, no download);
+  within each face box a YCrCb skin mask isolates skin → median LAB → nearest MST swatch.
+  Per image: one entry per face (`mst` 1–10, `lab`, `frac`, `conf`) + a `mst` summary, in
+  `~/.muser/skintone.json`. `search(tone)` ranks by closeness × face prominence. CLI
+  `muser skintone [--tone N]`, API `/api/search-skintone?tone=`, `/api/skintone[/scan]` (status
+  carries the per-tone histogram + swatch hexes), web **Skin tone** tab (10 swatches w/ counts).
+  Accurate-by-construction (samples *detected* faces, not a global guess) but **detection is the
+  ceiling** — occluded/extreme-angle/tiny faces aren't counted, strong color casts shift the tone;
+  a positive signal, not a demographic classifier. Both facet scans **auto-trigger** post-index
+  (incremental, folder-scoped) alongside c2pa, and prime at service startup. New core dep:
+  `opencv-python-headless` (no GUI/Qt libs → clean on server + CI).
 - `eval/datasets.py` — standard benchmarks reduced to {image_paths, queries,
   qrels}. Flickr30k via HF's `refs/convert/parquet` branch (scripts unsupported).
 - `eval/harness.py` — embeds corpus → LanceDB → queries → **ranx** metrics
@@ -154,5 +177,8 @@ pass over the 17.9k uniques, so reserved for selective lookups, not wired in.
 Default model: **siglip2-b** (Apache, best quality/speed/license — see reports/).
 Embedded service + web search UI working (`muser serve` → http://127.0.0.1:7777).
 Core (embed/index/search), harness (Flickr30k/COCO/domain + ranx), CLI, and web UI are
-working and verified. Next: wire `jina-v4` run (7.5GB download), add Qwen3-VL,
-VLM-generated ground truth for the user's own folders, embedded-service daemon.
+working and verified. Color + skin-tone (Monk-scale) facet search shipped (see
+`color.py`/`skintone.py`). Always-on daemon shipped as a macOS LaunchAgent
+(`~/Library/LaunchAgents/com.muser.serve.plist`, documented in central per-machine
+doc). Next: wire `jina-v4` run (7.5GB download), add Qwen3-VL, VLM-generated ground
+truth for the user's own folders.

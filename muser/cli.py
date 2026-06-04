@@ -120,6 +120,18 @@ def index(
         scan(folder_paths, progress=lambda d, t, f: con.print(f"  C2PA scan {d}/{t} — {f} AI-flagged", end="\r"))
         con.print(f"\n  C2PA: {len(ai_images())} AI-generated image(s) flagged in your library")
 
+    # Auto-build the color palette index + (if a face detector is present) the
+    # skin-tone index over the just-indexed files. Both are incremental, so only
+    # new/changed files are recomputed.
+    from . import color as _color, skintone as _skin
+
+    folder_paths = idx.paths(model, under=folder)
+    _color.scan(folder_paths, progress=lambda d, t: con.print(f"  color index {d}/{t}", end="\r"))
+    con.print(f"\n  Color: LAB palette built for {len(folder_paths)} image(s)")
+    if _skin.available():
+        _skin.scan(folder_paths, progress=lambda d, t: con.print(f"  skin-tone {d}/{t}", end="\r"))
+        con.print(f"\n  Skin tone: faces scanned across {len(folder_paths)} image(s) (Monk scale)")
+
 
 @app.command("reindex-metadata")
 def reindex_metadata(
@@ -363,6 +375,85 @@ def detect(
     con.print(f"\n[bold]{len(ai)}[/] AI-generated image(s) found via C2PA over {len(paths)} indexed.")
     for h in ai[:25]:
         con.print(f"  [dim]{h['kind'] or 'ai':9}[/] {h['name']}  [dim]{h['tool'] or ''}[/]")
+
+
+def _hex_to_rgb(h: str) -> tuple[int, int, int]:
+    h = h.lstrip("#")
+    if len(h) != 6:
+        raise typer.BadParameter(f"expected a #rrggbb hex color, got {h!r}")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+@app.command()
+def color(
+    query: str = typer.Option(None, "--query", "-q", help="Search by color: a #rrggbb hex. Omit to (re)build the index."),
+    folder: str = typer.Option(None, "--in", help="Restrict to images under this folder"),
+    k: int = typer.Option(24, help="How many results to print when searching"),
+    model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to scan"),
+):
+    """Dominant-color (LAB palette) index + color search — no embedding model, fully local.
+
+    No ``--query`` → builds/refreshes ~/.muser/color.json over the indexed images.
+    With ``--query "#rrggbb"`` → ranks images by how much of that color they contain.
+    """
+    from . import color as _color
+    from .index import MuserIndex
+
+    under = str(Path(folder).expanduser()) if folder else None
+    if query:
+        _color.prime_cache_from_sidecar()
+        hits = _color.search(_hex_to_rgb(query), k=k, folder=under)
+        con.print(f"[bold]{len(hits)}[/] image(s) matching {query}:")
+        for p, sc in hits:
+            con.print(f"  [dim]{sc:5.2f}[/] {Path(p).name}")
+        return
+
+    paths = MuserIndex().paths(model, under=under)
+    if not paths:
+        con.print(f"[red]no indexed images[/] — run `muser index <folder>` first")
+        raise typer.Exit(1)
+    _color.scan(paths, progress=lambda d, t: con.print(f"  scanning {d}/{t}", end="\r"))
+    con.print(f"\n[bold]built color index[/] over {len(paths)} images → ~/.muser/color.json")
+
+
+@app.command()
+def skintone(
+    tone: int = typer.Option(None, "--tone", "-t", help="Search by Monk Skin Tone 1–10. Omit to (re)build the index."),
+    folder: str = typer.Option(None, "--in", help="Restrict to images under this folder"),
+    k: int = typer.Option(24, help="How many results to print when searching"),
+    model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to scan"),
+):
+    """Skin-tone (Monk scale) index + search — face detection (YuNet) + skin sampling.
+
+    No ``--tone`` → builds/refreshes ~/.muser/skintone.json. With ``--tone N`` (1–10)
+    → ranks images whose detected faces are closest to that Monk Skin Tone.
+    """
+    from . import skintone as _skin
+    from .index import MuserIndex
+
+    if not _skin.available():
+        con.print("[red]face detector unavailable[/] — install opencv (`uv pip install opencv-python-headless`)")
+        raise typer.Exit(1)
+
+    under = str(Path(folder).expanduser()) if folder else None
+    if tone is not None:
+        if not 1 <= tone <= 10:
+            raise typer.BadParameter("tone must be 1–10")
+        _skin.prime_cache_from_sidecar()
+        hits = _skin.search(tone, k=k, folder=under)
+        con.print(f"[bold]{len(hits)}[/] image(s) near Monk Skin Tone {tone}:")
+        for p, sc in hits:
+            con.print(f"  [dim]{sc:5.2f}[/] {Path(p).name}")
+        return
+
+    paths = MuserIndex().paths(model, under=under)
+    if not paths:
+        con.print(f"[red]no indexed images[/] — run `muser index <folder>` first")
+        raise typer.Exit(1)
+    _skin.scan(paths, progress=lambda d, t: con.print(f"  scanning {d}/{t}", end="\r"))
+    hist = _skin.tone_histogram()
+    con.print(f"\n[bold]built skin-tone index[/] over {len(paths)} images → ~/.muser/skintone.json")
+    con.print("  MST distribution (most-prominent face): " + " ".join(f"{i+1}:{n}" for i, n in enumerate(hist)))
 
 
 @app.command()
