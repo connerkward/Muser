@@ -2255,7 +2255,11 @@ async function loadMoreScores(tab, msgSel, cov, isFirst){
   cfg.hasMore = (r.items || []).length >= TAB_PAGE && cfg.offset < (r.total || cfg.total);
   cfg.loading = false;
   _tabEnsureSentinel(tab);
-  applyTabFilter(tab);
+  // No applyTabFilter here — for Interesting/Review the filter is already
+  // applied SERVER-side (q is in the URL), so calling applyTabFilter here
+  // would re-fire loadScores in an infinite loop. AI tab does its own DOM
+  // filter when its list arrives.
+  if(tab === "ai") applyTabFilter("ai");
   _tabMaybeLoadMore(tab);                              // short page / tall window: keep filling
 }
 $("#imetric").onchange=()=>loadScores("#scoreGrid","#imsg","#imetric");
