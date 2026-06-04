@@ -928,10 +928,15 @@ def create_app(model: str = DEFAULT_MODEL):
         # (OpenAI/Firefly/Google) ship Content Credentials; local SD/Flux carry none.
         from . import c2pa as c2
         avail = c2.available()
+        # uid injected so each item can deep-link to the detail page (#/image/<uid>)
+        # without the UI needing its own blake2b implementation.
+        items = c2.ai_images() if avail else []
+        for it in items:
+            it["uid"] = uid_for(it["path"])
         return {
             "available": avail,
             "built": c2.cache_exists(),
-            "items": c2.ai_images() if avail else [],
+            "items": items,
             **state.c2pa,
         }
 
@@ -1248,6 +1253,116 @@ def create_app(model: str = DEFAULT_MODEL):
             })
         return {"built": True, "metric": metric, "metrics": s["metrics"], "total": len(ranked),
                 "items": items, "coverage": _metric_coverage(metric, len(canon))}
+
+    # ---- per-image detail page (uid → everything we know about that file) ----
+    # The web UI's #/image/<uid> route bundles every per-image fact into a single
+    # request: scores, caption, cluster membership, dupes, C2PA, plus
+    # dimensions/filesize/mtime from the LanceDB metadata columns.
+    #
+    # uid→path: 12-char blake2b hashes are non-reversible, so we keep a cached
+    # reverse map keyed on the active model + row-count. Rebuilt lazily when the
+    # index size changes (incremental indexing) or the model switches. Walking
+    # 27k paths is ~20 ms — cheap, but we still cache to keep clicks instant.
+    _uid_map: dict = {"key": None, "map": {}}
+    _uid_lock = threading.Lock()
+
+    def _uid_to_path(uid: str) -> str | None:
+        n = state.index.count(state.model_name)
+        key = (state.model_name, n)
+        with _uid_lock:
+            if _uid_map["key"] != key:
+                _uid_map["map"] = {uid_for(p): p for p in state.index.paths(state.model_name)}
+                _uid_map["key"] = key
+            return _uid_map["map"].get(uid)
+
+    def _cluster_for(path: str) -> dict | None:
+        # Reuse `muser cluster`'s output to tell the user which cluster this file lives in.
+        # None if `muser cluster` has not been run, or the file landed in -1 (unclustered).
+        c = _clusters()
+        if not c:
+            return None
+        m_name = "hdbscan" if "hdbscan" in c["methods"] else next(iter(c["methods"]))
+        m = c["methods"][m_name]
+        for cl in m["clusters"]:
+            if cl["id"] == -1:
+                continue
+            if path in m["members"].get(str(cl["id"]), []):
+                return {"method": m_name, "id": cl["id"], "label": cl["label"],
+                        "sublabel": cl.get("sublabel"), "size": cl["size"]}
+        return None
+
+    def _scores_for(path: str) -> tuple[dict, list[str]]:
+        # Returns (scores, dupes) for `path`. Looks up the path directly first, then
+        # walks the dupes table — the user may have clicked into a non-canonical sibling
+        # whose scores live under a different canonical rep.
+        if not SCORES.exists():
+            return {}, [path]
+        try:
+            s = json.loads(SCORES.read_text())
+        except Exception:
+            return {}, [path]
+        if path in s.get("scores", {}):
+            return s["scores"][path], s.get("dupes", {}).get(path, [path])
+        for canon, members in s.get("dupes", {}).items():
+            if path in members:
+                return s.get("scores", {}).get(canon, {}), members
+        return {}, [path]
+
+    @app.get("/api/image-detail")
+    def image_detail(uid: str):
+        # All-in-one read for #/image/<uid>. Anything missing on disk degrades to a
+        # null field rather than a 404 — except an unknown uid, which IS a 404 because
+        # the rest of the page has nothing to render.
+        path = _uid_to_path(uid)
+        if path is None:
+            raise HTTPException(404, f"unknown uid: {uid}")
+
+        # filesize/mtime from stat (truth on disk); width/height from the LanceDB row.
+        width = height = filesize = mtime = None
+        try:
+            st = os.stat(path)
+            filesize = int(st.st_size)
+            mtime = float(st.st_mtime)
+        except OSError:
+            pass
+        t = state.index._open(state.model_name)
+        if t is not None and "width" in {f.name for f in t.schema}:
+            quoted = path.replace("'", "''")
+            try:
+                rows = (
+                    t.search().select(["path", "width", "height", "filesize"])
+                    .where(f"path = '{quoted}'").limit(1).to_list()
+                )
+                if rows:
+                    r0 = rows[0]
+                    if r0.get("width") is not None: width = int(r0["width"])
+                    if r0.get("height") is not None: height = int(r0["height"])
+                    if r0.get("filesize") is not None and filesize is None: filesize = int(r0["filesize"])
+            except Exception:
+                pass
+
+        scores, dupes = _scores_for(path)
+        caption = _load_captions().get(path)
+        cluster = _cluster_for(path)
+
+        # C2PA provenance (positive-only, may be unavailable).
+        from .c2pa import verdict as c2_verdict
+        c2pa_info = c2_verdict(path)
+
+        return {
+            "path": path,
+            "uid": uid,
+            "name": os.path.basename(path),
+            "exists": os.path.isfile(path),
+            "width": width, "height": height,
+            "filesize": filesize, "mtime": mtime,
+            "scores": scores,
+            "caption": caption,
+            "cluster": cluster,
+            "dupes": dupes,
+            "dupe_count": len(dupes),
+            "c2pa": c2pa_info,
+        }
 
     return app
 

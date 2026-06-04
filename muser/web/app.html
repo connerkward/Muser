@@ -319,6 +319,83 @@
                   cursor:pointer; padding:0 4px; }
   .tabfilter .x:hover { color:var(--fg); }
   .card.hide { display:none; }
+
+
+  /* ---- per-image detail page (#/image/<uid>) -------------------------------
+     Layout: large image on the left, metadata column on the right; collapses
+     to a single column under ~840px. Action row is "sticky" — pinned to the
+     bottom of the viewport while the user scrolls through the metadata, so
+     Add-to-cart / Similar / Compose / Lens / Reveal are always one tap away.
+     Type vocabulary is the same as the rest of the page: italic-serif for
+     labels and section heads, sans for values, middle dots between actions. */
+  .dwrap { display:grid; grid-template-columns: minmax(0, 1.4fr) minmax(280px, 1fr);
+           gap:36px; align-items:start; }
+  @media (max-width:840px) { .dwrap { grid-template-columns:1fr; } }
+  .dback { display:inline-block; background:transparent; border:0; padding:0;
+           color:var(--mut); font-size:12px; cursor:pointer; margin-bottom:14px; }
+  .dback:hover { color:var(--fg); }
+  .dimg { background:var(--paper); display:block; width:100%;
+          max-height:78vh; object-fit:contain; cursor:zoom-in; }
+  .dmissing { padding:90px 0; text-align:center; color:var(--mut);
+              font:italic 400 15px var(--serif); }
+  .dmeta h2 { font:italic 400 22px/1.25 var(--serif); margin:0 0 6px;
+              word-break:break-all; }
+  .dmeta .dpath { font-size:11px; color:var(--mut); word-break:break-all;
+                  margin:0 0 18px; }
+  .dmeta .dpath a { color:inherit; border-bottom:1px solid transparent; }
+  .dmeta .dpath a:hover { color:var(--fg); border-bottom-color:var(--fg); }
+  .dsec { margin:18px 0 0; padding:14px 0 0; border-top:1px solid var(--line); }
+  .dsec h3 { font:italic 400 13px/1.2 var(--serif); color:var(--mut); margin:0 0 8px;
+             letter-spacing:.02em; text-transform:lowercase; }
+  .dtab { width:100%; border-collapse:collapse; font-size:12px;
+          font-variant-numeric:tabular-nums; }
+  .dtab td { padding:3px 0; vertical-align:top; }
+  .dtab td.k { color:var(--mut); width:42%; padding-right:10px; font-style:italic;
+               font-family:var(--serif); }
+  .dtab td.v { color:var(--fg); }
+  .dtab tr.miss td.v { color:var(--mut); font-style:italic; font-family:var(--serif); }
+  .dtab .bar { display:inline-block; width:60px; height:1px; background:var(--line);
+               vertical-align:middle; margin-left:8px; position:relative; }
+  .dtab .bar > i { display:block; height:100%; background:var(--fg); }
+  /* Caption editor: same idiom as cart-modal — italic serif, no chrome until focus. */
+  .dcap { font:italic 400 14px/1.5 var(--serif); color:var(--fg);
+          background:transparent; border:0; border-bottom:1px solid transparent;
+          padding:4px 0; width:100%; resize:none; outline:none; overflow:hidden;
+          min-height:1.5em; }
+  .dcap:focus { border-bottom-color:var(--line); }
+  .dcap.missing { color:var(--mut); }
+  .dsaved { font-size:11px; color:var(--mut); padding:2px 0; opacity:0;
+            transition:opacity .15s; min-height:1em; }
+  .dsaved.on { opacity:1; }
+  /* Dupes list inside detail view */
+  .ddupes { display:grid; grid-template-columns:repeat(auto-fill, minmax(110px,1fr));
+            gap:14px 10px; margin-top:6px; }
+  .ddupes a { display:block; background:transparent; }
+  .ddupes a img { width:100%; aspect-ratio:1; object-fit:cover; background:var(--paper); }
+  .ddupes .dn { font-size:10px; color:var(--mut); padding:4px 0 0;
+                white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  /* Cluster link */
+  .dclus a { color:var(--fg); border-bottom:1px dotted var(--mut); cursor:pointer; }
+  .dclus a:hover { border-bottom-style:solid; border-bottom-color:var(--fg); }
+  .dclus .csub { font:italic 400 12px/1.4 var(--serif); color:var(--mut); margin-top:4px; }
+  /* Sticky action row: italic-serif buttons separated by middle dots. */
+  .daction { position:sticky; bottom:0; background:var(--bg);
+             border-top:1px solid var(--line);
+             padding:14px 28px; margin:32px -28px 0;
+             display:flex; flex-wrap:wrap; align-items:center; gap:6px 14px;
+             font:italic 400 15px/1.4 var(--serif); }
+  .daction button { background:transparent; border:0; padding:0; color:var(--mut);
+                    font:inherit; cursor:pointer; border-bottom:1px solid transparent; }
+  .daction button:hover { color:var(--fg); border-bottom-color:var(--fg); }
+  .daction button.primary { color:var(--fg); border-bottom:1px dotted var(--mut);
+                            background:transparent; padding:0; }
+  .daction button.primary:hover { border-bottom-style:solid; border-bottom-color:var(--fg); }
+  .daction button.added { border-bottom-style:solid; border-bottom-color:var(--fg); color:var(--fg); }
+  .daction .sep { color:var(--line); padding:0 2px; }
+  /* C2PA flag in detail */
+  .dc2pa { display:inline-block; background:rgba(180,120,0,.92); color:#fff;
+           font-size:10px; font-weight:600; padding:2px 7px;
+           letter-spacing:.02em; }
 </style>
 </head>
 <body>
@@ -505,6 +582,13 @@
     <button class="x" id="afilterX" title="Clear filter" style="display:none">×</button>
   </div>
   <div class="grid" id="aiGrid"></div>
+</div>
+
+<!-- Per-image detail view (#/image/<uid>). All sections are populated by
+     loadImageDetail; until that resolves we show a skeleton-y placeholder. -->
+<div class="wrap" id="imageView" style="display:none">
+  <button class="dback" id="dback">← back</button>
+  <div id="dbody"><div class="dmissing">Loading…</div></div>
 </div>
 
 <div id="busy" class="busy" style="display:none">
@@ -1145,7 +1229,11 @@ function _renderHits(r){
           <button class="lens" title="Copy image + open Google Lens (⌘V to search where it appears)">Lens</button>
           <button class="reveal" title="Reveal in Finder">Reveal</button>
         </span></div>`;
-    c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
+    // Thumb click → per-image detail view. The .thumb cursor stays zoom-in so the
+    // change is obvious; `Open externally` on the detail page is the new home of
+    // the "raw image in a new tab" affordance. uid comes from the search result;
+    // if it's missing (older servers) we fall back to opening the raw image.
+    c.querySelector(".thumb").onclick=()=> uid ? openDetail(uid) : window.open(`/api/image?path=${enc(h.path)}`,"_blank");
     { const btn = c.querySelector(".add"); if (cartHas(h.path)) btn.classList.add("added");
       btn.onclick = () => cartToggle(h.path, btn); }
     c.querySelector(".sim").onclick=()=>searchImage(h.path);
@@ -1366,14 +1454,263 @@ function openDupes(h){
 $("#dupesClose").onclick=()=>$("#dupes").classList.remove("show");
 $("#dupes").onclick=e=>{ if(e.target.id==="dupes") $("#dupes").classList.remove("show"); };
 
-// ---- view switching (Search / Explore / Interesting / Review) ----
-const VIEWS={search:"searchView",explore:"exploreView",interesting:"interestingView",review:"reviewView",ai:"aiView"};
+// ---- per-image detail view (#/image/<uid>) --------------------------------
+// Bundled fact-sheet for one image — fetched from /api/image-detail with the
+// stable blake2b uid (so the URL is shareable / reload-survives without leaking
+// the absolute path). One render per nav; no live polling.
+const SCORE_METRICS = [
+  // Display order matches the spec's "tight stacked table". Each entry =
+  // (key in scores dict, human label). Missing scores render as "—" — the
+  // user should see WHICH metrics weren't computed, not have them silently elided.
+  ["interesting",     "interesting"],
+  ["novelty",         "novelty"],
+  ["aesthetic",       "aesthetic (zero-shot)"],
+  ["aesthetic_v2",    "aesthetic (LAION v2)"],
+  ["pickscore",       "pickscore"],
+  ["aesthetic_v25",   "aesthetic (v2.5)"],
+  ["hps_v21",         "HPS v2.1"],
+  ["nsfw",            "nsfw (blended)"],
+  ["nsfw_falconsai",  "nsfw (Falconsai)"],
+  ["nsfw_adamcodd",   "nsfw (AdamCodd)"],
+  ["nsfw_marqo",      "nsfw (Marqo)"],
+  ["nsfw_consensus",  "nsfw (consensus)"],
+  ["private",         "private / leak"],
+];
+function fmtKB(b){
+  if(b==null) return "—";
+  if(b<1024) return b+" B";
+  const kb=b/1024; if(kb<1024) return kb.toFixed(0)+" KB";
+  return (kb/1024).toFixed(1)+" MB";
+}
+function fmtMtime(t){
+  if(t==null) return "—";
+  return new Date(t*1000).toLocaleString();
+}
+async function loadImageDetail(uid){
+  // Reset to placeholder so the previous image's data doesn't flash while we fetch.
+  $("#dbody").innerHTML = `<div class="dmissing">Loading…</div>`;
+  document.title = "Muser — image";
+  $("#dback").onclick = () => history.length > 1 ? history.back() : showView("search");
+  let r;
+  try { r = await fetch(`/api/image-detail?uid=${enc(uid)}`); }
+  catch (e) { $("#dbody").innerHTML = `<div class="dmissing">network error</div>`; return; }
+  if (r.status === 404) {
+    $("#dbody").innerHTML = `<div class="dmissing">No image found for <code>${uid}</code> — has the index been rebuilt since this link was made?</div>`;
+    return;
+  }
+  if (!r.ok) { $("#dbody").innerHTML = `<div class="dmissing">load failed (${r.status})</div>`; return; }
+  const d = await r.json();
+  document.title = "Muser — " + (d.name || "image");
+  renderImageDetail(d);
+}
+function renderImageDetail(d){
+  // Compose the score rows. Each row = label · value · bar (0–1 scaled).
+  const sRows = SCORE_METRICS.map(([k, label]) => {
+    const v = d.scores && d.scores[k];
+    if (v == null) return `<tr class="miss"><td class="k">${label}</td><td class="v">—</td></tr>`;
+    const pct = Math.max(0, Math.min(100, Math.round(v*100)));
+    return `<tr><td class="k">${label}</td><td class="v">${v.toFixed(3)}<span class="bar"><i style="width:${pct}%"></i></span></td></tr>`;
+  }).join("");
+
+  const dims = (d.width && d.height) ? `${d.width} × ${d.height}` : "—";
+  const aspect = (d.width && d.height) ? (d.width/d.height).toFixed(2) : "—";
+  const cap = d.caption || "";
+  const isMissing = !d.caption;
+
+  // C2PA section: amber pill if signed AI provenance, otherwise a quiet "no AI tag".
+  let c2paBlock = "";
+  if (d.c2pa && d.c2pa.available === false) {
+    c2paBlock = `<div class="dsec"><h3>provenance (C2PA)</h3>
+      <div style="font-size:12px;color:var(--mut);font-style:italic;font-family:var(--serif)">c2patool not installed</div>
+    </div>`;
+  } else if (d.c2pa && d.c2pa.ai) {
+    const how = d.c2pa.kind === "composite" ? "AI-edited" : "AI-generated";
+    const tool = d.c2pa.tool ? ` — ${d.c2pa.tool}` : "";
+    c2paBlock = `<div class="dsec"><h3>provenance (C2PA)</h3>
+      <span class="dc2pa">AI?</span>
+      <div style="font-size:12px;color:var(--mut);margin-top:6px;font-style:italic;font-family:var(--serif)">Content Credentials declare this ${how}${tool}</div>
+    </div>`;
+  } else {
+    c2paBlock = `<div class="dsec"><h3>provenance (C2PA)</h3>
+      <div style="font-size:12px;color:var(--mut);font-style:italic;font-family:var(--serif)">no signed AI provenance</div>
+    </div>`;
+  }
+
+  // Cluster section: link back to Explore with the cluster opened.
+  let clusterBlock = "";
+  if (d.cluster) {
+    const c = d.cluster;
+    clusterBlock = `<div class="dsec dclus"><h3>cluster</h3>
+      <a id="dclusLink" data-method="${c.method}" data-id="${c.id}" data-label="${(c.label||"").replace(/"/g,'&quot;')}" data-sub="${(c.sublabel||"").replace(/"/g,'&quot;')}" data-size="${c.size}">${c.label}</a>
+      <div class="csub">${c.sublabel||""} · ${(c.size||0).toLocaleString()} images</div></div>`;
+  }
+
+  // Duplicates section: only if >1 dupe; show as a tile strip.
+  let dupesBlock = "";
+  if (d.dupe_count > 1) {
+    const tiles = d.dupes.map(p => {
+      const fn = p.split("/").pop();
+      return `<a data-path="${p.replace(/"/g,'&quot;')}" title="${p}" class="ddupe">
+        <img loading="lazy" src="/api/thumb?path=${enc(p)}&size=200">
+        <div class="dn">${fn}</div></a>`;
+    }).join("");
+    dupesBlock = `<div class="dsec"><h3>duplicates (${d.dupe_count})</h3>
+      <div class="ddupes">${tiles}</div></div>`;
+  }
+
+  // In cart? mirror state for the Add button.
+  const inCart = cartHas(d.path);
+
+  $("#dbody").innerHTML = `
+    <div class="dwrap">
+      <div>
+        <a href="/api/image?path=${enc(d.path)}" target="_blank">
+          <img class="dimg" src="/api/image?path=${enc(d.path)}" alt="${(d.name||"").replace(/"/g,'&quot;')}" />
+        </a>
+      </div>
+      <div class="dmeta">
+        <h2>${d.name||""}</h2>
+        <div class="dpath"><a id="drevealPath" href="#">${d.path}</a></div>
+
+        <div class="dsec"><h3>file</h3>
+          <table class="dtab"><tbody>
+            <tr><td class="k">resolution</td><td class="v">${dims}</td></tr>
+            <tr><td class="k">aspect</td><td class="v">${aspect}</td></tr>
+            <tr><td class="k">file size</td><td class="v">${fmtKB(d.filesize)}</td></tr>
+            <tr><td class="k">modified</td><td class="v">${fmtMtime(d.mtime)}</td></tr>
+            <tr><td class="k">uid</td><td class="v" style="font-family:ui-monospace,Menlo,monospace">${d.uid}</td></tr>
+          </tbody></table>
+        </div>
+
+        <div class="dsec"><h3>caption</h3>
+          <textarea class="dcap ${isMissing?"missing":""}" id="dcap" rows="2" placeholder="${isMissing?"no caption — run \`muser caption\` or use the cart caption button":""}">${cap}</textarea>
+          <div class="dsaved" id="dsaved"></div>
+        </div>
+
+        <div class="dsec"><h3>scores</h3>
+          <table class="dtab"><tbody>${sRows}</tbody></table>
+        </div>
+
+        ${clusterBlock}
+        ${c2paBlock}
+        ${dupesBlock}
+      </div>
+    </div>
+    <div class="daction">
+      <button id="dadd" class="primary ${inCart?"added":""}">${inCart?"× Remove from cart":"Add to cart"}</button>
+      <span class="sep">·</span>
+      <button id="dsim">Similar</button>
+      <span class="sep">·</span>
+      <button id="dcompose">Compose with</button>
+      <span class="sep">·</span>
+      <button id="dlens">Lens</button>
+      <span class="sep">·</span>
+      <button id="dreveal">Reveal</button>
+      <span class="sep">·</span>
+      <button id="daddUp">Add upscaled to cart</button>
+      <span class="sep">·</span>
+      <button id="dopen">Open externally</button>
+    </div>
+  `;
+
+  // ---- wire actions ----
+  const ta = document.getElementById("dcap");
+  autosizeTa(ta);
+  ta.addEventListener("input", () => autosizeTa(ta));
+  ta.addEventListener("change", async () => {
+    const v = ta.value.trim();
+    if (!v) return;
+    if (v === d.caption) return;
+    ta.classList.remove("missing");
+    const savedEl = document.getElementById("dsaved");
+    try {
+      const r = await fetch("/api/caption", {
+        method: "POST", headers: {"content-type":"application/json"},
+        body: JSON.stringify({path: d.path, caption: v}),
+      });
+      if (!r.ok) { savedEl.textContent="save failed"; savedEl.classList.add("on"); return; }
+      d.caption = v;
+      savedEl.textContent="✓ saved"; savedEl.classList.add("on");
+      setTimeout(()=>savedEl.classList.remove("on"), 800);
+    } catch { savedEl.textContent="save failed"; savedEl.classList.add("on"); }
+  });
+
+  document.getElementById("drevealPath").onclick = async (e) => {
+    e.preventDefault();
+    await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:d.path})});
+    toast("revealed in Finder");
+  };
+  document.getElementById("dreveal").onclick = async () => {
+    await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:d.path})});
+    toast("revealed in Finder");
+  };
+  document.getElementById("dadd").onclick = (e) => {
+    cartToggle(d.path, e.currentTarget);
+    // cartToggle expects a button it can set textContent on with "+ Add"/"× Added"; rewrite for the bigger label.
+    const inC = cartHas(d.path);
+    e.currentTarget.textContent = inC ? "× Remove from cart" : "Add to cart";
+    e.currentTarget.classList.toggle("added", inC);
+  };
+  document.getElementById("dsim").onclick = () => { showView("search"); searchImage(d.path); };
+  document.getElementById("dcompose").onclick = () => { showView("search"); openCompose(d.path); };
+  document.getElementById("dlens").onclick = (e) => lensSearch(d.path, e.currentTarget);
+  document.getElementById("dopen").onclick = () => window.open(`/api/image?path=${enc(d.path)}`,"_blank");
+  document.getElementById("daddUp").onclick = (e) => {
+    // Feature-B hook: if cart entries carry an `upscale` flag, set it true here.
+    // Until B lands, this just behaves like Add and toasts a note.
+    if (typeof cartSetUpscale === "function") {
+      cartSetUpscale(d.path, true);
+      e.currentTarget.textContent = "× Upscale queued";
+      e.currentTarget.classList.add("added");
+      toast("Will upscale this on zip download");
+    } else {
+      cartToggle(d.path, e.currentTarget);
+      e.currentTarget.textContent = "× Added (upscale flag pending Feature B)";
+      toast("Added — upscale flag will apply once shipped");
+    }
+  };
+  // Cluster link → back to Explore with that cluster opened.
+  const clink = document.getElementById("dclusLink");
+  if (clink) {
+    clink.onclick = (e) => {
+      e.preventDefault();
+      showView("explore");
+      // openCluster(method, id, label, sublabel, size) — same call the cluster grid uses.
+      try {
+        openCluster(clink.dataset.method, parseInt(clink.dataset.id,10),
+                    clink.dataset.label, clink.dataset.sub, parseInt(clink.dataset.size,10));
+      } catch {}
+    };
+  }
+  // Dupes tiles → click to open detail of that path (via its uid lookup).
+  document.querySelectorAll("#dbody .ddupe").forEach(a => {
+    a.onclick = async (e) => {
+      e.preventDefault();
+      const p = a.dataset.path;
+      // The detail-by-path requires a uid — we don't have one for sibling dupes,
+      // so resolve via /api/image-detail's reverse map by trying the search-image
+      // endpoint to read the canonical name. Simpler: open the raw image in a new tab.
+      window.open(`/api/image?path=${enc(p)}`, "_blank");
+    };
+  });
+}
+
+// Expose so any card render anywhere can switch to the detail view by uid.
+function openDetail(uid){ showView("image", {uid}); }
+
+// ---- view switching (Search / Explore / Interesting / Review / AI / Image) ----
+// `image` is a *detail* view (no nav button) — it's only reached from hash
+// routing (#/image/<uid>) or programmatically via openDetail(uid).
+const VIEWS={search:"searchView",explore:"exploreView",interesting:"interestingView",review:"reviewView",ai:"aiView",image:"imageView"};
 const NAVS={search:"navSearch",explore:"navExplore",interesting:"navInteresting",review:"navReview",ai:"navAI"};
-const VIEW_TITLES={search:"Search",explore:"Explore",interesting:"Interesting",review:"Review",ai:"AI"};
+const VIEW_TITLES={search:"Search",explore:"Explore",interesting:"Interesting",review:"Review",ai:"AI",image:"Image"};
 // Internal flag: when popstate or initial-route call showView, suppress the
 // pushState so back/forward don't double-stack history entries.
 let _suppressHistory=false;
-function showView(v){
+function showView(v, opts){
+  // `opts.uid` carries the uid when v === "image"; we don't reflect it through
+  // showView's signature so casual callers can keep doing showView("search").
+  opts = opts || {};
   for(const k in VIEWS) $("#"+VIEWS[k]).style.display = k===v?"":"none";
   for(const k in NAVS) $("#"+NAVS[k]).className="nav"+(k===v?" on":"");
   // Mirror the active view to body class so the mini can CSS-toggle which
@@ -1389,14 +1726,15 @@ function showView(v){
   if(v==="interesting") loadScores("#scoreGrid","#imsg","#imetric");
   if(v==="review") loadScores("#reviewGrid","#rmsg","#rcat");
   if(v==="ai") loadAI();
+  if(v==="image" && opts.uid) loadImageDetail(opts.uid);
   // ---- URL + title sync ----
   // One push per user-initiated tab switch; popstate/initial routing pass
   // through _suppressHistory so back/forward don't stack duplicates.
   document.title = "Muser — " + (VIEW_TITLES[v] || "semantic image search");
   if(!_suppressHistory){
-    const url = "#/" + v;
+    const url = v==="image" && opts.uid ? `#/image/${opts.uid}` : "#/" + v;
     // Skip pushing if the hash already matches (e.g. user clicked the active tab).
-    if(location.hash !== url) history.pushState({view:v}, "", url);
+    if(location.hash !== url) history.pushState({view:v, uid:opts.uid||null}, "", url);
   }
 }
 // Wire the mini-nav buttons to the same showView pipeline.
@@ -1406,20 +1744,32 @@ document.querySelectorAll(".mini-nav button").forEach(b => {
 for(const k in NAVS) $("#"+NAVS[k]).onclick=()=>showView(k);
 
 // ---- hash routing: #/explore -> Explore tab, back/forward restores prior tab ----
-// Parse the leading view segment from a hash like "#/explore" or "#/search?q=..".
-function viewFromHash(){
+// Parse the leading view segment from a hash like "#/explore" or "#/image/<uid>".
+function routeFromHash(){
   const h = location.hash || "";
+  // #/image/<uid> — uid is the second segment (12-hex from blake2b). The /?
+  // tolerates "#/image" without a uid (falls back to search since there's
+  // nothing to render).
+  const mi = h.match(/^#\/?image\/([a-f0-9]+)/i);
+  if(mi) return {view:"image", uid:mi[1]};
   const m = h.match(/^#\/?([a-z]+)/i);
   const v = m && m[1] in VIEWS ? m[1] : null;
   if(h && h !== "#" && h !== "#/" && !v){
     console.warn("muser: unknown route hash", h, "— falling back to search");
   }
-  return v || "search";
+  return {view: v || "search"};
 }
+// Back-compat shim: callers used to do `showView(viewFromHash())`.
+function viewFromHash(){ return routeFromHash().view; }
 window.addEventListener("popstate", (e) => {
-  const v = (e.state && e.state.view && e.state.view in VIEWS) ? e.state.view : viewFromHash();
+  let route;
+  if(e.state && e.state.view && e.state.view in VIEWS){
+    route = {view: e.state.view, uid: e.state.uid || null};
+  } else {
+    route = routeFromHash();
+  }
   _suppressHistory = true;
-  try { showView(v); } finally { _suppressHistory = false; }
+  try { showView(route.view, {uid: route.uid}); } finally { _suppressHistory = false; }
 });
 
 // ---- AI tab: images whose C2PA Content Credentials declare AI origin ----
@@ -1469,7 +1819,7 @@ function renderAI(items){
       <div class="foot"><button class="sim" title="Find visually similar">Similar</button>
         <span class="more"><button class="lens" title="Copy image + open Google Lens">Lens</button>
         <button class="reveal" title="Reveal in Finder">Reveal</button></span></div>`;
-    c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
+    c.querySelector(".thumb").onclick=()=> h.uid ? openDetail(h.uid) : window.open(`/api/image?path=${enc(h.path)}`,"_blank");
     c.querySelector(".sim").onclick=()=>{ showView("search"); searchImage(h.path); };
     c.querySelector(".lens").onclick=e=>lensSearch(h.path,e.currentTarget);
     c.querySelector(".reveal").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:h.path})}); toast("revealed in Finder"); };
@@ -1509,7 +1859,7 @@ async function loadScores(gridSel,msgSel,metricSel){
     c.innerHTML=`<div class="thumb"><span class="scoreb">${Math.round(h.score*100)}</span>${dupe}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}" title="${h.name}${uid?' · uid:'+uid:''}"></div>
       <div class="meta"><div class="name" title="${h.path}${uid?' · uid:'+uid:''}">${h.name}</div></div>
       <div class="foot"><button class="lens" title="Copy image + open Google Lens (⌘V to search where it appears)">Lens</button></div>`;
-    c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
+    c.querySelector(".thumb").onclick=()=> uid ? openDetail(uid) : window.open(`/api/image?path=${enc(h.path)}`,"_blank");
     c.querySelector(".lens").onclick=e=>lensSearch(h.path,e.currentTarget);
     if((h.dupe_count||1)>1) c.querySelector(".dupe").onclick=e=>{ e.stopPropagation(); openDupes(h); };
     g.appendChild(c);
@@ -1684,7 +2034,7 @@ async function loadMoreClusterMembers(isFirst){
     c.dataset.uid=uid;
     c.innerHTML=`<div class="thumb"><img loading="lazy" src="/api/thumb?path=${enc(h.path)}" title="${h.name}${uid?' · uid:'+uid:''}"></div>
       <div class="meta"><div class="name" title="${h.path}${uid?' · uid:'+uid:''}">${h.name}</div></div>`;
-    c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
+    c.querySelector(".thumb").onclick=()=> uid ? openDetail(uid) : window.open(`/api/image?path=${enc(h.path)}`,"_blank");
     g.appendChild(c);
   });
   _cdOffset = offset + r.members.length;
@@ -1708,14 +2058,15 @@ $("#indexPick").onclick = async () => {
 };
 
 pollStatus(); loadFolders(); loadClusterChips();
-// Initial route: respect ?#/<view> in the URL so deep-links / reload land on
-// the right tab. Use replaceState (via the suppress flag + explicit replace) so
-// we don't leave an empty entry behind the first real navigation.
+// Initial route: respect #/<view> (or #/image/<uid>) in the URL so deep-links
+// / reload land on the right tab. Use replaceState (via the suppress flag +
+// explicit replace) so we don't leave an empty entry behind the first real navigation.
 {
-  const initial = viewFromHash();
+  const r = routeFromHash();
   _suppressHistory = true;
-  try { showView(initial); } finally { _suppressHistory = false; }
-  history.replaceState({view: initial}, "", "#/" + initial);
+  try { showView(r.view, {uid: r.uid}); } finally { _suppressHistory = false; }
+  const url = r.view==="image" && r.uid ? `#/image/${r.uid}` : "#/" + r.view;
+  history.replaceState({view: r.view, uid: r.uid||null}, "", url);
 }
 </script>
 </body>
