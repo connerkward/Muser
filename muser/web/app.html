@@ -304,6 +304,21 @@
   .filter-presets button:hover { color:var(--fg); border-color:var(--fg); }
   .filter-cov { color:var(--mut); font:italic 400 12px/1 var(--serif); }
   .filter-cov b { font-style:normal; color:var(--fg); font-variant-numeric:tabular-nums; }
+
+  /* Inline tab-filter input: lives above the grid on Interesting / Review / AI.
+     Thin border, italic-serif placeholder; narrows already-rendered cards by
+     basename + caption substring (no backend round-trip per keystroke). */
+  .tabfilter { display:flex; align-items:center; gap:10px; margin:0 0 12px; }
+  .tabfilter input { flex:0 1 360px; background:transparent; border:0;
+                     border-bottom:1px solid var(--line); padding:5px 2px;
+                     color:var(--fg); font:13px/1.4 var(--sans); outline:none; }
+  .tabfilter input:focus { border-bottom-color:var(--fg); }
+  .tabfilter input::placeholder { color:var(--mut); font:italic 400 13px/1.4 var(--serif); }
+  .tabfilter .n { color:var(--mut); font:italic 400 12px/1 var(--serif); }
+  .tabfilter .x { background:transparent; border:0; color:var(--mut); font-size:14px;
+                  cursor:pointer; padding:0 4px; }
+  .tabfilter .x:hover { color:var(--fg); }
+  .card.hide { display:none; }
 </style>
 </head>
 <body>
@@ -446,6 +461,11 @@
     <span class="mut" id="imsg"></span>
   </div>
   <div id="icov" style="margin:-6px 0 14px;font-size:12px"></div>
+  <div class="tabfilter">
+    <input id="ifilter" placeholder="filter…" autocomplete="off" />
+    <span class="n" id="ifilterN"></span>
+    <button class="x" id="ifilterX" title="Clear filter" style="display:none">×</button>
+  </div>
   <div class="grid" id="scoreGrid"></div>
 </div>
 
@@ -464,6 +484,11 @@
   </div>
   <div id="rcov" style="margin:-2px 0 8px;font-size:12px"></div>
   <div style="font-size:11px;color:#caa468;margin-bottom:14px">⚠︎ Heuristic flags for reviewing your <i>own</i> library — not a verdict. Three independent ViT NSFW heads (Falconsai, AdamCodd, Marqo) sortable separately, plus their elementwise max (consensus). Highest-scoring first; skim and decide.</div>
+  <div class="tabfilter">
+    <input id="rfilter" placeholder="filter…" autocomplete="off" />
+    <span class="n" id="rfilterN"></span>
+    <button class="x" id="rfilterX" title="Clear filter" style="display:none">×</button>
+  </div>
   <div class="grid" id="reviewGrid"></div>
 </div>
 
@@ -474,6 +499,11 @@
     <button id="aiScan" style="display:none">Scan library</button>
   </div>
   <div style="font-size:11px;color:#caa468;margin-bottom:14px">Images whose signed <b>C2PA Content Credentials</b> declare AI origin (OpenAI, Adobe Firefly, Google…). Positive-only — local Stable Diffusion / Flux / ComfyUI output carries no credentials, so this is a <i>lower bound</i>, not every AI image.</div>
+  <div class="tabfilter">
+    <input id="afilter" placeholder="filter…" autocomplete="off" />
+    <span class="n" id="afilterN"></span>
+    <button class="x" id="afilterX" title="Clear filter" style="display:none">×</button>
+  </div>
   <div class="grid" id="aiGrid"></div>
 </div>
 
@@ -1452,6 +1482,8 @@ function renderAI(items){
   items.forEach(h=>{
     const how = h.kind==="composite" ? "AI-edited" : "AI";
     const c=document.createElement("div"); c.className="card";
+    c.dataset.path = h.path;
+    c.dataset.filtertext = _filterText(h.path, h.name);
     c.innerHTML=`<div class="thumb"><span class="aiflag" title="C2PA declares this ${h.kind==="composite"?"AI-edited":"AI-generated"}${h.tool?" — "+h.tool:""}">${how}?</span><img loading="lazy" src="/api/thumb?path=${enc(h.path)}"></div>
       <div class="meta"><div class="name" title="${h.path}">${h.name}</div></div>
       <div class="foot"><button class="sim" title="Find visually similar">Similar</button>
@@ -1463,6 +1495,7 @@ function renderAI(items){
     c.querySelector(".reveal").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:h.path})}); toast("revealed in Finder"); };
     g.appendChild(c);
   });
+  applyTabFilter("ai");
 }
 
 async function loadScores(gridSel,msgSel,metricSel){
@@ -1491,6 +1524,8 @@ async function loadScores(gridSel,msgSel,metricSel){
     const uid=h.uid||"";
     const c=document.createElement("div"); c.className="card";
     c.dataset.uid=uid;
+    c.dataset.path = h.path;
+    c.dataset.filtertext = _filterText(h.path, h.name);
     c.innerHTML=`<div class="thumb"><span class="scoreb">${Math.round(h.score*100)}</span>${dupe}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}" title="${h.name}${uid?' · uid:'+uid:''}"></div>
       <div class="meta"><div class="name" title="${h.path}${uid?' · uid:'+uid:''}">${h.name}</div></div>
       <div class="foot"><button class="lens" title="Copy image + open Google Lens (⌘V to search where it appears)">Lens</button></div>`;
@@ -1499,9 +1534,93 @@ async function loadScores(gridSel,msgSel,metricSel){
     if((h.dupe_count||1)>1) c.querySelector(".dupe").onclick=e=>{ e.stopPropagation(); openDupes(h); };
     g.appendChild(c);
   });
+  // After (re)render, reapply the matching tab's persisted filter so a tab
+  // switch / metric change immediately respects the prior query.
+  if(gridSel === "#scoreGrid") applyTabFilter("interesting");
+  else if(gridSel === "#reviewGrid") applyTabFilter("review");
 }
 $("#imetric").onchange=()=>loadScores("#scoreGrid","#imsg","#imetric");
 $("#rcat").onchange=()=>loadScores("#reviewGrid","#rmsg","#rcat");
+
+// ---- inline tab filter (Interesting / Review / AI) ----
+// Live-narrows the rendered grid by basename + caption substring. All filtering
+// is DOM-only (data-filtertext on each card); the caption map is fetched once
+// in bulk so a keystroke never touches the network.
+const TABFILTER_KEY = "muser-tabfilter-v1";
+let _captionMap = {};                                  // path -> caption, lazily filled
+let _captionsLoaded = false;
+const _tabFilterCfg = {
+  interesting: { grid: "#scoreGrid",  input: "#ifilter", n: "#ifilterN", x: "#ifilterX" },
+  review:      { grid: "#reviewGrid", input: "#rfilter", n: "#rfilterN", x: "#rfilterX" },
+  ai:          { grid: "#aiGrid",     input: "#afilter", n: "#afilterN", x: "#afilterX" },
+};
+function _loadTabFilterState(){
+  try { return JSON.parse(localStorage.getItem(TABFILTER_KEY) || "{}"); } catch { return {}; }
+}
+function _saveTabFilterState(tab, v){
+  const s = _loadTabFilterState(); if(v) s[tab] = v; else delete s[tab];
+  localStorage.setItem(TABFILTER_KEY, JSON.stringify(s));
+}
+function _filterText(path, name){
+  const base = (name || (path||"").split("/").pop() || "").toLowerCase();
+  const cap  = (_captionMap[path] || "").toLowerCase();
+  return cap ? base + "\n" + cap : base;
+}
+async function _ensureCaptionsLoaded(){
+  if(_captionsLoaded) return;
+  _captionsLoaded = true;
+  try {
+    const r = await (await fetch("/api/captions")).json();
+    _captionMap = r.captions || {};
+    // Backfill any already-rendered cards (Interesting / Review / AI) whose
+    // data-filtertext was computed before captions arrived.
+    for(const tab of Object.keys(_tabFilterCfg)){
+      const g = $(_tabFilterCfg[tab].grid);
+      if(!g) continue;
+      g.querySelectorAll(".card").forEach(c => {
+        const path = c.dataset.path || "";
+        const name = (c.querySelector(".name")||{}).textContent || "";
+        if(path) c.dataset.filtertext = _filterText(path, name);
+      });
+      applyTabFilter(tab);
+    }
+  } catch {}
+}
+function applyTabFilter(tab){
+  const cfg = _tabFilterCfg[tab]; if(!cfg) return;
+  const inp = $(cfg.input);
+  const q = (inp ? inp.value : "").trim().toLowerCase();
+  const g = $(cfg.grid); if(!g) return;
+  let shown = 0, total = 0;
+  g.querySelectorAll(".card").forEach(c => {
+    total++;
+    if(!q){ c.classList.remove("hide"); shown++; return; }
+    const hay = c.dataset.filtertext || "";
+    const hit = hay.includes(q);
+    c.classList.toggle("hide", !hit);
+    if(hit) shown++;
+  });
+  const nEl = $(cfg.n);
+  if(nEl) nEl.textContent = q ? `${shown.toLocaleString()} / ${total.toLocaleString()}` : "";
+  const xEl = $(cfg.x);
+  if(xEl) xEl.style.display = q ? "" : "none";
+}
+function _wireTabFilter(tab){
+  const cfg = _tabFilterCfg[tab];
+  const inp = $(cfg.input), xBtn = $(cfg.x);
+  if(!inp) return;
+  // Restore saved query.
+  const saved = (_loadTabFilterState()[tab] || "");
+  if(saved) inp.value = saved;
+  let t = null;
+  inp.addEventListener("input", () => {
+    clearTimeout(t);
+    t = setTimeout(() => { applyTabFilter(tab); _saveTabFilterState(tab, inp.value.trim()); }, 120);
+  });
+  if(xBtn) xBtn.onclick = () => { inp.value = ""; applyTabFilter(tab); _saveTabFilterState(tab, ""); inp.focus(); };
+}
+["interesting","review","ai"].forEach(_wireTabFilter);
+_ensureCaptionsLoaded();
 $("#cmethod").onchange=()=>loadClusters();
 $("#cback").onclick=()=>{
   $("#clusterDetail").style.display="none"; $("#clusterGrid").style.display="";

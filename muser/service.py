@@ -1108,6 +1108,13 @@ def create_app(model: str = DEFAULT_MODEL):
             raise HTTPException(404, "no caption for this path")
         return {"path": path, "uid": uid_for(path), "caption": cap}
 
+    @app.get("/api/captions")
+    def captions_bulk():
+        # Bulk read of every known caption ({path: caption}). Used by the
+        # Interesting / Review / AI tabs' inline filter so a keystroke can
+        # match on caption text without one /api/caption round-trip per card.
+        return {"captions": _load_captions()}
+
     @app.post("/api/caption")
     def caption_write(req: CaptionWriteReq):
         if not os.path.isfile(req.path):
