@@ -504,7 +504,44 @@ def create_app(model: str = DEFAULT_MODEL):
             r["uid"] = uid_for(r["path"])
         _add_prob(results)
         _attach_dims(results, [r["path"] for r in results])
+        _attach_scores(results)
         return results
+
+    # Cache the parsed scores.json by mtime so the Search-tab sort-blend join
+    # is one disk read per scores.json update, not one per request.
+    _scores_cache: dict = {"mtime": -1.0, "map": {}}
+    _scores_lock = threading.Lock()
+
+    def _attach_scores(results):
+        # Surface per-image aesthetic / pickscore from ~/.muser/scores.json on each
+        # search hit so the Search-tab "Sort blend" control can re-rank client-side
+        # (vec + aesthetic_v2 + pickscore) without re-fetching. Missing entries
+        # → key simply absent.
+        if not results:
+            return
+        scores_path = Path.home() / ".muser" / "scores.json"
+        try:
+            mt = scores_path.stat().st_mtime
+        except OSError:
+            return
+        with _scores_lock:
+            if mt != _scores_cache["mtime"]:
+                try:
+                    s = json.loads(scores_path.read_text())
+                    _scores_cache["map"] = s.get("scores", {})
+                    _scores_cache["mtime"] = mt
+                except Exception:
+                    _scores_cache["map"] = {}
+                    _scores_cache["mtime"] = mt
+            m = _scores_cache["map"]
+        for r in results:
+            row = m.get(r["path"])
+            if not row:
+                continue
+            if "aesthetic_v2" in row:
+                r["aesthetic_v2"] = round(float(row["aesthetic_v2"]), 4)
+            if "pickscore" in row:
+                r["pickscore"] = round(float(row["pickscore"]), 4)
 
     def _add_prob(results):
         # Attach a calibrated match probability (SigLIP sigmoid) per result so the UI's
