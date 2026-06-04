@@ -245,7 +245,7 @@ class SigLIP2Embedder:
             from transformers import AutoModel, AutoProcessor
 
             self._model = AutoModel.from_pretrained(self.model_id).to(_device()).eval()
-            self._proc = AutoProcessor.from_pretrained(self.model_id)
+            self._proc = AutoProcessor.from_pretrained(self.model_id, use_fast=True)
         return self._model
 
     def calibrate(self, cosines):
