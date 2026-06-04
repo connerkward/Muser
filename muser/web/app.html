@@ -451,6 +451,7 @@
   <span class="mut" id="status">…</span>
   <span class="sp"></span>
   <span class="spinner" id="spinner" style="display:none" title="Working…"></span>
+  <span class="mut" id="spinnerLabel" style="display:none"></span>
   <button class="upload" id="cartOpen" style="display:none" title="Open selection">Cart (<span id="cartN">0</span>)</button>
   <button class="upload" id="indexPick" title="Pick a folder and index it">Index folder</button>
   <span class="mut">model</span>
@@ -698,14 +699,30 @@ function toast(m){ const t=$("#toast"); t.textContent=m; t.classList.add("show")
 // Covers model-switch (~10–25s), folder indexing, slow searches. Fast warm
 // searches (~30ms) finish before the timer fires, so the spinner stays calm.
 let _inflight=0, _spinT=null;
+// Set true once the model is warm (pollStatus updates it). While false, a slow
+// fetch is the one-time text-encoder load, so the label explains that instead
+// of just "Searching…".
+let _modelReady=false;
 const _origFetch = window.fetch.bind(window);
 window.fetch = (...args) => {
   _inflight++;
   clearTimeout(_spinT);
-  _spinT = setTimeout(()=>{ if(_inflight>0) document.getElementById("spinner").style.display=""; }, 300);
+  _spinT = setTimeout(()=>{
+    if(_inflight<=0) return;
+    document.getElementById("spinner").style.display="";
+    const lbl = document.getElementById("spinnerLabel");
+    lbl.textContent = _modelReady
+      ? "Searching…"
+      : "Loading model — embedding your first query (one-time, ~10s)";
+    lbl.style.display="";
+  }, 300);
   const done = () => {
     _inflight = Math.max(0, _inflight-1);
-    if(_inflight===0){ clearTimeout(_spinT); const sp=document.getElementById("spinner"); if(sp) sp.style.display="none"; }
+    if(_inflight===0){
+      clearTimeout(_spinT);
+      const sp=document.getElementById("spinner"); if(sp) sp.style.display="none";
+      const lbl=document.getElementById("spinnerLabel"); if(lbl) lbl.style.display="none";
+    }
   };
   return _origFetch(...args).finally(done);
 };
@@ -1129,6 +1146,7 @@ async function pollStatus(){
 }
 function renderStatus(s){
   const wasBusy = _busy;
+  _modelReady = !!s.ready;
   _busy = !s.ready || (!!s.task && s.task.kind === "loading_model");
   $("#status").textContent = `${(s.indexed ?? 0).toLocaleString()} indexed · ${s.db}`;
   const sel = $("#model");
