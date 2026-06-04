@@ -69,5 +69,5 @@ def test_skintone_available_and_empty(tmp_path):
     flat = tmp_path / "flat.png"
     _solid(flat, (128, 128, 128), size=(128, 128))
     res = skintone._detect_and_tone(str(flat))
-    assert res["faces"] == [] and res["mst"] is None
+    assert res["dets"] == [] and res["mst"] is None
     assert len(skintone.MST_HEX) == 10

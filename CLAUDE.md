@@ -76,16 +76,23 @@ See `REQUIREMENTS.md` for scope/decisions.
   at `COLOR_TAU`). `available()` always True. CLI `muser color [--query "#rrggbb"] [--in dir]`
   (no query → build), API `/api/search-color?hex=`, `/api/color[/scan]`, web **Color** tab
   (picker + preset swatches). Fully local, $0, no model load.
-- `muser/skintone.py` — **skin-tone search** on the 10-point **Monk Skin Tone** scale.
-  Faces detected via OpenCV **YuNet** (tiny bundled ONNX in `muser/assets/`, MIT, no download);
-  within each face box a YCrCb skin mask isolates skin → median LAB → nearest MST swatch.
-  Per image: one entry per face (`mst` 1–10, `lab`, `frac`, `conf`) + a `mst` summary, in
-  `~/.muser/skintone.json`. `search(tone)` ranks by closeness × face prominence. CLI
-  `muser skintone [--tone N]`, API `/api/search-skintone?tone=`, `/api/skintone[/scan]` (status
-  carries the per-tone histogram + swatch hexes), web **Skin tone** tab (10 swatches w/ counts).
-  Accurate-by-construction (samples *detected* faces, not a global guess) but **detection is the
-  ceiling** — occluded/extreme-angle/tiny faces aren't counted, strong color casts shift the tone;
-  a positive signal, not a demographic classifier. Both facet scans **auto-trigger** post-index
+- `muser/skintone.py` — **skin-tone search** on the 10-point **Monk Skin Tone** scale, via a
+  **two-detector hybrid** so a *person*, not just a face, anchors the sample: (1) **face** —
+  OpenCV **YuNet** (bundled ONNX, MIT), the high-confidence source (face skin is the best tone
+  reference); (2) **person** — OpenCV **MobileNet-SSD** (bundled Caffe model, MIT, VOC `person`
+  class) as the fallback for face-less people (turned away / profile / distant / occluded), sampling
+  skin from *any* visible skin in the person box — but only for person boxes that don't already
+  contain a detected face (face-bearing people are sampled from the face, never double-counted).
+  Within each box a YCrCb skin mask → median LAB → nearest MST swatch. Per image: a list of
+  detections (`src` "face"/"body", `mst` 1–10, `lab`, `frac`, `conf`) + a `mst` summary (prominent
+  face else prominent body), in `~/.muser/skintone.json`. `search(tone)` ranks by closeness ×
+  prominence × source-weight (faces full, bodies `BODY_WEIGHT=0.6`). CLI `muser skintone [--tone N]`,
+  API `/api/search-skintone?tone=`, `/api/skintone[/scan]` (status carries per-tone histogram +
+  swatch hexes), web **Skin tone** tab (10 swatches w/ counts). `SCAN_VERSION` gates the incremental
+  scan (bumping it forces recompute on unchanged files after an algo change — v1 face-only → v2
+  face+person). **Honest limits:** detection is the ceiling AND a detected person with *no visible
+  skin* (fully clothed / coat) still yields no tone; strong color casts shift the sampled tone — a
+  positive signal, not a demographic classifier. Both facet scans **auto-trigger** post-index
   (incremental, folder-scoped) alongside c2pa, and prime at service startup. New core dep:
   `opencv-python-headless` (no GUI/Qt libs → clean on server + CI).
 - `eval/datasets.py` — standard benchmarks reduced to {image_paths, queries,

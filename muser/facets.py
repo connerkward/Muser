@@ -73,12 +73,14 @@ class Sidecar:
             return None
         return self._cache.get((path, st.st_mtime_ns, st.st_size))
 
-    def scan(self, paths, compute, progress=None, workers: int = 8) -> dict:
+    def scan(self, paths, compute, progress=None, workers: int = 8, version: int = 1) -> dict:
         """Incrementally compute the facet for each path. Returns the full cache.
 
-        ``compute(path) -> dict`` produces the per-image payload (``m``/``s`` are
-        added here). Files whose (mtime, size) already match the cache are
-        skipped. ``progress(done, total)`` is called as it goes.
+        ``compute(path) -> dict`` produces the per-image payload (``m``/``s``/``v``
+        are added here). Files whose (mtime, size) match AND whose stored ``v``
+        equals ``version`` are skipped — so bumping ``version`` after an algorithm
+        change forces a full recompute even on unchanged files.
+        ``progress(done, total)`` is called as it goes.
         """
         cache = self.load()
         total, done, changed = len(paths), 0, False
@@ -91,7 +93,8 @@ class Sidecar:
                 done += 1
                 continue
             e = cache.get(p)
-            if e and e.get("m") == st.st_mtime_ns and e.get("s") == st.st_size:
+            if (e and e.get("m") == st.st_mtime_ns and e.get("s") == st.st_size
+                    and e.get("v", 1) == version):
                 done += 1
                 continue
             todo.append((p, st))
@@ -109,7 +112,7 @@ class Sidecar:
         with ThreadPoolExecutor(max_workers=workers) as ex:
             for p, st, payload in ex.map(work, todo):
                 payload = dict(payload)
-                payload["m"], payload["s"] = st.st_mtime_ns, st.st_size
+                payload["m"], payload["s"], payload["v"] = st.st_mtime_ns, st.st_size, version
                 cache[p] = payload
                 changed = True
                 done += 1
