@@ -23,14 +23,18 @@ See `REQUIREMENTS.md` for scope/decisions.
   library scan headless (writes `~/.muser/c2pa.json`; same data the web "AI" tab uses).
 - `muser/service.py` — **embedded service** (`muser serve`): FastAPI app that warms
   the model once and owns the index; serves JSON API + the web search UI
-  (`muser/web/app.html`). Warm search ≈ 30 ms. Endpoints: /api/search, /api/index,
+  (`muser/web/app.html`). Warm search ≈ 40 ms (precomputed dedup, see below).
+  Endpoints: /api/search, /api/index,
   /api/thumb (PIL), /api/image, /api/reveal (open -R), /api/model, /api/status,
   /api/folders, /api/c2pa, /api/ai, /api/ai/scan. **AI-origin detection (C2PA):**
   `c2patool` (optional, `brew install c2patool`) reads a file's signed Content
   Credentials and reports whether they *declare* it AI-generated/-edited (IPTC
   `trainedAlgorithmicMedia` / `compositeWithTrainedAlgorithmicMedia`). Two surfaces,
-  both in `muser/c2pa.py`: (1) **per-result badge** — `/api/c2pa?path=` is queried lazily
-  by the web UI, pinning an amber **"AI?"** badge on flagged search results; (2) **"AI"
+  both in `muser/c2pa.py`: (1) **per-result badge** — `/api/search` inlines the verdict
+  on every result (`r.c2pa = {ai, kind, tool}`) from a RAM cache primed at service
+  startup from `~/.muser/c2pa.json` (the persisted scan), pinning an amber **"AI?"**
+  badge synchronously; `/api/c2pa?path=` remains a fallback for paths the sidecar
+  doesn't know about (newly indexed); (2) **"AI"
   tab** — `/api/ai` lists every flagged image from a persisted library scan
   (`~/.muser/c2pa.json`, incremental by mtime+size, parallel; same sidecar pattern as
   `scores.json`/`clusters.json`), `POST /api/ai/scan` runs that scan in the background
@@ -125,6 +129,25 @@ pass over the 17.9k uniques, so reserved for selective lookups, not wired in.
   prefilter compares case-sensitively, but NTFS/APFS are case-insensitive, so scoping with
   altered casing returns 0 results. Proper fix = a normalized `pathkey` column (schema
   change + re-index); not yet done.
+- **Search perf — precomputed dedup + path-only projection.** `/api/search` warm latency
+  is ~40 ms because of two pieces that look like they could be "simplified" but should not:
+  (1) `_search_dedup_precomputed` reuses the dupes-groups already computed in `scores.json`
+  to collapse near-duplicates via an O(1) `rep_of` inverse hashmap — instead of LanceDB's
+  full-vector over-fetch (288 rows × 1024-dim) + Python pairwise-cosine walk, which costs
+  ~200 ms. Falls back to the live cosine-walk in `index.search_dedup` only when
+  `method=='phash'/'both'` or before scoring has been run. (2) `MuserIndex.search()` does
+  `.select(["path"])` so the LanceDB result projection skips the vector column entirely —
+  at limit=288 that drops the scan from ~150 ms to ~10 ms. All current callers only read
+  `path` + `_distance`, so this is pure overhead reduction. Don't undo either without
+  a measurement showing it helps. C2PA badges are also inlined per result (see
+  Architecture above), eliminating ~120 follow-on `/api/c2pa` round-trips per search.
+- **Dead-file filter in /api/search.** LanceDB's index is append-by-mtime so deleted
+  files linger in the table until a full re-index. `_run_search` filters out results
+  whose canonical path is gone, and **promotes a live group member** (pulled from
+  `scores.json`'s `dupes` group) when the leading path was deleted — so a search hit
+  is only dropped when the entire dedup group is dead. Same logic applies to `/api/score`
+  (Interesting/Review tabs), which walks past `offset+limit` to fill the page with live
+  entries. ~1 ms overhead per search.
 
 ## Status
 
