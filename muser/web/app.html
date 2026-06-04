@@ -169,6 +169,8 @@
   .busy-card .spinner { width:18px; height:18px; }
   .busy-text { font:italic 400 18px/1.2 var(--serif); color:var(--fg); }
   .busy-sub { font-size:12px; color:var(--mut); font-variant-numeric:tabular-nums; }
+  .busy-note { font-size:12px; color:var(--mut); max-width:320px; text-align:center;
+               line-height:1.55; margin-top:2px; }
   .busy-bar { width:220px; height:1px; background:var(--line); overflow:hidden; }
   .busy-bar > i { display:block; height:100%; background:var(--fg);
                   transition:width .2s linear; width:0; }
@@ -656,6 +658,7 @@
     <div class="busy-text" id="busyText">Loading…</div>
     <div class="busy-sub" id="busySub"></div>
     <div class="busy-bar" id="busyBar" style="display:none"><i id="busyBarI"></i></div>
+    <div class="busy-note" id="busyNote"></div>
   </div>
 </div>
 <div class="modal" id="cartModal"><div class="box">
@@ -1145,9 +1148,13 @@ function renderStatus(s){
     busy.style.display = "";
     bar.style.display = "none";
     const t = s.task;
+    $("#busyNote").textContent = "";
     if (t.kind === "loading_model") {
       $("#busyText").textContent = "Loading model";
       $("#busySub").textContent = t.model;
+      $("#busyNote").textContent = "Loading the text encoder — the half of the model that turns "
+        + "your query into a vector to match against your indexed images. Image embeddings are "
+        + "already on disk; this happens once per launch (~10s), then searches are instant.";
     } else if (t.kind === "indexing") {
       const tot = t.total || 0, done = t.done || 0;
       $("#busyText").textContent = `Indexing ${t.folder.split("/").slice(-2).join("/")}`;
