@@ -19,6 +19,26 @@ pass) to compute, for every image:
                    against the neutral prompt "a high-quality image" — an
                    "unconditional aesthetic" reading. Weights: `yuvalkirstain/PickScore_v1`
                    (~700 MB). Slow first pass: ~50 ms/image on MPS (CLIP-H is large).
+  - aesthetic_v25 — Aesthetic Predictor V2.5 (Discus0434, 2024): direct upgrade to
+                   LAION-V2 — same MLP-head idea but with a 5-layer scoring head on
+                   `google/siglip-so400m-patch14-384` features (much stronger backbone
+                   than CLIP-L/14). Head checkpoint:
+                   `discus0434/aesthetic-predictor-v2-5/aesthetic_predictor_v2_5.pth`
+                   (~2.5 MB); backbone is ~3.5 GB and shared with no one else here.
+                   Raw output ≈ 1.0 (ugly) to ~9.0 (beautiful) per the upstream readme;
+                   we percentile-normalize.
+  - hps_v21      — HPS-v2.1 (Wu et al., updated 2024): direct upgrade to PickScore —
+                   open_clip ViT-H-14 fine-tuned on the HPDv2 dataset (~798k human
+                   preference pairs, larger and more diverse than Pick-a-Pic). We
+                   score each image against the empty/unconditional prompt and take
+                   `logit_scale·cos(img, txt)` — the same calibrated cosine the
+                   official `hpsv2.score` API returns. Weights:
+                   `xswu/HPSv2/HPS_v2.1_compressed.pt` (~3.7 GB) + open_clip's
+                   `laion2b_s32b_b79k` ViT-H-14 base (~3.9 GB). Loaded via open_clip
+                   directly — the `hpsv2` PyPI package was rejected because its
+                   install_requires pin `protobuf<4` conflicts with our
+                   `transformers>=4.52`, and it pulls in pytest/webdataset/clint as
+                   runtime deps.
   - interesting  — blend of novelty + aesthetic.
   - nsfw / private / political — zero-shot similarity to sensitivity concept sets.
                    These are HEURISTIC FLAGS FOR HUMAN REVIEW of your own library
@@ -27,11 +47,11 @@ pass) to compute, for every image:
 Each metric is percentile-normalized to [0,1] so they're comparable and sortable.
 Writes ~/.muser/scores.json; the Explore "Interesting" and "Review" tabs read it.
 
-The heavy new metrics (`aesthetic_v2`, `pickscore`) are computed only on the
-canonical set (deduped representatives), then broadcast to each dup group's members —
-near-identical copies share a score by definition. Per-path results are cached to
-`~/.muser/{aesthetic_v2,pickscore}_cache.json` keyed by `path|mtime|size` so
-incremental re-runs only score new/changed files.
+The heavy new metrics (`aesthetic_v2`, `pickscore`, `aesthetic_v25`, `hps_v21`) are
+computed only on the canonical set (deduped representatives), then broadcast to each
+dup group's members — near-identical copies share a score by definition. Per-path
+results are cached to `~/.muser/{aesthetic_v2,pickscore,aesthetic_v25,hps_v21}_cache.json`
+keyed by `path|mtime|size` so incremental re-runs only score new/changed files.
 """
 
 from __future__ import annotations
@@ -314,6 +334,194 @@ def _pickscore(paths: list[str], on_progress, batch_size: int = 16) -> np.ndarra
     return out
 
 
+# ---- Aesthetic Predictor V2.5 (Discus0434, 2024) ----------------------------
+# Direct upgrade to LAION-V2: 5-layer MLP scoring head on top of SigLIP-SO400M
+# image features. The upstream `aesthetic-predictor-v2-5` PyPI package is a thin
+# ~5 KB wrapper that does exactly this; we inline the equivalent to avoid adding
+# a third-party dep that only saves a few lines of code.
+AES_V25_HEAD_URL = (
+    "https://github.com/discus0434/aesthetic-predictor-v2-5/raw/main/models/"
+    "aesthetic_predictor_v2_5.pth"
+)
+AES_V25_BACKBONE = "google/siglip-so400m-patch14-384"
+AES_V25_CACHE = Path.home() / ".muser" / "aesthetic_v25_cache.json"
+
+
+def _aes_v25_head(hidden_size: int):
+    """Build the V2.5 scoring head (matches upstream `AestheticPredictorV2_5Head`)."""
+    from torch import nn
+
+    return nn.Sequential(
+        nn.Linear(hidden_size, 1024), nn.Dropout(0.5),
+        nn.Linear(1024, 128),         nn.Dropout(0.5),
+        nn.Linear(128, 64),           nn.Dropout(0.5),
+        nn.Linear(64, 16),            nn.Dropout(0.2),
+        nn.Linear(16, 1),
+    )
+
+
+def _aesthetic_v25(paths: list[str], on_progress, batch_size: int = 24) -> np.ndarray:
+    """Aesthetic Predictor V2.5 per path. Backbone = SigLIP-SO400M-384.
+
+    For each image: pool the SigLIP vision tower output, L2-normalize, run the
+    5-layer MLP head, take the scalar logit. Cached by path+mtime+size.
+    """
+    import torch
+    from transformers import SiglipImageProcessor, SiglipVisionModel
+
+    from .embedders import _device, _load_rgb
+
+    cache = _read_cache(AES_V25_CACHE)
+    out = np.zeros(len(paths), dtype=np.float32)
+
+    needed_idx, needed_paths = [], []
+    for i, p in enumerate(paths):
+        key = _cache_key(p)
+        if key and key in cache:
+            out[i] = cache[key]
+        else:
+            needed_idx.append(i)
+            needed_paths.append(p)
+    if not needed_paths:
+        on_progress(f"aesthetic_v25: all {len(paths)} cached, skipping model load")
+        return out
+
+    on_progress(f"aesthetic_v25: loading SigLIP-SO400M-384 backbone (~3.5 GB, one-time)…")
+    dev = _device()
+    backbone = SiglipVisionModel.from_pretrained(AES_V25_BACKBONE).eval().to(dev)
+    processor = SiglipImageProcessor.from_pretrained(AES_V25_BACKBONE)
+    on_progress("aesthetic_v25: downloading V2.5 MLP head (~2.5 MB)…")
+    head_sd = torch.hub.load_state_dict_from_url(AES_V25_HEAD_URL, map_location="cpu")
+    # Upstream checkpoint nests under "scoring_head."; strip so it loads into a
+    # bare nn.Sequential (whose params are named by index, e.g. "0.weight").
+    head_sd = {k.replace("scoring_head.", "", 1): v for k, v in head_sd.items()}
+    head = _aes_v25_head(backbone.config.hidden_size)
+    head.load_state_dict(head_sd)
+    head = head.eval().to(dev)
+    on_progress(f"aesthetic_v25: scoring {len(needed_paths)} images on {dev}…")
+
+    t0 = _now()
+    n = len(needed_paths)
+    for k in range(0, n, batch_size):
+        chunk = needed_paths[k : k + batch_size]
+        try:
+            imgs = [_load_rgb(p) for p in chunk]
+            with torch.no_grad():
+                inputs = processor(images=imgs, return_tensors="pt").to(dev)
+                feats = backbone(**inputs).pooler_output
+                feats = feats / feats.norm(dim=-1, keepdim=True)
+                scores = head(feats).squeeze(-1).float().cpu().numpy()
+            for j, p in enumerate(chunk):
+                v = float(scores[j])
+                out[needed_idx[k + j]] = v
+                key = _cache_key(p)
+                if key:
+                    cache[key] = v
+        except Exception as e:
+            on_progress(f"  skip batch {k} ({type(e).__name__}: {e})")
+        if (k // batch_size) % 5 == 0:
+            done = min(k + batch_size, n)
+            elapsed = _now() - t0
+            eta = elapsed / max(done, 1) * (n - done)
+            bar_w = 20
+            filled = int(bar_w * done / max(n, 1))
+            bar = "#" * filled + "-" * (bar_w - filled)
+            on_progress(f"  aesthetic_v25 [{bar}] {done}/{n} ({int(elapsed)}s elapsed, ~{int(eta)}s left)")
+    _write_cache(AES_V25_CACHE, cache)
+    return out
+
+
+# ---- HPS-v2.1 (Wu et al., updated 2024) -------------------------------------
+# Direct upgrade to PickScore: open_clip ViT-H-14 fine-tuned on the HPDv2
+# dataset (~798k human preference pairs). We score each image against the
+# empty/unconditional prompt — the same `logit_scale·cos(img, txt)` the official
+# `hpsv2.score` API returns before its softmax.
+HPS_V21_REPO = "xswu/HPSv2"
+HPS_V21_FILE = "HPS_v2.1_compressed.pt"
+HPS_V21_BASE = ("ViT-H-14", "laion2b_s32b_b79k")
+HPS_V21_PROMPT = ""  # unconditional aesthetic reading
+HPS_V21_CACHE = Path.home() / ".muser" / "hps_v21_cache.json"
+
+
+def _hps_v21(paths: list[str], on_progress, batch_size: int = 8) -> np.ndarray:
+    """HPS-v2.1 per path. open_clip ViT-H-14 + fine-tuned weights, unconditional prompt.
+
+    Score = logit_scale · cos(image_emb, text_emb), with both L2-normalized — the
+    same per-image scalar the official `hpsv2.score(img, prompt='', hps_version='v2.1')`
+    returns. Cached by path+mtime+size.
+    """
+    import open_clip
+    import torch
+    from huggingface_hub import hf_hub_download
+
+    from .embedders import _device, _load_rgb
+
+    cache = _read_cache(HPS_V21_CACHE)
+    out = np.zeros(len(paths), dtype=np.float32)
+
+    needed_idx, needed_paths = [], []
+    for i, p in enumerate(paths):
+        key = _cache_key(p)
+        if key and key in cache:
+            out[i] = cache[key]
+        else:
+            needed_idx.append(i)
+            needed_paths.append(p)
+    if not needed_paths:
+        on_progress(f"hps_v21: all {len(paths)} cached, skipping model load")
+        return out
+
+    on_progress("hps_v21: loading open_clip ViT-H-14 base (~3.9 GB, one-time)…")
+    dev = _device()
+    arch, pretrained = HPS_V21_BASE
+    model, _, preprocess = open_clip.create_model_and_transforms(arch, pretrained=pretrained)
+    tokenizer = open_clip.get_tokenizer(arch)
+    on_progress("hps_v21: downloading HPS-v2.1 weights (~3.7 GB)…")
+    cp = hf_hub_download(HPS_V21_REPO, HPS_V21_FILE)
+    sd = torch.load(cp, map_location="cpu", weights_only=False)["state_dict"]
+    missing, unexpected = model.load_state_dict(sd, strict=False)
+    if missing or unexpected:
+        on_progress(f"  hps_v21 state_dict: {len(missing)} missing, {len(unexpected)} unexpected")
+    model = model.eval().to(dev)
+
+    # Compute text embedding once (empty prompt = unconditional).
+    with torch.no_grad():
+        text = tokenizer([HPS_V21_PROMPT]).to(dev)
+        text_emb = model.encode_text(text)
+        text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)
+        logit_scale = float(model.logit_scale.exp())
+
+    on_progress(f"hps_v21: scoring {len(needed_paths)} images on {dev}…")
+    t0 = _now()
+    n = len(needed_paths)
+    for k in range(0, n, batch_size):
+        chunk = needed_paths[k : k + batch_size]
+        try:
+            with torch.no_grad():
+                imgs = torch.stack([preprocess(_load_rgb(p)) for p in chunk]).to(dev)
+                img_emb = model.encode_image(imgs)
+                img_emb = img_emb / img_emb.norm(dim=-1, keepdim=True)
+                scores = (logit_scale * (img_emb @ text_emb.T)).squeeze(-1).float().cpu().numpy()
+            for j, p in enumerate(chunk):
+                v = float(scores[j])
+                out[needed_idx[k + j]] = v
+                key = _cache_key(p)
+                if key:
+                    cache[key] = v
+        except Exception as e:
+            on_progress(f"  skip batch {k} ({type(e).__name__}: {e})")
+        if (k // batch_size) % 5 == 0:
+            done = min(k + batch_size, n)
+            elapsed = _now() - t0
+            eta = elapsed / max(done, 1) * (n - done)
+            bar_w = 20
+            filled = int(bar_w * done / max(n, 1))
+            bar = "#" * filled + "-" * (bar_w - filled)
+            on_progress(f"  hps_v21 [{bar}] {done}/{n} ({int(elapsed)}s elapsed, ~{int(eta)}s left)")
+    _write_cache(HPS_V21_CACHE, cache)
+    return out
+
+
 def score_all(model: str = "siglip2-b", on_progress=print) -> dict:
     idx = MuserIndex()
     t = idx._open(model)
@@ -411,22 +619,43 @@ def score_all(model: str = "siglip2-b", on_progress=print) -> dict:
         on_progress(f"  pickscore FAILED: {type(e).__name__}: {e}")
         pick_canon = np.full(len(canon_paths), np.nan, dtype=np.float32)
 
+    on_progress(f"aesthetic_v25: Aesthetic Predictor V2.5 over {len(canon_paths)} canonical…")
+    try:
+        aes_v25_canon = _aesthetic_v25(canon_paths, on_progress)
+    except Exception as e:
+        on_progress(f"  aesthetic_v25 FAILED: {type(e).__name__}: {e}")
+        aes_v25_canon = np.full(len(canon_paths), np.nan, dtype=np.float32)
+
+    on_progress(f"hps_v21: HPS-v2.1 over {len(canon_paths)} canonical…")
+    try:
+        hps_canon = _hps_v21(canon_paths, on_progress)
+    except Exception as e:
+        on_progress(f"  hps_v21 FAILED: {type(e).__name__}: {e}")
+        hps_canon = np.full(len(canon_paths), np.nan, dtype=np.float32)
+
     # Broadcast canonical scores to every member of the group.
     aes_v2 = np.zeros(n, dtype=np.float32)
     pick = np.zeros(n, dtype=np.float32)
+    aes_v25 = np.zeros(n, dtype=np.float32)
+    hps = np.zeros(n, dtype=np.float32)
     canon_pos = {ci: k for k, ci in enumerate(canonical_idx)}
     for i in range(n):
         k = canon_pos[canon_idx_for[i]]
         aes_v2[i] = aes_v2_canon[k]
         pick[i] = pick_canon[k]
+        aes_v25[i] = aes_v25_canon[k]
+        hps[i] = hps_canon[k]
 
     aes_v2_p = _pct(aes_v2) if not np.all(np.isnan(aes_v2)) else np.zeros(n, dtype=np.float64)
     pick_p = _pct(pick) if not np.all(np.isnan(pick)) else np.zeros(n, dtype=np.float64)
+    aes_v25_p = _pct(aes_v25) if not np.all(np.isnan(aes_v25)) else np.zeros(n, dtype=np.float64)
+    hps_p = _pct(hps) if not np.all(np.isnan(hps)) else np.zeros(n, dtype=np.float64)
 
     metrics = {
         "interesting": _pct(interesting),  # unchanged blend (novelty + zero-shot aesthetic)
         "novelty": nov_p, "aesthetic": aes_p,
         "aesthetic_v2": aes_v2_p, "pickscore": pick_p,
+        "aesthetic_v25": aes_v25_p, "hps_v21": hps_p,
         "nsfw": _pct(nsfw_blend), "private": _pct(risk["private"]),
     }
 

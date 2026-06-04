@@ -172,6 +172,21 @@
   .modal .file .frow button { background:transparent; border:0; padding:0; color:var(--mut);
                               font-size:11px; cursor:pointer; border-bottom:1px solid transparent; }
   .modal .file .frow button:hover { color:var(--fg); border-bottom-color:var(--fg); }
+  /* Cart caption editor: small italic serif under the filename, no border at rest
+     (reads as quiet text), thin underline on focus to confirm it's editable.
+     Resizes vertically when focused so long captions don't get cropped. */
+  .modal .file .cap { font:italic 400 11px/1.4 var(--serif); color:var(--fg);
+                      background:transparent; border:0; border-bottom:1px solid transparent;
+                      padding:2px 0; margin:0 0 4px; width:100%; resize:none;
+                      outline:none; overflow:hidden; min-height:1.4em;
+                      font-family:var(--serif); }
+  .modal .file .cap:focus { border-bottom-color:var(--line); }
+  .modal .file .cap.missing { color:var(--mut); }
+  .modal .file .capsaved { font-size:10px; color:var(--mut); padding:0 0 4px;
+                           min-height:1.2em; opacity:0; transition:opacity .15s; }
+  .modal .file .capsaved.on { opacity:1; }
+  .cart-note { font-size:12px; color:var(--mut); padding:10px 0 0; font-style:italic;
+               font-family:var(--serif); }
 
   body.has-query .chip::before { content:"+ "; color:var(--mut); }
   body.has-query .chip.refine::before { content:"→ "; }
@@ -295,6 +310,8 @@
     <select id="imetric">
       <option value="interesting">Interesting (novelty + aesthetic)</option>
       <option value="novelty">Novelty (most unusual / rare)</option>
+      <option value="aesthetic_v25">Aesthetic (V2.5)</option>
+      <option value="hps_v21">Aesthetic (HPS v2.1)</option>
       <option value="aesthetic_v2">Aesthetic (LAION V2)</option>
       <option value="pickscore">Aesthetic (PickScore)</option>
       <option value="aesthetic">Aesthetic (zero-shot, weak)</option>
@@ -344,6 +361,7 @@
     <button id="cartDownload">Download zip</button>
     <button id="cartClear">Clear</button>
   </div>
+  <div class="cart-note" id="cartCapNote"></div>
 </div></div>
 <div class="toast" id="toast"></div>
 
@@ -407,18 +425,109 @@ function syncCartButtons(){
     b.classList.toggle("added", on);
   });
 }
+// Cache of caption lookups for the lifetime of the open modal. null = "no caption
+// known" (404). String = cached caption. Cleared each time the modal opens so a
+// closed-then-reopened modal picks up captions that completed in the meantime.
+let _capCache = new Map();
+const MISSING_HTML = `<em>no caption — run \`muser caption\``+`</em>`;
+// Batched caption fetch: cap to N in flight so a 30-item cart doesn't burst
+// 30 parallel requests at the service. Updates the per-card UI as each lands.
+async function loadCaptionsForCart(paths){
+  const CONCURRENCY = 6;
+  let i = 0;
+  async function worker(){
+    while (i < paths.length){
+      const p = paths[i++];
+      if (_capCache.has(p)) { applyCaptionToCard(p, _capCache.get(p)); continue; }
+      try {
+        const r = await fetch(`/api/caption?path=${enc(p)}`);
+        if (r.status === 404) { _capCache.set(p, null); applyCaptionToCard(p, null); continue; }
+        if (!r.ok) { _capCache.set(p, null); applyCaptionToCard(p, null); continue; }
+        const j = await r.json();
+        _capCache.set(p, j.caption);
+        applyCaptionToCard(p, j.caption);
+      } catch { _capCache.set(p, null); applyCaptionToCard(p, null); }
+    }
+  }
+  const workers = Array.from({length: Math.min(CONCURRENCY, paths.length)}, worker);
+  await Promise.all(workers);
+  updateCartCapNote();
+}
+function applyCaptionToCard(path, caption){
+  // Cards are keyed by data-path on the .file element. The modal may have been
+  // closed before the fetch resolved — bail silently if so.
+  const el = document.querySelector(`#cartFiles .file[data-path="${cssEsc(path)}"]`);
+  if (!el) return;
+  const ta = el.querySelector(".cap");
+  if (caption == null){
+    ta.value = ""; ta.placeholder = "no caption — run `muser caption`";
+    ta.classList.add("missing");
+  } else {
+    ta.value = caption; ta.placeholder = ""; ta.classList.remove("missing");
+  }
+  autosizeTa(ta);
+}
+function autosizeTa(ta){
+  ta.style.height = "auto";
+  ta.style.height = ta.scrollHeight + "px";
+}
+// Document.querySelector needs CSS-escaping for paths with spaces / unicode.
+function cssEsc(s){ return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/"/g, '\\"'); }
+function updateCartCapNote(){
+  const total = _cart.size;
+  let missing = 0;
+  for (const p of _cart){ if (_capCache.get(p) == null) missing++; }
+  const note = $("#cartCapNote");
+  if (!note) return;
+  note.textContent = total === 0 ? "" :
+    missing === 0 ? "Zip includes captions for every item." :
+    `Zip includes captions where available. Missing: ${missing} of ${total}.`;
+}
+async function saveCaption(path, caption, savedEl){
+  try {
+    const r = await fetch("/api/caption", {
+      method: "POST", headers: {"content-type": "application/json"},
+      body: JSON.stringify({path, caption}),
+    });
+    if (!r.ok) { savedEl.textContent = "save failed"; savedEl.classList.add("on"); return; }
+    _capCache.set(path, caption);
+    savedEl.textContent = "✓ saved"; savedEl.classList.add("on");
+    setTimeout(() => savedEl.classList.remove("on"), 800);
+    updateCartCapNote();
+  } catch {
+    savedEl.textContent = "save failed"; savedEl.classList.add("on");
+  }
+}
 function openCart(){
   $("#cartSub").textContent = _cart.size === 1 ? "1 item" : `${_cart.size} items`;
   const f = $("#cartFiles"); f.innerHTML = "";
-  [..._cart].forEach(p => {
-    const d = document.createElement("div"); d.className = "file";
-    d.innerHTML = `<img loading="lazy" src="/api/thumb?path=${enc(p)}" title="${p}"><div class="fn">${p}</div><div class="frow"><button class="rev">Reveal</button><button class="rem">Remove</button></div>`;
+  _capCache = new Map();
+  const paths = [..._cart];
+  paths.forEach(p => {
+    const d = document.createElement("div"); d.className = "file"; d.dataset.path = p;
+    d.innerHTML = `<img loading="lazy" src="/api/thumb?path=${enc(p)}" title="${p}">`
+      + `<div class="fn">${p}</div>`
+      + `<textarea class="cap" rows="1" placeholder="loading caption…"></textarea>`
+      + `<div class="capsaved"></div>`
+      + `<div class="frow"><button class="rev">Reveal</button><button class="rem">Remove</button></div>`;
     d.querySelector("img").onclick = () => window.open(`/api/image?path=${enc(p)}`, "_blank");
     d.querySelector(".rev").onclick = async () => { await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:p})}); toast("revealed in Finder"); };
-    d.querySelector(".rem").onclick = () => { _cart.delete(p); saveCart(); openCart(); syncCartButtons(); };
+    d.querySelector(".rem").onclick = () => { _cart.delete(p); _capCache.delete(p); saveCart(); openCart(); syncCartButtons(); };
+    const ta = d.querySelector(".cap");
+    const savedEl = d.querySelector(".capsaved");
+    ta.addEventListener("input", () => autosizeTa(ta));
+    ta.addEventListener("change", () => {
+      const v = ta.value.trim();
+      if (!v) return;  // empty edit: ignore (use Remove to drop the image)
+      if (_capCache.get(p) === v) return;  // unchanged
+      ta.classList.remove("missing");
+      saveCaption(p, v, savedEl);
+    });
     f.appendChild(d);
   });
+  $("#cartCapNote").textContent = paths.length ? "Loading captions…" : "";
   $("#cartModal").classList.add("show");
+  if (paths.length) loadCaptionsForCart(paths);
 }
 async function downloadCart(){
   if (!_cart.size) return;
@@ -427,6 +536,8 @@ async function downloadCart(){
     body: JSON.stringify({paths: [..._cart]}),
   });
   if (!res.ok) { toast("zip failed"); return; }
+  const missing = parseInt(res.headers.get("X-Captions-Missing") || "0", 10);
+  const total = parseInt(res.headers.get("X-Captions-Total") || "0", 10);
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -434,7 +545,9 @@ async function downloadCart(){
   URL.revokeObjectURL(url);
   _cart.clear(); saveCart(); syncCartButtons();
   $("#cartModal").classList.remove("show");
-  toast("Downloaded — cart cleared");
+  toast(missing
+    ? `Downloaded — ${total - missing}/${total} with captions`
+    : "Downloaded — cart cleared");
 }
 $("#cartOpen").onclick = openCart;
 $("#cartClose").onclick = () => $("#cartModal").classList.remove("show");
