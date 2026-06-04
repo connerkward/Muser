@@ -930,7 +930,11 @@ async function loadScores(gridSel,msgSel,metricSel){
 $("#imetric").onchange=()=>loadScores("#scoreGrid","#imsg","#imetric");
 $("#rcat").onchange=()=>loadScores("#reviewGrid","#rmsg","#rcat");
 $("#cmethod").onchange=()=>loadClusters();
-$("#cback").onclick=()=>{ $("#clusterDetail").style.display="none"; $("#clusterGrid").style.display=""; };
+$("#cback").onclick=()=>{
+  $("#clusterDetail").style.display="none"; $("#clusterGrid").style.display="";
+  _cdHasMore=false;                                   // stop the IO from chasing further pages once the detail view is hidden
+  if(_cdAbort) _cdAbort.abort();
+};
 
 async function loadClusters(){
   const method=$("#cmethod").value;
@@ -949,11 +953,52 @@ async function loadClusters(){
     g.appendChild(card);
   });
 }
+
+// Cluster-detail infinite scroll — mirrors the Search-tab pattern (ensureSentinel/maybeLoadMore)
+// but on its own state + sentinel + observer, so cluster paging and search paging don't collide.
+const CD_PAGE=120;                                    // members fetched per page
+let _cdMethod="", _cdId=null, _cdOffset=0, _cdTotal=0, _cdHasMore=false, _cdLoading=false;
+let _cdAbort=null, _cdIO=null, _cdSub="";
+
 async function openCluster(method,id,label,sub,size){
   $("#clusterGrid").style.display="none"; $("#clusterDetail").style.display="";
-  $("#cdtitle").textContent=label; $("#cdsub").textContent=`${sub} · ${size.toLocaleString()} images`;
-  const r=await (await fetch(`/api/cluster?method=${method}&id=${id}&limit=160`)).json();
+  $("#cdtitle").textContent=label;
+  // reset state — a click on a new cluster mid-load must not append into the previous one
+  if(_cdAbort) _cdAbort.abort();
+  _cdMethod=method; _cdId=id; _cdOffset=0; _cdTotal=size; _cdHasMore=true; _cdLoading=false; _cdSub=sub;
+  $("#cdsub").textContent=`${sub} · ${size.toLocaleString()} images`;
   const g=$("#cdgrid"); g.innerHTML="";
+  for(let i=0;i<12;i++){ const d=document.createElement("div"); d.className="skeleton"; g.appendChild(d); }
+  await loadMoreClusterMembers(true);
+}
+
+function _cdEnsureSentinel(){                         // 1px marker just below #cdgrid, observed for prefetch
+  let s=document.getElementById("cdsentinel");
+  if(!s){
+    s=document.createElement("div"); s.id="cdsentinel"; s.setAttribute("aria-hidden","true");
+    _cdIO=new IntersectionObserver(es=>{ if(es.some(e=>e.isIntersecting)) _cdMaybeLoadMore(); },
+                                   { rootMargin:`0px 0px ${SCROLL_BUFFER}px 0px` });
+    _cdIO.observe(s);
+  }
+  $("#cdgrid").after(s);                              // re-anchor below the grid as it grows
+}
+function _cdMaybeLoadMore(){
+  const s=document.getElementById("cdsentinel");
+  if(s && s.getBoundingClientRect().top < innerHeight + SCROLL_BUFFER) loadMoreClusterMembers(false);
+}
+
+async function loadMoreClusterMembers(isFirst){
+  if(_cdLoading || !_cdHasMore) return;
+  _cdLoading=true;
+  if(_cdAbort) _cdAbort.abort();
+  _cdAbort=new AbortController();
+  const method=_cdMethod, id=_cdId, offset=_cdOffset;
+  let r;
+  try { r=await (await fetch(`/api/cluster?method=${method}&id=${id}&offset=${offset}&limit=${CD_PAGE}`, {signal:_cdAbort.signal})).json(); }
+  catch(e){ if(e.name==="AbortError") return; _cdLoading=false; throw e; }
+  if(method!==_cdMethod || id!==_cdId) { _cdLoading=false; return; }   // a newer cluster was opened mid-fetch — drop this page
+  const g=$("#cdgrid");
+  if(isFirst) g.replaceChildren();                    // drop skeletons before the first real page lands
   r.members.forEach(h=>{
     const c=document.createElement("div"); c.className="card";
     c.innerHTML=`<div class="thumb"><img loading="lazy" src="/api/thumb?path=${enc(h.path)}"></div>
@@ -961,6 +1006,15 @@ async function openCluster(method,id,label,sub,size){
     c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
     g.appendChild(c);
   });
+  _cdOffset = offset + r.members.length;
+  _cdTotal  = r.total;
+  _cdHasMore = r.members.length >= CD_PAGE && _cdOffset < _cdTotal;
+  $("#cdsub").textContent = _cdHasMore
+    ? `${_cdSub} · ${_cdTotal.toLocaleString()} images · showing ${_cdOffset.toLocaleString()}/${_cdTotal.toLocaleString()}`
+    : `${_cdSub} · ${_cdTotal.toLocaleString()} images`;
+  _cdLoading=false;
+  _cdEnsureSentinel();
+  _cdMaybeLoadMore();                                 // short page / tall window: keep filling until the buffer is satisfied
 }
 
 $("#indexPick").onclick = async () => {
