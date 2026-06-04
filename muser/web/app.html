@@ -2110,9 +2110,9 @@ async function startAIScan(){
 const TAB_PAGE = 120;
 const _tabFeed = {                                     // per-tab paging state
   interesting: { grid: "#scoreGrid", offset: 0, total: 0, hasMore: false, loading: false,
-                 metric: null, sentinelId: "iSentinel", io: null, abort: null, gen: 0 },
+                 metric: null, q: "", sentinelId: "iSentinel", io: null, abort: null, gen: 0 },
   review:      { grid: "#reviewGrid", offset: 0, total: 0, hasMore: false, loading: false,
-                 metric: null, sentinelId: "rSentinel", io: null, abort: null, gen: 0 },
+                 metric: null, q: "", sentinelId: "rSentinel", io: null, abort: null, gen: 0 },
   ai:          { grid: "#aiGrid",    offset: 0, total: 0, hasMore: false, loading: false,
                  items: [], sentinelId: "aSentinel", io: null, gen: 0 },
 };
@@ -2202,6 +2202,10 @@ async function loadScores(gridSel, msgSel, metricSel){
   cfg.gen++;
   if(cfg.abort) cfg.abort.abort();
   cfg.metric = metric; cfg.offset = 0; cfg.total = 0; cfg.hasMore = true; cfg.loading = false;
+  // Pick up the current filter input's value as `q` — server-side semantic narrow,
+  // not client-side substring DOM filter.
+  const cf = _tabFilterCfg[tab];
+  cfg.q = cf ? ($(cf.input).value || "").trim() : "";
   $(msgSel).textContent = "loading…";
   const cov = (metricSel === "#imetric") ? $("#icov") : (metricSel === "#rcat") ? $("#rcov") : null;
   if(cov) cov.innerHTML = "";
@@ -2215,10 +2219,11 @@ async function loadMoreScores(tab, msgSel, cov, isFirst){
   if(cfg.abort) cfg.abort.abort();
   cfg.abort = new AbortController();
   const myGen = cfg.gen, metric = cfg.metric, offset = cfg.offset;
+  const qSuffix = cfg.q ? `&q=${enc(cfg.q)}` : "";
   let r;
   try {
     r = await (await fetch(
-      `/api/score?metric=${metric}&order=desc&offset=${offset}&limit=${TAB_PAGE}`,
+      `/api/score?metric=${metric}&order=desc&offset=${offset}&limit=${TAB_PAGE}${qSuffix}`,
       { signal: cfg.abort.signal },
     )).json();
   } catch(e){ if(e.name==="AbortError") return; cfg.loading = false; throw e; }
@@ -2301,6 +2306,11 @@ async function _ensureCaptionsLoaded(){
   } catch {}
 }
 function applyTabFilter(tab){
+  // Interesting / Review: server-side semantic narrow via /api/score?q=...
+  // (re-fetches on each change). AI tab keeps DOM substring filter for now.
+  if(tab === "interesting"){ loadScores("#scoreGrid","#imsg","#imetric"); _updateFilterCount(tab); return; }
+  if(tab === "review"){     loadScores("#reviewGrid","#rmsg","#rcat");    _updateFilterCount(tab); return; }
+  // ---- AI tab: client-side substring narrow over already-loaded cards ----
   const cfg = _tabFilterCfg[tab]; if(!cfg) return;
   const inp = $(cfg.input);
   const q = (inp ? inp.value : "").trim().toLowerCase();
@@ -2319,6 +2329,15 @@ function applyTabFilter(tab){
   const xEl = $(cfg.x);
   if(xEl) xEl.style.display = q ? "" : "none";
 }
+function _updateFilterCount(tab){
+  // For server-filtered tabs the count comes from the next /api/score response;
+  // hide the inline count until that lands so we don't show stale numbers.
+  const cfg = _tabFilterCfg[tab]; if(!cfg) return;
+  const inp = $(cfg.input);
+  const q = (inp ? inp.value : "").trim();
+  const xEl = $(cfg.x); if(xEl) xEl.style.display = q ? "" : "none";
+  const nEl = $(cfg.n); if(nEl) nEl.textContent = "";
+}
 function _wireTabFilter(tab){
   const cfg = _tabFilterCfg[tab];
   const inp = $(cfg.input), xBtn = $(cfg.x);
@@ -2327,9 +2346,12 @@ function _wireTabFilter(tab){
   const saved = (_loadTabFilterState()[tab] || "");
   if(saved) inp.value = saved;
   let t = null;
+  // 250ms debounce on Interesting/Review (each keystroke = embed-search round-trip);
+  // 120ms on AI (pure client filter, cheap).
+  const delay = (tab === "ai") ? 120 : 250;
   inp.addEventListener("input", () => {
     clearTimeout(t);
-    t = setTimeout(() => { applyTabFilter(tab); _saveTabFilterState(tab, inp.value.trim()); }, 120);
+    t = setTimeout(() => { applyTabFilter(tab); _saveTabFilterState(tab, inp.value.trim()); }, delay);
   });
   if(xBtn) xBtn.onclick = () => { inp.value = ""; applyTabFilter(tab); _saveTabFilterState(tab, ""); inp.focus(); };
 }

@@ -1328,13 +1328,26 @@ def create_app(model: str = DEFAULT_MODEL):
         return {"scored": min(scored, total), "total": total}
 
     @app.get("/api/score")
-    def score_rank(metric: str = "interesting", order: str = "desc", offset: int = 0, limit: int = 80):
+    def score_rank(metric: str = "interesting", order: str = "desc", offset: int = 0, limit: int = 80,
+                   q: str | None = None):
+        # `q` semantic-narrows the canonical set before metric sort: typing "car" on the
+        # Interesting tab should return cars-ranked-by-aesthetic, not "cards whose basename
+        # contains the substring 'car'" (which used to false-match Carlos, Carver, etc).
         if not SCORES.exists():
             return {"built": False, "items": []}
         s = json.loads(SCORES.read_text())
         if metric not in s["metrics"]:
             return {"built": False, "items": []}
         canon = s.get("canonical") or list(s["scores"].keys())  # deduped reps (fallback for old files)
+        if q and q.strip():
+            # Embed the query, fetch top-500 deduped semantic matches, intersect
+            # with canonical so we only sort over paths that actually have scores.
+            state.wait_ready()
+            emb = state.warm()
+            qv = emb.embed_queries([q.strip()])[0]
+            hits = state.index.search_dedup(state.model_name, qv, k=500, method="embed")
+            sem_paths = {h["path"] for h in hits}
+            canon = [p for p in canon if p in sem_paths]
         dupes = s.get("dupes", {})
         ranked = sorted(canon, key=lambda p: s["scores"][p].get(metric, 0), reverse=(order == "desc"))
         page = ranked[offset : offset + limit]
