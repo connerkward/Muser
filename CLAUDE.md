@@ -83,18 +83,26 @@ See `REQUIREMENTS.md` for scope/decisions.
   class) as the fallback for face-less people (turned away / profile / distant / occluded), sampling
   skin from *any* visible skin in the person box — but only for person boxes that don't already
   contain a detected face (face-bearing people are sampled from the face, never double-counted).
-  Within each box a YCrCb skin mask → median LAB → nearest MST swatch. Per image: a list of
-  detections (`src` "face"/"body", `mst` 1–10, `lab`, `frac`, `conf`) + a `mst` summary (prominent
-  face else prominent body), in `~/.muser/skintone.json`. `search(tone)` ranks by closeness ×
-  prominence × source-weight (faces full, bodies `BODY_WEIGHT=0.6`). CLI `muser skintone [--tone N]`,
-  API `/api/search-skintone?tone=`, `/api/skintone[/scan]` (status carries per-tone histogram +
-  swatch hexes), web **Skin tone** tab (10 swatches w/ counts). `SCAN_VERSION` gates the incremental
-  scan (bumping it forces recompute on unchanged files after an algo change — v1 face-only → v2
-  face+person). **Honest limits:** detection is the ceiling AND a detected person with *no visible
-  skin* (fully clothed / coat) still yields no tone; strong color casts shift the sampled tone — a
-  positive signal, not a demographic classifier. Both facet scans **auto-trigger** post-index
-  (incremental, folder-scoped) alongside c2pa, and prime at service startup. New core dep:
-  `opencv-python-headless` (no GUI/Qt libs → clean on server + CI).
+  **Face skin pixels come from a face-parsing SegFormer** (`jonathandinu/face-parsing`, via the
+  `transformers` dep — downloads/caches like the embedder, no git bloat) that labels skin/nose/ears
+  apart from eyes/brows/lips/hair — far cleaner than a colour box; falls back to a central-region
+  YCrCb heuristic when the parser finds no skin (preserves coverage on small/blurry faces). Bodies
+  use the YCrCb heuristic (no face to parse). **Illuminant normalization:** before mapping, the scene
+  illuminant is estimated with **Shades-of-Gray (p=6)** over the whole image and divided out (chroma
+  only, brightness preserved) so warm/cool light doesn't push a tone into the wrong bucket. Skin
+  pixels → 25–75th luminance trim → median LAB → nearest MST swatch. Per image: detections
+  (`src` "face"/"body", `mst` 1–10, `lab`, `frac`, `conf`) + a `mst` summary, in
+  `~/.muser/skintone.json`. `search(tone)` ranks by closeness × prominence × source-weight (faces
+  full, bodies `BODY_WEIGHT=0.6`). CLI `muser skintone [--tone N]`, API `/api/search-skintone?tone=`,
+  `/api/skintone[/scan]`, web **Skin tone** tab. `SCAN_VERSION` gates the incremental scan (bump →
+  recompute even unchanged files: v1 face-only → v2 +person → v3 central+trim → v4 face-parse+WB).
+  **Benchmarked** in `eval/skintone_bench.py` (label-free illuminant robustness — synthetic
+  warm/cool/green/dim/bright casts, measure MST drift): chroma drift dropped 2.7× (0.643 whole-box →
+  0.239 face-parse+WB). **Honest limits:** detection is the ceiling; a person with *no visible skin*
+  (fully clothed / coat) yields no tone; illuminant norm can't undo *exposure* (a genuinely
+  under-exposed face stays dark) — a positive signal, not a demographic classifier. Both facet scans
+  **auto-trigger** post-index (incremental, folder-scoped) alongside c2pa, and prime at service
+  startup. New core dep: `opencv-python-headless` (no GUI/Qt libs → clean on server + CI).
 - `eval/datasets.py` — standard benchmarks reduced to {image_paths, queries,
   qrels}. Flickr30k via HF's `refs/convert/parquet` branch (scripts unsupported).
 - `eval/harness.py` — embeds corpus → LanceDB → queries → **ranx** metrics
