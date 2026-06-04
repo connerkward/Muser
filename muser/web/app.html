@@ -1901,76 +1901,163 @@ async function loadAI(){
       ? "Not scanned yet — click Scan to check your library’s Content Credentials."
       : `${(r.items||[]).length.toLocaleString()} AI-generated image(s) found via C2PA`;
   }
-  renderAI(r.items||[]);
+  resetAIFeed(r.items||[]);
 }
 async function startAIScan(){
   $("#aiScan").disabled=true;
   try{ await fetch("/api/ai/scan",{method:"POST"}); }catch(e){ toast("scan failed"); }
   loadAI();
 }
-function renderAI(items){
-  const g=$("#aiGrid");
-  if(g.dataset.n==String(items.length) && g.children.length) return;  // avoid re-render churn while polling
-  g.dataset.n=items.length; g.innerHTML="";
-  items.forEach(h=>{
-    const how = h.kind==="composite" ? "AI-edited" : "AI";
-    const c=document.createElement("div"); c.className="card";
-    c.dataset.path = h.path;
-    c.dataset.filtertext = _filterText(h.path, h.name);
-    c.innerHTML=`<div class="thumb"><span class="aiflag" title="C2PA declares this ${h.kind==="composite"?"AI-edited":"AI-generated"}${h.tool?" — "+h.tool:""}">${how}?</span><img loading="lazy" src="/api/thumb?path=${enc(h.path)}"></div>
-      <div class="meta"><div class="name" title="${h.path}">${h.name}</div></div>
-      <div class="foot"><button class="sim" title="Find visually similar">Similar</button>
-        <span class="more"><button class="lens" title="Copy image + open Google Lens">Lens</button>
-        <button class="reveal" title="Reveal in Finder">Reveal</button></span></div>`;
-    c.querySelector(".thumb").onclick=()=> h.uid ? openDetail(h.uid) : window.open(`/api/image?path=${enc(h.path)}`,"_blank");
-    c.querySelector(".sim").onclick=()=>{ showView("search"); searchImage(h.path); };
-    c.querySelector(".lens").onclick=e=>lensSearch(h.path,e.currentTarget);
-    c.querySelector(".reveal").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:h.path})}); toast("revealed in Finder"); };
-    g.appendChild(c);
-  });
-  applyTabFilter("ai");
+
+// ---- infinite scroll on Interesting / Review / AI ----
+// Each tab keeps its own paging state so they don't race; a single shared
+// helper builds the IntersectionObserver-driven sentinel below each grid
+// (same shape as the Search-tab and cluster-detail loaders).
+const TAB_PAGE = 120;
+const _tabFeed = {                                     // per-tab paging state
+  interesting: { grid: "#scoreGrid", offset: 0, total: 0, hasMore: false, loading: false,
+                 metric: null, sentinelId: "iSentinel", io: null, abort: null, gen: 0 },
+  review:      { grid: "#reviewGrid", offset: 0, total: 0, hasMore: false, loading: false,
+                 metric: null, sentinelId: "rSentinel", io: null, abort: null, gen: 0 },
+  ai:          { grid: "#aiGrid",    offset: 0, total: 0, hasMore: false, loading: false,
+                 items: [], sentinelId: "aSentinel", io: null, gen: 0 },
+};
+function _tabEnsureSentinel(tab){
+  const cfg = _tabFeed[tab];
+  let s = document.getElementById(cfg.sentinelId);
+  if(!s){
+    s = document.createElement("div"); s.id = cfg.sentinelId; s.setAttribute("aria-hidden","true");
+    cfg.io = new IntersectionObserver(es => { if(es.some(e=>e.isIntersecting)) _tabMaybeLoadMore(tab); },
+                                      { rootMargin: `0px 0px ${SCROLL_BUFFER}px 0px` });
+    cfg.io.observe(s);
+  }
+  $(cfg.grid).after(s);                                // re-anchor below the grid as it grows
+}
+function _tabMaybeLoadMore(tab){
+  const cfg = _tabFeed[tab];
+  const s = document.getElementById(cfg.sentinelId);
+  if(s && s.getBoundingClientRect().top < innerHeight + SCROLL_BUFFER){
+    if(tab === "ai") _aiLoadMore(); else loadMoreScores(tab);
+  }
+}
+function _renderScoreCard(h){
+  const dupe = (h.dupe_count||1)>1 ? `<span class="dupe" title="${h.dupe_count} copies">${h.dupe_count} copies</span>` : "";
+  const uid = h.uid || "";
+  const c = document.createElement("div"); c.className = "card";
+  c.dataset.uid = uid;
+  c.dataset.path = h.path;
+  c.dataset.filtertext = _filterText(h.path, h.name);
+  c.innerHTML = `<div class="thumb"><span class="scoreb">${Math.round(h.score*100)}</span>${dupe}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}" title="${h.name}${uid?' · uid:'+uid:''}"></div>
+    <div class="meta"><div class="name" title="${h.path}${uid?' · uid:'+uid:''}">${h.name}</div></div>
+    <div class="foot"><button class="lens" title="Copy image + open Google Lens (⌘V to search where it appears)">Lens</button></div>`;
+  c.querySelector(".thumb").onclick = () => uid ? openDetail(uid) : window.open(`/api/image?path=${enc(h.path)}`,"_blank");
+  c.querySelector(".lens").onclick = e => lensSearch(h.path, e.currentTarget);
+  if((h.dupe_count||1)>1) c.querySelector(".dupe").onclick = e => { e.stopPropagation(); openDupes(h); };
+  return c;
+}
+function _renderAICard(h){
+  const how = h.kind === "composite" ? "AI-edited" : "AI";
+  const uid = h.uid || "";
+  const c = document.createElement("div"); c.className = "card";
+  c.dataset.path = h.path;
+  c.dataset.filtertext = _filterText(h.path, h.name);
+  c.innerHTML = `<div class="thumb"><span class="aiflag" title="C2PA declares this ${h.kind==="composite"?"AI-edited":"AI-generated"}${h.tool?" — "+h.tool:""}">${how}?</span><img loading="lazy" src="/api/thumb?path=${enc(h.path)}"></div>
+    <div class="meta"><div class="name" title="${h.path}">${h.name}</div></div>
+    <div class="foot"><button class="sim" title="Find visually similar">Similar</button>
+      <span class="more"><button class="lens" title="Copy image + open Google Lens">Lens</button>
+      <button class="reveal" title="Reveal in Finder">Reveal</button></span></div>`;
+  c.querySelector(".thumb").onclick = () => uid ? openDetail(uid) : window.open(`/api/image?path=${enc(h.path)}`,"_blank");
+  c.querySelector(".sim").onclick = () => { showView("search"); searchImage(h.path); };
+  c.querySelector(".lens").onclick = e => lensSearch(h.path, e.currentTarget);
+  c.querySelector(".reveal").onclick = async () => { await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:h.path})}); toast("revealed in Finder"); };
+  return c;
 }
 
-async function loadScores(gridSel,msgSel,metricSel){
-  const metric=$(metricSel).value;
-  $(msgSel).textContent="loading…";
-  const cov=(metricSel==="#imetric") ? $("#icov") : (metricSel==="#rcat") ? $("#rcov") : null;
-  if(cov) cov.innerHTML="";
-  const r=await (await fetch(`/api/score?metric=${metric}&order=desc&limit=140`)).json();
-  const g=$(gridSel); g.innerHTML="";
-  if(!r.built){ $(msgSel).textContent="Not built yet — run:  muser score"; return; }
-  $(msgSel).textContent=`${r.total.toLocaleString()} images · sorted by ${metric} (highest first)`;
-  if(cov && r.coverage){
-    const {scored, total} = r.coverage;
-    const pct = total ? (100*scored/total) : 0;
-    const num = `${scored.toLocaleString()} / ${total.toLocaleString()} scored`;
-    if(scored>=total){
-      cov.innerHTML=`<span style="color:#7a7468">Coverage: ${num}</span>`;
-    } else {
-      const pctStr = pct<1 ? pct.toFixed(2) : pct.toFixed(1);
-      cov.innerHTML=`<span style="color:#caa468">Coverage: ${num} (${pctStr}%)</span> `+
-        `<i style="font-family:'Cormorant Garamond',Georgia,serif;color:#caa468;opacity:.85">— sort below this point is not meaningful</i>`;
+// AI tab uses client-side chunking: /api/ai returns the full positive list
+// (a few-hundred items at most), and the sentinel advances a window into it.
+function resetAIFeed(items){
+  const cfg = _tabFeed.ai;
+  const g = $(cfg.grid);
+  // If the polling re-fetch returned the same list we already have, leave the
+  // user's scroll position alone. Item count is a sufficient proxy here.
+  if(g.dataset.n === String(items.length) && g.children.length){ return; }
+  cfg.gen++;
+  cfg.items = items; cfg.offset = 0; cfg.total = items.length;
+  cfg.hasMore = items.length > 0;
+  g.dataset.n = items.length; g.innerHTML = "";
+  _aiLoadMore();
+}
+function _aiLoadMore(){
+  const cfg = _tabFeed.ai;
+  if(!cfg.hasMore) return;
+  const g = $(cfg.grid);
+  const start = cfg.offset, end = Math.min(start + TAB_PAGE, cfg.total);
+  for(let i = start; i < end; i++) g.appendChild(_renderAICard(cfg.items[i]));
+  cfg.offset = end;
+  cfg.hasMore = cfg.offset < cfg.total;
+  _tabEnsureSentinel("ai");
+  applyTabFilter("ai");
+  _tabMaybeLoadMore("ai");                             // tall window → keep filling
+}
+
+// Interesting + Review share /api/score; each tab tracks its own paging.
+async function loadScores(gridSel, msgSel, metricSel){
+  const tab = (gridSel === "#scoreGrid") ? "interesting" : "review";
+  const cfg = _tabFeed[tab];
+  const metric = $(metricSel).value;
+  cfg.gen++;
+  if(cfg.abort) cfg.abort.abort();
+  cfg.metric = metric; cfg.offset = 0; cfg.total = 0; cfg.hasMore = true; cfg.loading = false;
+  $(msgSel).textContent = "loading…";
+  const cov = (metricSel === "#imetric") ? $("#icov") : (metricSel === "#rcat") ? $("#rcov") : null;
+  if(cov) cov.innerHTML = "";
+  const g = $(gridSel); g.innerHTML = "";
+  await loadMoreScores(tab, msgSel, cov, true);
+}
+async function loadMoreScores(tab, msgSel, cov, isFirst){
+  const cfg = _tabFeed[tab];
+  if(cfg.loading || !cfg.hasMore) return;
+  cfg.loading = true;
+  if(cfg.abort) cfg.abort.abort();
+  cfg.abort = new AbortController();
+  const myGen = cfg.gen, metric = cfg.metric, offset = cfg.offset;
+  let r;
+  try {
+    r = await (await fetch(
+      `/api/score?metric=${metric}&order=desc&offset=${offset}&limit=${TAB_PAGE}`,
+      { signal: cfg.abort.signal },
+    )).json();
+  } catch(e){ if(e.name==="AbortError") return; cfg.loading = false; throw e; }
+  if(myGen !== cfg.gen) { cfg.loading = false; return; } // a newer metric switch raced us
+  if(!r.built){
+    if(msgSel) $(msgSel).textContent = "Not built yet — run:  muser score";
+    cfg.hasMore = false; cfg.loading = false; return;
+  }
+  if(isFirst){
+    cfg.total = r.total;
+    if(msgSel) $(msgSel).textContent =
+      `${r.total.toLocaleString()} images · sorted by ${metric} (highest first)`;
+    if(cov && r.coverage){
+      const {scored, total} = r.coverage;
+      const pct = total ? (100*scored/total) : 0;
+      const num = `${scored.toLocaleString()} / ${total.toLocaleString()} scored`;
+      if(scored >= total){
+        cov.innerHTML = `<span style="color:#7a7468">Coverage: ${num}</span>`;
+      } else {
+        const pctStr = pct < 1 ? pct.toFixed(2) : pct.toFixed(1);
+        cov.innerHTML = `<span style="color:#caa468">Coverage: ${num} (${pctStr}%)</span> `+
+          `<i style="font-family:'Cormorant Garamond',Georgia,serif;color:#caa468;opacity:.85">— sort below this point is not meaningful</i>`;
+      }
     }
   }
-  r.items.forEach(h=>{
-    const dupe = (h.dupe_count||1)>1 ? `<span class="dupe" title="${h.dupe_count} copies">${h.dupe_count} copies</span>` : "";
-    const uid=h.uid||"";
-    const c=document.createElement("div"); c.className="card";
-    c.dataset.uid=uid;
-    c.dataset.path = h.path;
-    c.dataset.filtertext = _filterText(h.path, h.name);
-    c.innerHTML=`<div class="thumb"><span class="scoreb">${Math.round(h.score*100)}</span>${dupe}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}" title="${h.name}${uid?' · uid:'+uid:''}"></div>
-      <div class="meta"><div class="name" title="${h.path}${uid?' · uid:'+uid:''}">${h.name}</div></div>
-      <div class="foot"><button class="lens" title="Copy image + open Google Lens (⌘V to search where it appears)">Lens</button></div>`;
-    c.querySelector(".thumb").onclick=()=> uid ? openDetail(uid) : window.open(`/api/image?path=${enc(h.path)}`,"_blank");
-    c.querySelector(".lens").onclick=e=>lensSearch(h.path,e.currentTarget);
-    if((h.dupe_count||1)>1) c.querySelector(".dupe").onclick=e=>{ e.stopPropagation(); openDupes(h); };
-    g.appendChild(c);
-  });
-  // After (re)render, reapply the matching tab's persisted filter so a tab
-  // switch / metric change immediately respects the prior query.
-  if(gridSel === "#scoreGrid") applyTabFilter("interesting");
-  else if(gridSel === "#reviewGrid") applyTabFilter("review");
+  const g = $(cfg.grid);
+  (r.items || []).forEach(h => g.appendChild(_renderScoreCard(h)));
+  cfg.offset = offset + (r.items || []).length;
+  cfg.hasMore = (r.items || []).length >= TAB_PAGE && cfg.offset < (r.total || cfg.total);
+  cfg.loading = false;
+  _tabEnsureSentinel(tab);
+  applyTabFilter(tab);
+  _tabMaybeLoadMore(tab);                              // short page / tall window: keep filling
 }
 $("#imetric").onchange=()=>loadScores("#scoreGrid","#imsg","#imetric");
 $("#rcat").onchange=()=>loadScores("#reviewGrid","#rmsg","#rcat");
