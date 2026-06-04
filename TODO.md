@@ -18,6 +18,8 @@ Live ideas to revisit, not yet scheduled. Promote to issues / commits when picke
 ## Workflow
 
 - **Caption-on-demand for cart items** — ✅ shipped 2026-06-03 (GPT-4o-mini via `/api/caption-bulk`; "Caption missing (N) →" button in the cart modal; busy overlay shows progress).
+- **Checkout cost / time estimate in cart modal** — show estimated $ and wall-clock per captioning backend (GPT-4o-mini / JoyCaption Beta One) + per fal LoRA training endpoint (Flux fast / Flux general / SDXL fast), with running total that updates as cart size changes. ~30 LOC, ship after the JoyCaption agent finishes its cart-modal edits.
+- **Caption quality bake-off** — GPT-4o-mini vs JoyCaption Beta One × LoRA quality. Reduced scope (~$8, ~3 hrs): one curated 30-image cluster, caption both ways, train 2 Flux LoRAs on fal, 10 test prompts each, manual eval. Full grid (~$30–60): {GPT, Joy} × {Flux fast, SDXL fast} × {subject, style} = 8 LoRAs. Defer until both captioners are stable.
 - **Daemonize `muser serve`** — LaunchDaemon mirroring the Caddy pattern documented in `central/skills/machines/personal-machines/references/per_lappy_heavy.md`. Currently service requires manual `uv run muser serve` after reboot.
 - **Cart count in mini bar** — the mini search sliver doesn't surface cart status; should mirror the header's `Cart (N)` link.
 
