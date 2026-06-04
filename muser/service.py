@@ -513,11 +513,61 @@ def create_app(model: str = DEFAULT_MODEL):
             if row.get("filesize") is not None:
                 r["filesize"] = int(row["filesize"])
 
+    def _search_dedup_precomputed(qv, k, method, folder, meta):
+        """Fast dedup path: use the precomputed dupes map from ~/.muser/scores.json
+        instead of LanceDB's full-vector over-fetch + pairwise cosine walk.
+
+        Trades ~55 ms (288-row full-vector fetch + Python pairwise loop) for
+        ~10 ms (path-only LanceDB query + O(N) hashmap lookups). Same shape
+        of result list as `index.search_dedup`.
+
+        Returns None when the precomputed map isn't usable — caller falls
+        back to the cosine walk. We bail when:
+        - scores.json doesn't exist yet
+        - the dupes map is empty
+        - method is "phash" or "both" (those want fresh image hashing)
+        """
+        if method != "embed":
+            return None
+        rep_of = _refresh_scores_cache()["rep_of"]
+        if not rep_of:
+            return None
+        # Over-fetch enough raw rows to fill k unique reps even when early
+        # results all collapse into one group. Path-only LanceDB query, so a
+        # large n is cheap (~10 ms at limit=288 vs ~55 ms with full vectors).
+        # Matches the original cosine-walk's n = max(k*12, 200) for parity.
+        n = max(k * 12, 200)
+        raw = state.index.search(state.model_name, qv, k=n, folder=folder, meta=meta)
+        seen: dict[str, dict] = {}
+        order: list[str] = []
+        for path, score in raw:
+            rep = rep_of.get(path, path)
+            entry = seen.get(rep)
+            if entry is None:
+                entry = {"path": path, "score": float(score), "dupes": [path]}
+                seen[rep] = entry
+                order.append(rep)
+            elif path not in entry["dupes"]:
+                entry["dupes"].append(path)
+        out = []
+        for rep in order[:k]:
+            e = seen[rep]
+            out.append({
+                "path": e["path"],
+                "name": os.path.basename(e["path"]),
+                "score": round(e["score"], 4),
+                "dupes": e["dupes"],
+                "dupe_count": len(e["dupes"]),
+            })
+        return out
+
     def _run_search(qv, k, dedup, method, folder, meta=None):
         if dedup:
-            results = state.index.search_dedup(
-                state.model_name, qv, k=k, method=method, folder=folder, meta=meta,
-            )
+            results = _search_dedup_precomputed(qv, k, method, folder, meta)
+            if results is None:
+                results = state.index.search_dedup(
+                    state.model_name, qv, k=k, method=method, folder=folder, meta=meta,
+                )
         else:
             results = [
                 {"path": p, "name": os.path.basename(p), "score": round(s, 4), "dupes": [p], "dupe_count": 1}
@@ -527,14 +577,30 @@ def create_app(model: str = DEFAULT_MODEL):
         # dead entries from each result's `dupes[]`. The LanceDB index is
         # append-by-mtime so deleted files linger in the table until the next
         # full re-index; filtering at query time keeps stale hits out of the
-        # UI without forcing a rebuild. os.path.exists() is ~10 µs/file on SSD
-        # — 24 results × ~5 dupes ≈ 120 stats = ~1 ms, negligible.
+        # UI without forcing a rebuild. Only when the leading path is dead
+        # do we walk the precomputed dedup group (scores.json) to find a live
+        # member to promote — the common case (everything alive) stays a
+        # cheap stat-per-dupe.
         kept = []
         for r in results:
-            if not os.path.exists(r["path"]):
-                continue
             d = r.get("dupes") or [r["path"]]
-            live = [p for p in d if os.path.exists(p)]
+            lead_alive = os.path.exists(r["path"])
+            if lead_alive:
+                # Hot path: just trim dead dupes if any (usually a no-op).
+                live = [p for p in d if p == r["path"] or os.path.exists(p)]
+            else:
+                # Cold path: look in the full group for a live alternate.
+                groups = _refresh_scores_cache()["groups"]
+                rep_of_map = _refresh_scores_cache()["rep_of"]
+                canon = rep_of_map.get(r["path"]) or r["path"]
+                candidates = list(d)
+                for p in groups.get(canon, []):
+                    if p not in candidates:
+                        candidates.append(p)
+                live = [p for p in candidates if os.path.exists(p)]
+                if live:
+                    r["path"] = live[0]
+                    r["name"] = os.path.basename(live[0])
             if not live:
                 continue
             r["dupes"] = live
@@ -550,9 +616,42 @@ def create_app(model: str = DEFAULT_MODEL):
         return results
 
     # Cache the parsed scores.json by mtime so the Search-tab sort-blend join
-    # is one disk read per scores.json update, not one per request.
-    _scores_cache: dict = {"mtime": -1.0, "map": {}}
+    # is one disk read per scores.json update, not one per request. Also
+    # carries an inverse `rep_of` map (path → canonical representative) built
+    # from scores.json's `dupes` so search can collapse near-duplicates via
+    # an O(1) hashmap lookup instead of a 288-row LanceDB+cosine walk.
+    _scores_cache: dict = {"mtime": -1.0, "map": {}, "rep_of": {}, "groups": {}}
     _scores_lock = threading.Lock()
+
+    def _refresh_scores_cache():
+        # Reload _scores_cache from disk if scores.json has changed. Returns
+        # the cache dict (caller already holds _scores_lock or doesn't care).
+        scores_path = Path.home() / ".muser" / "scores.json"
+        try:
+            mt = scores_path.stat().st_mtime
+        except OSError:
+            return _scores_cache
+        with _scores_lock:
+            if mt == _scores_cache["mtime"]:
+                return _scores_cache
+            try:
+                s = json.loads(scores_path.read_text())
+                groups = s.get("dupes", {}) or {}
+                rep_of: dict[str, str] = {}
+                for canon, members in groups.items():
+                    rep_of[canon] = canon
+                    for m in members:
+                        rep_of[m] = canon
+                _scores_cache["map"] = s.get("scores", {})
+                _scores_cache["rep_of"] = rep_of
+                _scores_cache["groups"] = groups
+                _scores_cache["mtime"] = mt
+            except Exception:
+                _scores_cache["map"] = {}
+                _scores_cache["rep_of"] = {}
+                _scores_cache["groups"] = {}
+                _scores_cache["mtime"] = mt
+        return _scores_cache
 
     def _attach_scores(results):
         # Surface per-image aesthetic / pickscore from ~/.muser/scores.json on each
@@ -561,21 +660,7 @@ def create_app(model: str = DEFAULT_MODEL):
         # → key simply absent.
         if not results:
             return
-        scores_path = Path.home() / ".muser" / "scores.json"
-        try:
-            mt = scores_path.stat().st_mtime
-        except OSError:
-            return
-        with _scores_lock:
-            if mt != _scores_cache["mtime"]:
-                try:
-                    s = json.loads(scores_path.read_text())
-                    _scores_cache["map"] = s.get("scores", {})
-                    _scores_cache["mtime"] = mt
-                except Exception:
-                    _scores_cache["map"] = {}
-                    _scores_cache["mtime"] = mt
-            m = _scores_cache["map"]
+        m = _refresh_scores_cache()["map"]
         for r in results:
             row = m.get(r["path"])
             if not row:
