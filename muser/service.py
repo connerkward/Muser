@@ -523,6 +523,24 @@ def create_app(model: str = DEFAULT_MODEL):
                 {"path": p, "name": os.path.basename(p), "score": round(s, 4), "dupes": [p], "dupe_count": 1}
                 for p, s in state.index.search(state.model_name, qv, k=k, folder=folder, meta=meta)
             ]
+        # Drop results whose canonical path no longer exists on disk, and prune
+        # dead entries from each result's `dupes[]`. The LanceDB index is
+        # append-by-mtime so deleted files linger in the table until the next
+        # full re-index; filtering at query time keeps stale hits out of the
+        # UI without forcing a rebuild. os.path.exists() is ~10 µs/file on SSD
+        # — 24 results × ~5 dupes ≈ 120 stats = ~1 ms, negligible.
+        kept = []
+        for r in results:
+            if not os.path.exists(r["path"]):
+                continue
+            d = r.get("dupes") or [r["path"]]
+            live = [p for p in d if os.path.exists(p)]
+            if not live:
+                continue
+            r["dupes"] = live
+            r["dupe_count"] = len(live)
+            kept.append(r)
+        results = kept
         for r in results:
             r["uid"] = uid_for(r["path"])
         _add_prob(results)
@@ -1377,16 +1395,30 @@ def create_app(model: str = DEFAULT_MODEL):
             canon = [p for p in canon if p in sem_paths]
         dupes = s.get("dupes", {})
         ranked = sorted(canon, key=lambda p: s["scores"][p].get(metric, 0), reverse=(order == "desc"))
-        page = ranked[offset : offset + limit]
+        # Walk the ranked list pulling live entries until we've filled the
+        # requested page. scores.json is written once per scoring pass and
+        # never re-validates the path on disk; filtering here keeps deleted
+        # files out of the UI without forcing a full re-score. We over-walk
+        # past `offset+limit` if needed, but stop once we have `limit` live
+        # items, so the cost stays bounded by the number of dead files seen.
         items = []
-        for p in page:
-            d = dupes.get(p, [p])
+        i = 0
+        skipped = 0
+        for p in ranked[offset:]:
+            i += 1
+            if not os.path.exists(p):
+                skipped += 1
+                continue
+            d = [dp for dp in dupes.get(p, [p]) if os.path.exists(dp)] or [p]
             items.append({
                 "path": p, "uid": uid_for(p), "name": os.path.basename(p),
                 "score": s["scores"][p].get(metric, 0),
                 "scores": s["scores"][p], "dupes": d, "dupe_count": len(d),
             })
-        return {"built": True, "metric": metric, "metrics": s["metrics"], "total": len(ranked),
+            if len(items) >= limit:
+                break
+        return {"built": True, "metric": metric, "metrics": s["metrics"],
+                "total": len(ranked) - skipped if skipped else len(ranked),
                 "items": items, "coverage": _metric_coverage(metric, len(canon))}
 
     # ---- per-image detail page (uid → everything we know about that file) ----
