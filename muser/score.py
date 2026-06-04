@@ -88,33 +88,188 @@ RISK = {
 }
 
 
-# Benchmark-tuned weight (eval/nsfw_bench.py): nsfw = NSFW_W·Falconsai + (1-NSFW_W)·zero-shot.
-# 0.9 maximized AUC (0.913) vs Falconsai alone (0.873) and zero-shot alone (0.797).
+# Benchmark-tuned weight (eval/nsfw_bench.py) for the legacy blended `nsfw`
+# axis (kept so old Review-tab links and external callers keep working):
+# `nsfw_blend = NSFW_W·Falconsai + (1-NSFW_W)·zero-shot`. 0.9 maximized AUC
+# (0.913) vs Falconsai alone (0.873) and zero-shot alone (0.797).
+#
+# The Review tab now exposes three independent ViT classifiers separately
+# (`nsfw_falconsai`, `nsfw_adamcodd`, `nsfw_marqo`) plus their elementwise
+# max (`nsfw_consensus`) — three votes catch the "one model fires, ensemble
+# averages it out" failure mode that a single weighted blend has.
 NSFW_W = 0.9
 
+# Pipeline singletons — one warm classifier per model, reused across batches.
 _FALCON = {"pipe": None}
+_ADAMCODD = {"pipe": None}
+_MARQO = {"model": None, "transform": None, "labels": None}
+# AdamCodd emits {"sfw","nsfw"}; we accept "porn" too as a defensive alt.
+ADAMCODD_NSFW_LABELS = {"nsfw", "porn"}
+
+# Per-model on-disk caches so re-runs are incremental — keyed by path|mtime|size
+# (same key shape as aesthetic_v2/pickscore/etc.).
+NSFW_FALCONSAI_CACHE = Path.home() / ".muser" / "nsfw_falconsai_cache.json"
+NSFW_ADAMCODD_CACHE = Path.home() / ".muser" / "nsfw_adamcodd_cache.json"
+NSFW_MARQO_CACHE = Path.home() / ".muser" / "nsfw_marqo_cache.json"
 
 
-def _falconsai_nsfw(paths, on_progress, batch_size: int = 24) -> np.ndarray:
-    """Real ViT NSFW probability per image (Falconsai/nsfw_image_detection)."""
+def _classifier_nsfw(paths, on_progress, *, name: str, model_id: str, pos_labels: set[str],
+                     cache, cache_path: Path, batch_size: int = 24) -> np.ndarray:
+    """Real ViT NSFW probability per image via transformers.pipeline.
+
+    Shared by Falconsai + AdamCodd (same shape: `pipeline("image-classification",
+    model=...)` returning `[{label, score}, ...]` per image). `cache` is a
+    `{"pipe": None}` dict so the pipeline is loaded once per process.
+    `pos_labels` is the set of label strings (lowercased) counting as the
+    NSFW-positive class for this model. `cache_path` is a per-path JSON cache
+    (path|mtime|size key) — incremental re-runs only score new/changed files.
+    """
     from transformers import pipeline
 
     from .embedders import _device, _load_rgb
 
-    if _FALCON["pipe"] is None:
-        _FALCON["pipe"] = pipeline("image-classification", model="Falconsai/nsfw_image_detection", device=_device())
-    pipe = _FALCON["pipe"]
+    disk = _read_cache(cache_path)
     out = np.zeros(len(paths), dtype=np.float32)
-    for i in range(0, len(paths), batch_size):
-        chunk = paths[i : i + batch_size]
+
+    needed_idx, needed_paths = [], []
+    for i, p in enumerate(paths):
+        key = _cache_key(p)
+        if key and key in disk:
+            out[i] = disk[key]
+        else:
+            needed_idx.append(i)
+            needed_paths.append(p)
+    if not needed_paths:
+        on_progress(f"{name}: all {len(paths)} cached, skipping model load")
+        return out
+
+    if cache["pipe"] is None:
+        on_progress(f"{name}: loading {model_id}…")
+        cache["pipe"] = pipeline("image-classification", model=model_id, device=_device())
+    pipe = cache["pipe"]
+    on_progress(f"{name}: scoring {len(needed_paths)} new/changed images…")
+    t0 = _now()
+    n = len(needed_paths)
+    for k in range(0, n, batch_size):
+        chunk = needed_paths[k : k + batch_size]
         try:
             res = pipe([_load_rgb(p) for p in chunk], batch_size=batch_size)
             for j, r in enumerate(res):
-                out[i + j] = next((x["score"] for x in r if x["label"].lower() == "nsfw"), 0.0)
-        except Exception:
-            pass  # leave unreadable images at 0
-        if i % (batch_size * 20) == 0:
-            on_progress(f"  Falconsai {i}/{len(paths)}")
+                v = float(next((x["score"] for x in r if x["label"].lower() in pos_labels), 0.0))
+                out[needed_idx[k + j]] = v
+                key = _cache_key(chunk[j])
+                if key:
+                    disk[key] = v
+        except Exception as e:
+            on_progress(f"  skip batch {k} ({type(e).__name__}: {e})")
+        if (k // batch_size) % 5 == 0:
+            done = min(k + batch_size, n)
+            elapsed = _now() - t0
+            eta = elapsed / max(done, 1) * (n - done)
+            bar_w = 20
+            filled = int(bar_w * done / max(n, 1))
+            bar = "#" * filled + "-" * (bar_w - filled)
+            on_progress(f"  {name} [{bar}] {done}/{n} ({int(elapsed)}s elapsed, ~{int(eta)}s left)")
+    _write_cache(cache_path, disk)
+    return out
+
+
+def _falconsai_nsfw(paths, on_progress, batch_size: int = 24) -> np.ndarray:
+    """Real ViT NSFW probability per image (Falconsai/nsfw_image_detection)."""
+    return _classifier_nsfw(paths, on_progress, name="Falconsai",
+                            model_id="Falconsai/nsfw_image_detection",
+                            pos_labels={"nsfw"}, cache=_FALCON,
+                            cache_path=NSFW_FALCONSAI_CACHE, batch_size=batch_size)
+
+
+def _adamcodd_nsfw(paths, on_progress, batch_size: int = 24) -> np.ndarray:
+    """Real ViT NSFW probability per image (AdamCodd/vit-base-nsfw-detector).
+
+    Same ViT-base architecture as Falconsai but a different training distribution
+    (more art / AI-generated content). Independent vote in the consensus — fires
+    on cases Falconsai misses (and vice versa).
+    """
+    return _classifier_nsfw(paths, on_progress, name="AdamCodd",
+                            model_id="AdamCodd/vit-base-nsfw-detector",
+                            pos_labels=ADAMCODD_NSFW_LABELS, cache=_ADAMCODD,
+                            cache_path=NSFW_ADAMCODD_CACHE, batch_size=batch_size)
+
+
+# ---- Marqo NSFW (timm vit_tiny_patch16_384, 2024) --------------------------
+# Tiny (~85 MB, 5.6M params) ViT fine-tuned at 384×384. Loaded via `timm`
+# rather than transformers.pipeline because the upstream checkpoint ships as a
+# timm model card with `label_names` in pretrained_cfg, not a HF AutoModelFor
+# head.
+MARQO_NSFW_MODEL = "hf_hub:Marqo/nsfw-image-detection-384"
+
+
+def _marqo_nsfw(paths, on_progress, batch_size: int = 32) -> np.ndarray:
+    """Real NSFW probability per image (Marqo/nsfw-image-detection-384).
+
+    Smaller backbone than Falconsai/AdamCodd — third independent vote for the
+    consensus. Returns the post-softmax probability of the "nsfw" class.
+    """
+    import torch
+
+    from .embedders import _device, _load_rgb
+
+    disk = _read_cache(NSFW_MARQO_CACHE)
+    out = np.zeros(len(paths), dtype=np.float32)
+
+    needed_idx, needed_paths = [], []
+    for i, p in enumerate(paths):
+        key = _cache_key(p)
+        if key and key in disk:
+            out[i] = disk[key]
+        else:
+            needed_idx.append(i)
+            needed_paths.append(p)
+    if not needed_paths:
+        on_progress(f"Marqo: all {len(paths)} cached, skipping model load")
+        return out
+
+    if _MARQO["model"] is None:
+        import timm
+        on_progress(f"Marqo: loading {MARQO_NSFW_MODEL} (~85 MB)…")
+        m = timm.create_model(MARQO_NSFW_MODEL, pretrained=True).eval().to(_device())
+        cfg = timm.data.resolve_model_data_config(m)
+        tf = timm.data.create_transform(**cfg, is_training=False)
+        labels = [str(x).lower() for x in m.pretrained_cfg.get("label_names", ["sfw", "nsfw"])]
+        _MARQO["model"], _MARQO["transform"], _MARQO["labels"] = m, tf, labels
+
+    model, transform, labels = _MARQO["model"], _MARQO["transform"], _MARQO["labels"]
+    try:
+        nsfw_idx = labels.index("nsfw")
+    except ValueError:
+        nsfw_idx = 1  # binary classifier — assume class 1 is positive
+
+    dev = _device()
+    on_progress(f"Marqo: scoring {len(needed_paths)} images on {dev}…")
+    t0 = _now()
+    n = len(needed_paths)
+    for k in range(0, n, batch_size):
+        chunk = needed_paths[k : k + batch_size]
+        try:
+            with torch.no_grad():
+                tensors = torch.stack([transform(_load_rgb(p)) for p in chunk]).to(dev)
+                probs = model(tensors).softmax(dim=-1).float().cpu().numpy()
+            for j, p in enumerate(chunk):
+                v = float(probs[j, nsfw_idx])
+                out[needed_idx[k + j]] = v
+                key = _cache_key(p)
+                if key:
+                    disk[key] = v
+        except Exception as e:
+            on_progress(f"  skip batch {k} ({type(e).__name__}: {e})")
+        if (k // batch_size) % 5 == 0:
+            done = min(k + batch_size, n)
+            elapsed = _now() - t0
+            eta = elapsed / max(done, 1) * (n - done)
+            bar_w = 20
+            filled = int(bar_w * done / max(n, 1))
+            bar = "#" * filled + "-" * (bar_w - filled)
+            on_progress(f"  Marqo [{bar}] {done}/{n} ({int(elapsed)}s elapsed, ~{int(eta)}s left)")
+    _write_cache(NSFW_MARQO_CACHE, disk)
     return out
 
 
@@ -567,11 +722,39 @@ def score_all(model: str = "siglip2-b", on_progress=print) -> dict:
         on_progress(f"risk:{cat} (zero-shot)…")
         risk[cat] = (X @ concept(prompts).T).max(1)
 
-    # ---- nsfw: blend the real Falconsai ViT classifier with the zero-shot signal
-    # at the benchmark-optimal weight (see eval/nsfw_bench.py / NSFW_W). ----
+    # ---- nsfw: THREE independent ViT classifiers exposed separately on the
+    # Review tab, plus their elementwise max as a consensus axis, plus the
+    # legacy blended `nsfw` (kept so old links / external callers keep working).
+    #   nsfw_falconsai — Falconsai/nsfw_image_detection (ViT-base-224)
+    #   nsfw_adamcodd  — AdamCodd/vit-base-nsfw-detector (ViT-base-384;
+    #                    different training mix — stronger on art/AI-gen)
+    #   nsfw_marqo     — Marqo/nsfw-image-detection-384 (vit_tiny@384, ~85 MB)
+    #   nsfw_consensus — max(falconsai, adamcodd, marqo): "any one of three
+    #                    flagged it" — the conservative trigger
+    #   nsfw           — NSFW_W·Falconsai + (1-NSFW_W)·zero-shot (legacy)
+    # Each per-classifier raw probability is percentile-normalized to stay on
+    # the same 0–1 axis as the rest, so the UI can sort by any of them and
+    # read pairwise disagreement (e.g. nsfw_falconsai high but nsfw_marqo low).
     on_progress("nsfw (Falconsai ViT pass)…")
     falcon = _falconsai_nsfw(paths, on_progress)
+    on_progress("nsfw (AdamCodd ViT pass)…")
+    try:
+        adamcodd = _adamcodd_nsfw(paths, on_progress)
+    except Exception as e:
+        on_progress(f"  adamcodd FAILED: {type(e).__name__}: {e}")
+        adamcodd = np.zeros(len(paths), dtype=np.float32)
+    on_progress("nsfw (Marqo ViT pass)…")
+    try:
+        marqo = _marqo_nsfw(paths, on_progress)
+    except Exception as e:
+        on_progress(f"  marqo FAILED: {type(e).__name__}: {e}")
+        marqo = np.zeros(len(paths), dtype=np.float32)
     nsfw_blend = NSFW_W * falcon + (1 - NSFW_W) * _pct(risk["nsfw"])
+    # Consensus = elementwise max across all three real ViT heads. The
+    # conservative trigger: an image only escapes the Review queue if every
+    # classifier agrees it's safe. Avoids the "one model fires, ensemble
+    # averages it out" failure mode that a single weighted blend has.
+    nsfw_consensus = np.maximum.reduce([falcon, adamcodd, marqo])
 
     nov_p, aes_p = _pct(novelty), _pct(aesthetic)
     interesting = 0.6 * nov_p + 0.4 * aes_p  # initial blend (zero-shot aesthetic only)
@@ -672,7 +855,15 @@ def score_all(model: str = "siglip2-b", on_progress=print) -> dict:
         "novelty": nov_p, "aesthetic": aes_p,
         "aesthetic_v2": aes_v2_p, "pickscore": pick_p,
         "aesthetic_v25": aes_v25_p, "hps_v21": hps_p,
-        "nsfw": _pct(nsfw_blend), "private": _pct(risk["private"]),
+        # `nsfw` is the legacy blended axis (kept for back-compat); the per-
+        # classifier axes and the max-consensus are what the Review tab actually
+        # surfaces now. All percentile-normalized to the same 0–1 scale.
+        "nsfw": _pct(nsfw_blend),
+        "nsfw_falconsai": _pct(falcon),
+        "nsfw_adamcodd": _pct(adamcodd),
+        "nsfw_marqo": _pct(marqo),
+        "nsfw_consensus": _pct(nsfw_consensus),
+        "private": _pct(risk["private"]),
     }
 
     scores = {paths[i]: {m: round(float(metrics[m][i]), 4) for m in metrics} for i in range(n)}

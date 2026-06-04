@@ -994,6 +994,12 @@ def create_app(model: str = DEFAULT_MODEL):
         "pickscore": "pickscore_cache.json",
         "aesthetic_v25": "aesthetic_v25_cache.json",
         "hps_v21": "hps_v21_cache.json",
+        # NSFW: three real ViT classifiers, each cached separately so re-runs
+        # are incremental. Cache populates over the FULL path set (not just
+        # canonical), so once a pass completes its scored>=total clamps to 100%.
+        "nsfw_falconsai": "nsfw_falconsai_cache.json",
+        "nsfw_adamcodd": "nsfw_adamcodd_cache.json",
+        "nsfw_marqo": "nsfw_marqo_cache.json",
     }
 
     def _metric_coverage(metric: str, total: int) -> dict:

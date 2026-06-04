@@ -364,12 +364,17 @@
   <div class="row" style="margin-bottom:6px">
     <span class="mut">flag</span>
     <select id="rcat">
-      <option value="nsfw">NSFW / explicit</option>
+      <option value="nsfw_consensus">NSFW (consensus = max of all 3)</option>
+      <option value="nsfw_falconsai">NSFW (Falconsai)</option>
+      <option value="nsfw_adamcodd">NSFW (AdamCodd)</option>
+      <option value="nsfw_marqo">NSFW (Marqo)</option>
+      <option value="nsfw">NSFW (blended, legacy)</option>
       <option value="private">Private / leak (IDs, logins, messages)</option>
     </select>
     <span class="mut" id="rmsg"></span>
   </div>
-  <div style="font-size:11px;color:#caa468;margin-bottom:14px">⚠︎ Heuristic zero-shot flags for reviewing your <i>own</i> library — not a classifier or a verdict. Highest-scoring first; skim and decide.</div>
+  <div id="rcov" style="margin:-2px 0 8px;font-size:12px"></div>
+  <div style="font-size:11px;color:#caa468;margin-bottom:14px">⚠︎ Heuristic flags for reviewing your <i>own</i> library — not a verdict. Three independent ViT NSFW heads (Falconsai, AdamCodd, Marqo) sortable separately, plus their elementwise max (consensus). Highest-scoring first; skim and decide.</div>
   <div class="grid" id="reviewGrid"></div>
 </div>
 
@@ -1243,7 +1248,7 @@ function renderAI(items){
 async function loadScores(gridSel,msgSel,metricSel){
   const metric=$(metricSel).value;
   $(msgSel).textContent="loading…";
-  const cov=(metricSel==="#imetric") ? $("#icov") : null;
+  const cov=(metricSel==="#imetric") ? $("#icov") : (metricSel==="#rcat") ? $("#rcov") : null;
   if(cov) cov.innerHTML="";
   const r=await (await fetch(`/api/score?metric=${metric}&order=desc&limit=140`)).json();
   const g=$(gridSel); g.innerHTML="";
