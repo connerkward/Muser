@@ -121,6 +121,57 @@ def index(
         con.print(f"\n  C2PA: {len(ai_images())} AI-generated image(s) flagged in your library")
 
 
+@app.command("reindex-metadata")
+def reindex_metadata(
+    model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to backfill"),
+    local: bool = typer.Option(False, "--local", help="Run in-process instead of via the service"),
+):
+    """Compute width / height / filesize for every indexed row missing them.
+
+    One-time, in-place, idempotent — no re-embedding. ~10 s wall-clock for a 27k-image
+    corpus on Apple Silicon. New index runs already store these fields automatically;
+    this command exists so older tables (indexed before the Filter panel landed) catch
+    up without a full rescan. Safe to re-run; only rows still lacking dims are touched.
+    """
+    if not local:
+        _ensure_service()
+        con.print("[dim]backfilling metadata via service…[/]")
+        _post("/api/backfill-metadata", {})
+        # Poll /api/status until task clears.
+        last_done = -1
+        while True:
+            time.sleep(0.5)
+            s = _get("/api/status")
+            t = s.get("task")
+            if t is None:
+                con.print("  done.")
+                break
+            kind = t.get("kind", "")
+            if kind.startswith("backfill_metadata"):
+                done, total = t.get("done", 0), t.get("total", 0)
+                if done != last_done:
+                    last_done = done
+                    if kind == "backfill_metadata_done":
+                        con.print(f"\n  updated {t.get('updated', 0)} · missing dims {t.get('missing', 0)} · total {t.get('total', 0)}")
+                    elif kind == "backfill_metadata_error":
+                        con.print(f"[red]error:[/] {t.get('error')}")
+                    else:
+                        con.print(f"  {done}/{total}", end="\r")
+        return
+
+    from .index import MuserIndex
+    idx = MuserIndex()
+    t0 = time.time()
+    res = idx.backfill_metadata(
+        model,
+        on_progress=lambda d, t: con.print(f"  {d}/{t}", end="\r"),
+    )
+    con.print(
+        f"\n  +{res['updated']} updated · {res['missing']} missing dims · "
+        f"{res['total']} scanned  ({time.time() - t0:.1f}s)"
+    )
+
+
 @app.command()
 def search(
     query: list[str] = typer.Argument(..., help='Text query, e.g. "a dog on a beach"'),

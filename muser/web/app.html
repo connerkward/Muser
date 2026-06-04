@@ -256,6 +256,54 @@
   .compose .x { background:transparent; border:0; color:var(--mut); font-size:16px; line-height:1;
                 cursor:pointer; padding:0 4px; }
   .compose .x:hover { color:var(--fg); }
+
+  /* Filter panel: collapsed → a small "Filter…" link in the tools row;
+     expanded → a thin-bordered strip above the results grid with three
+     dimension groups (resolution, aspect, file size). Mirrors the
+     .compose rhythm so the two opt-in panels read as a pair. */
+  .filter-toggle { background:transparent; border:0; padding:0; color:var(--mut);
+                   font-size:12px; cursor:pointer; border-bottom:1px solid transparent;
+                   font-family:inherit; }
+  .filter-toggle:hover { color:var(--fg); border-bottom-color:var(--fg); }
+  .filter-toggle.on    { color:var(--fg); border-bottom-color:var(--fg); }
+  .filter-toggle .caret { display:inline-block; transition:transform 160ms ease;
+                          font-family:var(--serif); font-style:italic; }
+  .filter-toggle.open .caret { transform:rotate(90deg); }
+  .filter-panel { display:none; border:1px solid var(--line); padding:14px 16px;
+                  margin:6px 0 14px; font-size:12px; color:var(--mut); }
+  .filter-panel.on { display:block; }
+  .filter-row { display:flex; align-items:baseline; gap:18px; padding:6px 0;
+                flex-wrap:wrap; }
+  .filter-row + .filter-row { border-top:1px solid var(--paper); }
+  .filter-row .lab { font:italic 400 13px/1.2 var(--serif); color:var(--mut);
+                     min-width:90px; }
+  .filter-row .pair { display:flex; align-items:baseline; gap:6px; color:var(--mut);
+                      font-size:12px; }
+  .filter-row .pair input { width:74px; background:transparent; border:0;
+                            border-bottom:1px solid var(--line); padding:3px 2px;
+                            color:var(--fg); font:inherit; outline:none;
+                            font-variant-numeric:tabular-nums; text-align:right; }
+  .filter-row .pair input:focus { border-bottom-color:var(--fg); }
+  .filter-row .pair input::placeholder { color:var(--mut); font-style:italic; }
+  .filter-row .unit { color:var(--mut); font:italic 400 11px/1 var(--serif); min-width:2em; }
+  .filter-actions { display:flex; align-items:center; gap:14px; padding-top:10px;
+                    border-top:1px solid var(--paper); margin-top:6px; }
+  .filter-actions button.apply { background:transparent; border:0; padding:0; color:var(--fg);
+                                 font-size:12px; cursor:pointer; border-bottom:1px solid var(--fg);
+                                 font-family:inherit; }
+  .filter-actions button.apply:hover { opacity:.7; }
+  .filter-actions button.reset { background:transparent; border:0; padding:0; color:var(--mut);
+                                 font-size:12px; cursor:pointer; border-bottom:1px solid transparent;
+                                 font-family:inherit; }
+  .filter-actions button.reset:hover { color:var(--fg); border-bottom-color:var(--fg); }
+  .filter-presets { display:flex; flex-wrap:wrap; gap:8px; padding:4px 0 10px; }
+  .filter-presets button { background:transparent; border:1px solid var(--line);
+                           padding:3px 9px; color:var(--mut); font-size:11px;
+                           cursor:pointer; border-radius:0;
+                           font:italic 400 12px/1.2 var(--serif); }
+  .filter-presets button:hover { color:var(--fg); border-color:var(--fg); }
+  .filter-cov { color:var(--mut); font:italic 400 12px/1 var(--serif); }
+  .filter-cov b { font-style:normal; color:var(--fg); font-variant-numeric:tabular-nums; }
 </style>
 </head>
 <body>
@@ -319,9 +367,50 @@
     <button id="scopePick" title="Limit search to a folder"><span id="scopeLabel">All folders</span></button>
     <button id="scopeClear" title="Clear scope" style="display:none">×</button>
     <span class="mut" id="scopemsg"></span>
+    <span class="mut">·</span>
+    <button class="filter-toggle" id="filterToggle" title="Filter results by resolution, aspect ratio, file size">
+      <span class="caret">›</span> Filter…</button>
+    <span class="filter-cov" id="filterCov"></span>
     <span style="flex:1"></span>
     <span class="mut" id="idxmsg"></span>
     <input type="hidden" id="scope" />
+  </div>
+  <div class="filter-panel" id="filterPanel">
+    <div class="filter-presets" id="filterPresets">
+      <button data-preset="lowres" title="Short side under 768 px — upscale candidates">Low-res (&lt;768)</button>
+      <button data-preset="square" title="Aspect ratio between 0.90 and 1.10">Square</button>
+      <button data-preset="wide"   title="Aspect ratio ≥ 1.50">Wide</button>
+      <button data-preset="tall"   title="Aspect ratio ≤ 0.67">Tall</button>
+      <button data-preset="hires"  title="Short side ≥ 1024 px">Hi-res (≥1024)</button>
+      <button data-preset="bigfile" title="File size ≥ 5 MB">Large file (&gt;5 MB)</button>
+    </div>
+    <div class="filter-row">
+      <span class="lab">Resolution</span>
+      <span class="pair" title="Smaller of width/height, lower bound">
+        min short side <input type="number" min="0" step="1" id="fMinShort" placeholder="any" /> <span class="unit">px</span>
+      </span>
+      <span class="pair" title="Larger of width/height, upper bound">
+        max long side <input type="number" min="0" step="1" id="fMaxLong" placeholder="any" /> <span class="unit">px</span>
+      </span>
+    </div>
+    <div class="filter-row">
+      <span class="lab">Aspect ratio</span>
+      <span class="pair" title="width ÷ height; 0.50 ≈ tall portrait, 2.00 ≈ wide landscape">
+        min <input type="number" min="0" step="0.05" id="fMinAspect" placeholder="any" />
+        max <input type="number" min="0" step="0.05" id="fMaxAspect" placeholder="any" />
+      </span>
+    </div>
+    <div class="filter-row">
+      <span class="lab">File size</span>
+      <span class="pair"><input type="number" min="0" step="1" id="fMinKB" placeholder="any" /> <span class="unit">KB min</span></span>
+      <span class="pair"><input type="number" min="0" step="0.5" id="fMaxMB" placeholder="any" /> <span class="unit">MB max</span></span>
+    </div>
+    <div class="filter-actions">
+      <button class="apply" id="fApply">Apply</button>
+      <button class="reset" id="fReset">Reset</button>
+      <span style="flex:1"></span>
+      <span class="filter-cov" id="filterCovDetail"></span>
+    </div>
   </div>
   <div id="results" class="grid"></div>
   <div id="empty" class="empty">Index a folder, then search it.</div>
@@ -861,23 +950,154 @@ function showSkeletons(n = 12){
 async function search(){
   if (_busy) return;  // overlay covers UI while the model is loading
   const q=$("#q").value.trim();
-  if(q.length < 2){ $("#results").innerHTML=""; $("#empty").style.display="none"; _lastKey=""; _rendered=0; return; }
+  // No query → if a filter is active, run /api/filter instead of clearing.
+  // Lets the Filter panel act as "browse by metadata" with no text query.
+  if(q.length < 2){
+    if (filterActive()) { return runFilter(); }
+    $("#results").innerHTML=""; $("#empty").style.display="none"; _lastKey=""; _rendered=0; return;
+  }
   $("#empty").style.display="none";
   const folder=$("#scope").value.trim();
   const neg=$("#neg").value.trim();
-  const key=q+"|"+folder+"|"+neg;
+  const fParams = filterParamString();
+  const key=q+"|"+folder+"|"+neg+"|"+fParams;
   if(key!==_lastKey){ _k=K_STEP; _lastKey=key; _rendered=0; _hasMore=true; showSkeletons(12); }  // new query → reset + show skeletons
   _mode="text"; _loading=true;
   if(_searchAbort) _searchAbort.abort();
   _searchAbort = new AbortController();
   let r;
   const negS = parseFloat($("#negStrength").value);
-  try { r = await (await fetch(`/api/search?q=${enc(q)}&k=${_k}${folder?`&folder=${enc(folder)}`:""}${neg?`&neg=${enc(neg)}&neg_strength=${negS}`:""}`, {signal:_searchAbort.signal})).json(); }
+  try { r = await (await fetch(`/api/search?q=${enc(q)}&k=${_k}${folder?`&folder=${enc(folder)}`:""}${neg?`&neg=${enc(neg)}&neg_strength=${negS}`:""}${fParams}`, {signal:_searchAbort.signal})).json(); }
   catch(e){ if(e.name==="AbortError") return; _loading=false; throw e; }   // abort: a newer search now owns _loading
   _renderHits(r);
   _loading=false;
   maybeLoadMore();                                 // short page / tall window: keep filling until the buffer is satisfied
 }
+
+// ---- Filter panel: resolution / aspect / file-size constraints, with
+//      presets. When a query is active the params ride on /api/search; with
+//      no query "Apply" hits /api/filter and lists matching images. Filter
+//      state persists per-tab in localStorage so it survives reloads.
+const FILTER_KEY = "muser-filter-v1";
+const _fIDs = ["fMinShort","fMaxLong","fMinAspect","fMaxAspect","fMinKB","fMaxMB"];
+function _loadFilterState(){
+  try {
+    const s = JSON.parse(localStorage.getItem(FILTER_KEY) || "{}");
+    _fIDs.forEach(id => { if (s[id] != null) $("#"+id).value = s[id]; });
+    if (s.open) { $("#filterToggle").classList.add("open","on"); $("#filterPanel").classList.add("on"); }
+  } catch {}
+}
+function _saveFilterState(){
+  const s = {open: $("#filterPanel").classList.contains("on")};
+  _fIDs.forEach(id => { const v = $("#"+id).value.trim(); if (v) s[id] = v; });
+  localStorage.setItem(FILTER_KEY, JSON.stringify(s));
+}
+function filterActive(){
+  return _fIDs.some(id => $("#"+id).value.trim() !== "");
+}
+// Build the &min_short_side=…&max_long_side=… suffix the /api/search and
+// /api/filter endpoints accept. Empty when no constraints are set.
+function filterParamString(){
+  const out = [];
+  const minShort = $("#fMinShort").value.trim();
+  const maxLong  = $("#fMaxLong").value.trim();
+  const minA     = $("#fMinAspect").value.trim();
+  const maxA     = $("#fMaxAspect").value.trim();
+  const minKB    = $("#fMinKB").value.trim();
+  const maxMB    = $("#fMaxMB").value.trim();
+  if (minShort) out.push("min_short_side=" + encodeURIComponent(parseInt(minShort,10)));
+  if (maxLong)  out.push("max_long_side="  + encodeURIComponent(parseInt(maxLong,10)));
+  if (minA)     out.push("min_aspect="     + encodeURIComponent(parseFloat(minA)));
+  if (maxA)     out.push("max_aspect="     + encodeURIComponent(parseFloat(maxA)));
+  if (minKB)    out.push("min_filesize="   + encodeURIComponent(Math.round(parseFloat(minKB)*1024)));
+  if (maxMB)    out.push("max_filesize="   + encodeURIComponent(Math.round(parseFloat(maxMB)*1024*1024)));
+  return out.length ? "&" + out.join("&") : "";
+}
+async function runFilter(){
+  $("#empty").style.display="none";
+  const folder=$("#scope").value.trim();
+  const fParams = filterParamString();
+  if (!fParams){
+    // No constraints + no query → keep the grid clean instead of dumping every row.
+    $("#results").innerHTML=""; $("#empty").style.display="block";
+    $("#empty").textContent = "Set a filter or type a query to see results.";
+    updateFilterCoverage();
+    return;
+  }
+  if(_searchAbort) _searchAbort.abort();
+  _searchAbort = new AbortController();
+  _mode="filter"; _lastKey="filter"; _rendered=0; _hasMore=false; showSkeletons(12);
+  let r;
+  try { r = await (await fetch(`/api/filter?limit=300${folder?`&folder=${enc(folder)}`:""}${fParams}`, {signal:_searchAbort.signal})).json(); }
+  catch(e){ if(e.name==="AbortError") return; throw e; }
+  _renderHits({results: r.results || [], refinements: []});
+  updateFilterCoverage(r.total);
+}
+function applyPreset(name){
+  // Each preset wipes the current bounds first so it's "one click = full set".
+  _fIDs.forEach(id => $("#"+id).value = "");
+  switch (name) {
+    case "lowres":  $("#fMaxLong").value = 768; break;
+    case "hires":   $("#fMinShort").value = 1024; break;
+    case "square":  $("#fMinAspect").value = 0.90; $("#fMaxAspect").value = 1.10; break;
+    case "wide":    $("#fMinAspect").value = 1.50; break;
+    case "tall":    $("#fMaxAspect").value = 0.67; break;
+    case "bigfile": $("#fMinKB").value = 5120; break;  // 5 MB
+  }
+  _saveFilterState();
+  // Pull the trigger immediately. With a live query, re-search; otherwise filter-list.
+  const q = $("#q").value.trim();
+  if (q.length >= 2) { liveSearch(); } else { runFilter(); }
+}
+async function updateFilterCoverage(matched){
+  // Right of the toggle: "N matching · M indexed (P%)". The "indexed" total
+  // and metadata-scored fraction come from /api/status; "matching" is the
+  // current filter's count (passed in, or computed when no query is live).
+  let total = 0, scored = 0;
+  try { const s = await (await fetch("/api/status")).json();
+        total = s.indexed || 0;
+        scored = (s.metadata && s.metadata.scored) || 0; } catch {}
+  let label;
+  if (matched != null) {
+    const pct = total ? (matched/total*100).toFixed(matched/total < 0.01 ? 2 : 1) : "0";
+    label = `<b>${matched.toLocaleString()}</b> matching · ${total.toLocaleString()} indexed (${pct}%)`;
+  } else {
+    const pct = total ? Math.round(scored/total*100) : 0;
+    label = `${scored.toLocaleString()} of ${total.toLocaleString()} ready for filtering (${pct}%)`;
+  }
+  $("#filterCov").innerHTML = label;
+  $("#filterCovDetail").innerHTML = label;
+}
+$("#filterToggle").addEventListener("click", () => {
+  const open = $("#filterPanel").classList.toggle("on");
+  $("#filterToggle").classList.toggle("open", open);
+  $("#filterToggle").classList.toggle("on", open);
+  _saveFilterState();
+  updateFilterCoverage();
+});
+$("#filterPresets").addEventListener("click", e => {
+  const b = e.target.closest("button[data-preset]");
+  if (b) applyPreset(b.dataset.preset);
+});
+$("#fApply").addEventListener("click", () => {
+  _saveFilterState();
+  const q = $("#q").value.trim();
+  if (q.length >= 2) { liveSearch(); } else { runFilter(); }
+});
+$("#fReset").addEventListener("click", () => {
+  _fIDs.forEach(id => $("#"+id).value = "");
+  _saveFilterState();
+  const q = $("#q").value.trim();
+  if (q.length >= 2) { liveSearch(); }
+  else { $("#results").innerHTML=""; $("#empty").style.display="block"; $("#empty").textContent="Set a filter or type a query to see results."; }
+  updateFilterCoverage();
+});
+// Persist on input; "Apply" is still the action, but a typed-in value shouldn't
+// quietly disappear on reload.
+_fIDs.forEach(id => $("#"+id).addEventListener("input", _saveFilterState));
+// Boot: rehydrate persisted state, then refresh the coverage line.
+_loadFilterState();
+updateFilterCoverage();
 
 function _renderHits(r){
   const g=$("#results");

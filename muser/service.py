@@ -18,7 +18,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from .index import MuserIndex, uid_for
+from .index import MetaFilter, MuserIndex, uid_for
 from .registry import DEFAULT_MODEL, load_model, model_names
 
 WEB = Path(__file__).resolve().parent / "web" / "app.html"
@@ -315,6 +315,9 @@ def create_app(model: str = DEFAULT_MODEL):
         # in-flight long-running activity (loading_model / indexing) for the
         # busy overlay; null when idle. Frontend polls this — 4s idle,
         # ~400ms when task != null.
+        # `metadata` is the (scored, total) coverage for the Filter panel —
+        # cheap (a path-only scan), so it can ride the same poll the busy
+        # overlay already uses without a second round-trip.
         return {
             "model": state.model_name,
             "models": model_names(),
@@ -322,6 +325,7 @@ def create_app(model: str = DEFAULT_MODEL):
             "db": str(state.index.db_path),
             "ready": state._ready.is_set(),
             "task": state.task,
+            "metadata": state.index.metadata_coverage(state.model_name),
         }
 
     @app.post("/api/index")
@@ -440,17 +444,70 @@ def create_app(model: str = DEFAULT_MODEL):
                 break
         return out
 
-    def _run_search(qv, k, dedup, method, folder):
+    def _meta_from_params(
+        min_width=None, max_width=None, min_height=None, max_height=None,
+        min_short_side=None, max_short_side=None, min_long_side=None, max_long_side=None,
+        min_aspect=None, max_aspect=None, min_filesize=None, max_filesize=None,
+    ) -> MetaFilter | None:
+        """Build a MetaFilter from the search/filter endpoint's optional bounds,
+        or None if every bound is unset. Returning None lets the index layer
+        skip building (and SQL-evaluating) an empty where-clause."""
+        f = MetaFilter(
+            min_width=min_width, max_width=max_width,
+            min_height=min_height, max_height=max_height,
+            min_short_side=min_short_side, max_short_side=max_short_side,
+            min_long_side=min_long_side, max_long_side=max_long_side,
+            min_aspect=min_aspect, max_aspect=max_aspect,
+            min_filesize=min_filesize, max_filesize=max_filesize,
+        )
+        return None if f.is_empty() else f
+
+    def _attach_dims(results, paths):
+        """Enrich result dicts with width/height/filesize (when known) so the
+        UI can show a "1920×1080 · 540 KB" line without a per-card round-trip.
+        Pulled in one LanceDB scan keyed on path. Missing metadata → keys
+        simply absent on that result."""
+        if not results:
+            return
+        t = state.index._open(state.model_name)
+        if t is None or "width" not in {f.name for f in t.schema}:
+            return
+        # `path IN ('a','b',...)` is the cleanest predicate; SQL-quote each.
+        quoted = ",".join("'" + p.replace("'", "''") + "'" for p in paths)
+        try:
+            rows = (
+                t.search().select(["path", "width", "height", "filesize"])
+                .where(f"path IN ({quoted})")
+                .limit(len(paths)).to_list()
+            )
+        except Exception:
+            return
+        by_path = {r["path"]: r for r in rows}
+        for r in results:
+            row = by_path.get(r["path"])
+            if not row:
+                continue
+            if row.get("width") is not None:
+                r["width"] = int(row["width"])
+            if row.get("height") is not None:
+                r["height"] = int(row["height"])
+            if row.get("filesize") is not None:
+                r["filesize"] = int(row["filesize"])
+
+    def _run_search(qv, k, dedup, method, folder, meta=None):
         if dedup:
-            results = state.index.search_dedup(state.model_name, qv, k=k, method=method, folder=folder)
+            results = state.index.search_dedup(
+                state.model_name, qv, k=k, method=method, folder=folder, meta=meta,
+            )
         else:
             results = [
                 {"path": p, "name": os.path.basename(p), "score": round(s, 4), "dupes": [p], "dupe_count": 1}
-                for p, s in state.index.search(state.model_name, qv, k=k, folder=folder)
+                for p, s in state.index.search(state.model_name, qv, k=k, folder=folder, meta=meta)
             ]
         for r in results:
             r["uid"] = uid_for(r["path"])
         _add_prob(results)
+        _attach_dims(results, [r["path"] for r in results])
         return results
 
     def _add_prob(results):
@@ -468,7 +525,13 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.get("/api/search")
     def search(q: str, k: int = 24, dedup: bool = True, method: str = "embed", folder: str | None = None,
-               neg: str | None = None, neg_strength: float = 0.5):
+               neg: str | None = None, neg_strength: float = 0.5,
+               min_width: int | None = None, max_width: int | None = None,
+               min_height: int | None = None, max_height: int | None = None,
+               min_short_side: int | None = None, max_short_side: int | None = None,
+               min_long_side: int | None = None, max_long_side: int | None = None,
+               min_aspect: float | None = None, max_aspect: float | None = None,
+               min_filesize: int | None = None, max_filesize: int | None = None):
         # method: "embed" (cosine, default), "phash" (perceptual-hash Hamming,
         # robust to recompression/resize/crop), or "both" (collapse on either).
         # folder: restrict results to images under this directory (any depth).
@@ -476,6 +539,10 @@ def create_app(model: str = DEFAULT_MODEL):
         # encoders ignore in-prompt negation (bag-of-words effect, see
         # Yuksekgonul et al. ICLR 2023), so suppression has to happen as
         # vector arithmetic in the embedding space, not as natural-language "not".
+        # min_/max_ {width,height,short_side,long_side,aspect,filesize}: optional
+        # metadata constraints — pushed into LanceDB as a single prefilter so
+        # the kNN limit applies AFTER the cut (otherwise the top-k of out-of-
+        # filter neighbors could return zero in-filter hits).
         emb = state.warm()
         qv = emb.embed_queries([q])[0]
         if neg and neg.strip():
@@ -485,19 +552,39 @@ def create_app(model: str = DEFAULT_MODEL):
             n = float(np.linalg.norm(qv))
             if n > 0:
                 qv = qv / n
-        results = _run_search(qv, k, dedup, method, folder)
+        meta = _meta_from_params(
+            min_width=min_width, max_width=max_width, min_height=min_height, max_height=max_height,
+            min_short_side=min_short_side, max_short_side=max_short_side,
+            min_long_side=min_long_side, max_long_side=max_long_side,
+            min_aspect=min_aspect, max_aspect=max_aspect,
+            min_filesize=min_filesize, max_filesize=max_filesize,
+        )
+        results = _run_search(qv, k, dedup, method, folder, meta=meta)
         refinements = _refinements([r["path"] for r in results], q)
         return {"query": q, "model": state.model_name, "results": results, "refinements": refinements}
 
     @app.get("/api/search-image")
-    def search_image(path: str, k: int = 24, dedup: bool = True, method: str = "embed", folder: str | None = None):
+    def search_image(path: str, k: int = 24, dedup: bool = True, method: str = "embed", folder: str | None = None,
+                     min_width: int | None = None, max_width: int | None = None,
+                     min_height: int | None = None, max_height: int | None = None,
+                     min_short_side: int | None = None, max_short_side: int | None = None,
+                     min_long_side: int | None = None, max_long_side: int | None = None,
+                     min_aspect: float | None = None, max_aspect: float | None = None,
+                     min_filesize: int | None = None, max_filesize: int | None = None):
         # Image-to-image search: embed the file at `path`, find nearest neighbors
         # in the index. Works for any file PIL can open — doesn't need to be indexed.
         if not os.path.exists(path):
             raise HTTPException(404, f"no such image: {path}")
         emb = state.warm()
         qv = emb.embed_images([path])[0]
-        results = _run_search(qv, k, dedup, method, folder)
+        meta = _meta_from_params(
+            min_width=min_width, max_width=max_width, min_height=min_height, max_height=max_height,
+            min_short_side=min_short_side, max_short_side=max_short_side,
+            min_long_side=min_long_side, max_long_side=max_long_side,
+            min_aspect=min_aspect, max_aspect=max_aspect,
+            min_filesize=min_filesize, max_filesize=max_filesize,
+        )
+        results = _run_search(qv, k, dedup, method, folder, meta=meta)
         # Filter the reference image itself out of its own results.
         results = [r for r in results if r["path"] != path]
         refinements = _refinements([r["path"] for r in results], os.path.basename(path))
@@ -507,7 +594,13 @@ def create_app(model: str = DEFAULT_MODEL):
     @app.get("/api/search-compose")
     def search_compose(img: str, text: str, alpha: float = 0.5, beta: float = 0.5,
                        k: int = 30, dedup: bool = True, method: str = "embed",
-                       folder: str | None = None):
+                       folder: str | None = None,
+                       min_width: int | None = None, max_width: int | None = None,
+                       min_height: int | None = None, max_height: int | None = None,
+                       min_short_side: int | None = None, max_short_side: int | None = None,
+                       min_long_side: int | None = None, max_long_side: int | None = None,
+                       min_aspect: float | None = None, max_aspect: float | None = None,
+                       min_filesize: int | None = None, max_filesize: int | None = None):
         # Composed Image Retrieval, vector-arithmetic baseline (CIRR/Liu et al. ICCV 2021):
         #   q = α·embed_image(img) + β·embed_text(text)  (then L2-normalize)
         # Works well for attribute swaps ("red dress" + "in blue"); weaker on structural
@@ -526,12 +619,138 @@ def create_app(model: str = DEFAULT_MODEL):
         if not np.isfinite(n) or n == 0:
             raise HTTPException(400, "composed vector degenerate (α=β=0?)")
         qv = qv / n
-        results = _run_search(qv, k, dedup, method, folder)
+        meta = _meta_from_params(
+            min_width=min_width, max_width=max_width, min_height=min_height, max_height=max_height,
+            min_short_side=min_short_side, max_short_side=max_short_side,
+            min_long_side=min_long_side, max_long_side=max_long_side,
+            min_aspect=min_aspect, max_aspect=max_aspect,
+            min_filesize=min_filesize, max_filesize=max_filesize,
+        )
+        results = _run_search(qv, k, dedup, method, folder, meta=meta)
         results = [r for r in results if r["path"] != img]
         refinements = _refinements([r["path"] for r in results], text)
         return {"query": f"compose: {os.path.basename(img)} + {text!r}",
                 "compose": {"img": img, "text": text, "alpha": alpha, "beta": beta},
                 "model": state.model_name, "results": results, "refinements": refinements}
+
+    @app.get("/api/filter")
+    def filter_(limit: int = 200, offset: int = 0, folder: str | None = None,
+                dedup: bool = True,
+                min_width: int | None = None, max_width: int | None = None,
+                min_height: int | None = None, max_height: int | None = None,
+                min_short_side: int | None = None, max_short_side: int | None = None,
+                min_long_side: int | None = None, max_long_side: int | None = None,
+                min_aspect: float | None = None, max_aspect: float | None = None,
+                min_filesize: int | None = None, max_filesize: int | None = None):
+        """List images matching the metadata constraints — no text/image query.
+        Drives the Filter panel's "Apply with no query" path: e.g. "find every
+        image whose short side is under 768" for an upscale-candidates triage.
+        Same bound semantics as the metadata params on /api/search; results
+        carry (path, uid, name, width, height, filesize). When ``dedup`` is on
+        (default), near-duplicate paths are collapsed via the persisted
+        canonical map (~/.muser/scores.json), so the page mirrors the Search
+        tab's "one card per unique image" idiom; set ``dedup=false`` for the
+        raw row dump."""
+        meta = _meta_from_params(
+            min_width=min_width, max_width=max_width, min_height=min_height, max_height=max_height,
+            min_short_side=min_short_side, max_short_side=max_short_side,
+            min_long_side=min_long_side, max_long_side=max_long_side,
+            min_aspect=min_aspect, max_aspect=max_aspect,
+            min_filesize=min_filesize, max_filesize=max_filesize,
+        )
+        # Fetch a wide-enough rows window for the canonical-only collapse to
+        # converge in one pass. The index layer returns all matches with the
+        # given bounds (sorted by path), so we slice on this side after the
+        # canonical filter.
+        all_rows, raw_total = state.index.filter(
+            state.model_name, meta=meta, folder=folder, limit=10_000_000, offset=0,
+        )
+
+        if dedup:
+            # Map every path back to its canonical (deduped) representative;
+            # the filter ships one row per representative when multiple of its
+            # dupes land in the filtered set. Falls back to "no dedup" when
+            # scores.json hasn't been built — better than failing silently.
+            scores_path = Path.home() / ".muser" / "scores.json"
+            try:
+                canonical_meta = json.loads(scores_path.read_text()) if scores_path.exists() else None
+            except Exception:
+                canonical_meta = None
+            canon_set: set[str] | None = None
+            dup_to_canon: dict[str, str] = {}
+            if canonical_meta:
+                canon_list = canonical_meta.get("canonical") or []
+                dupes_map: dict[str, list[str]] = canonical_meta.get("dupes") or {}
+                canon_set = set(canon_list)
+                for c, ds in dupes_map.items():
+                    for d in ds:
+                        dup_to_canon[d] = c
+            if canon_set:
+                # Each canonical that has at least one of its members in
+                # all_rows survives; we prefer the canonical row itself when
+                # present, else the first dupe (path-sorted upstream).
+                by_canon: dict[str, dict] = {}
+                for r in all_rows:
+                    c = r["path"] if r["path"] in canon_set else dup_to_canon.get(r["path"])
+                    if c is None:
+                        # Unscored (no canonical recorded) → treat as its own.
+                        c = r["path"]
+                    if c not in by_canon or r["path"] == c:
+                        by_canon[c] = r
+                rows = sorted(by_canon.values(), key=lambda r: r["path"])
+            else:
+                rows = all_rows
+        else:
+            rows = all_rows
+
+        total = len(rows)
+        page = rows[offset : offset + limit]
+        results = []
+        for r in page:
+            results.append({
+                "path": r["path"],
+                "uid": uid_for(r["path"]),
+                "name": os.path.basename(r["path"]),
+                "width": r.get("width"),
+                "height": r.get("height"),
+                "filesize": r.get("filesize"),
+                "dupe_count": 1, "dupes": [r["path"]],
+            })
+        return {
+            "model": state.model_name,
+            "results": results,
+            "total": total,
+            "raw_total": raw_total,
+            "indexed": state.index.count(state.model_name),
+            "offset": offset, "limit": limit,
+        }
+
+    @app.post("/api/backfill-metadata")
+    def backfill_metadata():
+        """Compute width/height/filesize for every indexed row missing them.
+        Returns immediately; the scan runs in a thread and publishes progress
+        via ``state.task`` (kind = ``backfill_metadata``) so the UI's busy
+        overlay can show N/M. ~10 s wall-clock for a 27 k-image corpus."""
+        if state.task is not None:
+            raise HTTPException(409, f"busy: {state.task.get('kind')}")
+        state.task = {"kind": "backfill_metadata", "done": 0, "total": 0}
+
+        def on_progress(done: int, total: int):
+            t = state.task
+            if t and t.get("kind") == "backfill_metadata":
+                t["done"] = done
+                t["total"] = total
+
+        def _bg():
+            try:
+                res = state.index.backfill_metadata(state.model_name, on_progress=on_progress)
+                state.task = {"kind": "backfill_metadata_done", **res}
+            except Exception as e:
+                state.task = {"kind": "backfill_metadata_error", "error": str(e)}
+            threading.Timer(4.0, lambda: setattr(state, "task", None)).start()
+
+        threading.Thread(target=_bg, daemon=True, name="muser-backfill-meta").start()
+        return {"started": True}
 
     @app.get("/api/folders")
     def folders():

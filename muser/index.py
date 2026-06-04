@@ -21,6 +21,13 @@ from .embedders import Embedder
 DEFAULT_DB = Path.home() / ".muser" / "db"
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif", ".tiff"}
 
+# Metadata columns added to LanceDB tables in 2026-06 for the Filter panel
+# (resolution / aspect / file-size search). Nullable on legacy rows; populated
+# for new rows at add-time and backfilled in place via `muser reindex-metadata`.
+# Stored on the table itself (not a sidecar JSON) so filters compose with the
+# kNN search as a single LanceDB prefilter — no client-side join, no extra IO.
+METADATA_COLS = ("width", "height", "filesize")
+
 
 def uid_for(path: str) -> str:
     """Stable, short, comparable-across-runs id for a path. 12-char hex (48 bits
@@ -40,6 +47,21 @@ def uid_for(path: str) -> str:
 _uid_for = uid_for
 
 
+def _read_dims(path: str) -> tuple[int | None, int | None, int | None]:
+    """(width, height, filesize) for an image, or Nones on a failed open. PIL
+    reads only the image header for `.size` (no full decode), so this is ~0.2 ms
+    per JPEG/PNG — ~10 s wall-clock for a 27 k-image corpus. Trusted local files,
+    so the decompression-bomb guard is disabled."""
+    try:
+        from PIL import Image
+        Image.MAX_IMAGE_PIXELS = None
+        with Image.open(path) as im:
+            w, h = im.size
+        return int(w), int(h), int(os.path.getsize(path))
+    except Exception:
+        return None, None, None
+
+
 def walk_images(folder: str | Path, recursive: bool = True) -> list[str]:
     folder = Path(folder)
     out: list[str] = []
@@ -56,6 +78,30 @@ class IndexResult:
     updated: int
     removed: int
     total: int
+
+
+@dataclass
+class MetaFilter:
+    """Bounds on image metadata for the search / filter endpoints. All bounds
+    inclusive; None = unbounded. ``short_side`` / ``long_side`` are
+    ``LEAST(w, h)`` / ``GREATEST(w, h)`` — handy for "low-res = short side
+    under 768" without caring about orientation. ``aspect`` = width / height.
+    """
+    min_width: int | None = None
+    max_width: int | None = None
+    min_height: int | None = None
+    max_height: int | None = None
+    min_short_side: int | None = None
+    max_short_side: int | None = None
+    min_long_side: int | None = None
+    max_long_side: int | None = None
+    min_aspect: float | None = None
+    max_aspect: float | None = None
+    min_filesize: int | None = None
+    max_filesize: int | None = None
+
+    def is_empty(self) -> bool:
+        return all(getattr(self, f) is None for f in self.__dataclass_fields__)
 
 
 class MuserIndex:
@@ -150,16 +196,138 @@ class MuserIndex:
         rows = []
         for p, v in zip(good_paths, vecs):
             st = os.stat(p)
-            rows.append(
-                {"path": p, "mtimeMs": st.st_mtime * 1000.0, "size": st.st_size, "vector": v.tolist()}
-            )
+            # Image dims are read here once per add so fresh index runs carry
+            # width/height/filesize from day one — no separate backfill pass for
+            # newly-added images. PIL header read fails silently → Nones; the
+            # row still indexes, only metadata-constrained queries skip it.
+            w, h, fz = _read_dims(p)
+            rows.append({
+                "path": p,
+                "mtimeMs": st.st_mtime * 1000.0,
+                "size": st.st_size,
+                "vector": v.tolist(),
+                "width": w,
+                "height": h,
+                "filesize": fz if fz is not None else st.st_size,
+            })
         name = self._table(model)
         t = self._open(model)
         if t is None:
             self.db.create_table(name, rows)
         else:
+            self._ensure_metadata_cols(t)
             t.add(rows)
         return len(rows)
+
+    @staticmethod
+    def _ensure_metadata_cols(t) -> bool:
+        """Add the (width, height, filesize) columns to an existing table if
+        they're missing. Idempotent — called lazily on first add / backfill /
+        filtered search so older tables transparently grow the new columns
+        without a manual migration step. Returns True iff columns were added."""
+        import pyarrow as pa
+
+        have = {f.name for f in t.schema}
+        missing = [c for c in METADATA_COLS if c not in have]
+        if not missing:
+            return False
+        type_map = {"width": pa.int32(), "height": pa.int32(), "filesize": pa.int64()}
+        t.add_columns([pa.field(c, type_map[c]) for c in missing])
+        return True
+
+    def backfill_metadata(
+        self,
+        model: str,
+        on_progress: Callable[[int, int], None] | None = None,
+        batch_size: int = 2000,
+    ) -> dict:
+        """Compute width/height/filesize for every indexed row that's missing
+        them and merge_insert the values back in. No re-embedding — vectors
+        stay untouched. ~10 s wall-clock on a 27 k-image corpus (≈0.2 ms PIL
+        header read per image + a fast LanceDB upsert per batch).
+
+        Returns ``{updated, missing, total}``. ``missing`` counts files PIL
+        couldn't read a header from (corrupt / unknown format) — they still
+        receive a `filesize` value when ``os.stat`` works, so the file-size
+        filter doesn't silently lose them.
+        """
+        import pyarrow as pa
+
+        t = self._open(model)
+        if t is None:
+            return {"updated": 0, "missing": 0, "total": 0}
+        self._ensure_metadata_cols(t)
+
+        # Select only the candidate rows — those with no width recorded yet.
+        # An explicit NULL filter avoids re-reading dims for already-backfilled
+        # files, so a partial-run restart costs roughly zero on the done rows.
+        rows = (
+            t.search().select(["path"])
+            .where("width IS NULL", prefilter=True)
+            .limit(10_000_000).to_list()
+        )
+        total = len(rows)
+        if total == 0:
+            return {"updated": 0, "missing": 0, "total": 0}
+
+        updated = 0
+        missing = 0
+        buf: list[dict] = []
+
+        def _flush():
+            nonlocal updated
+            if not buf:
+                return
+            src = pa.Table.from_pylist(buf)
+            t.merge_insert("path").when_matched_update_all().execute(src)
+            updated += len(buf)
+            buf.clear()
+
+        for i, r in enumerate(rows, 1):
+            p = r["path"]
+            w, h, fz = _read_dims(p)
+            if w is None:
+                missing += 1
+                # Still write filesize when stat() works, so a header-only PIL
+                # failure doesn't poison the file-size filter for this row too.
+                try:
+                    fz = os.path.getsize(p)
+                except OSError:
+                    fz = None
+                if fz is None:
+                    continue
+                buf.append({"path": p, "width": None, "height": None, "filesize": int(fz)})
+            else:
+                buf.append({"path": p, "width": w, "height": h, "filesize": fz})
+            if len(buf) >= batch_size:
+                _flush()
+            if on_progress and i % 200 == 0:
+                on_progress(i, total)
+        _flush()
+        if on_progress:
+            on_progress(total, total)
+        return {"updated": updated, "missing": missing, "total": total}
+
+    def metadata_coverage(self, model: str) -> dict:
+        """{scored, total} for the metadata columns. ``scored`` is the count
+        of rows whose ``width`` is populated — proxies "ready for the Filter
+        panel". Cheap (single COUNT-WHERE), called by /api/status so the UI
+        coverage line refreshes on every poll without a re-scan."""
+        t = self._open(model)
+        if t is None:
+            return {"scored": 0, "total": 0}
+        if "width" not in {f.name for f in t.schema}:
+            return {"scored": 0, "total": t.count_rows()}
+        total = t.count_rows()
+        # count_rows with a filter isn't surfaced through the high-level API on
+        # 0.33; the cheap workaround is `select(["path"]).where(...).limit(big)`
+        # which only ships path strings, not vectors.
+        scored = len(
+            t.search().select(["path"])
+            .where("width IS NOT NULL", prefilter=True)
+            .limit(10_000_000).to_list()
+        )
+        return {"scored": scored, "total": total}
 
     def index_folder(
         self,
@@ -214,6 +382,28 @@ class MuserIndex:
         )
 
     @staticmethod
+    def _metadata_where(f: "MetaFilter | None") -> str | None:
+        """SQL predicate from a MetaFilter, or None if no constraints are set.
+        Width/height comparisons implicitly drop NULL-metadata rows (NULL < x
+        is NULL → false in SQL), which is the desired filter semantics."""
+        if f is None:
+            return None
+        cs: list[str] = []
+        if f.min_width is not None:        cs.append(f"width >= {int(f.min_width)}")
+        if f.max_width is not None:        cs.append(f"width <= {int(f.max_width)}")
+        if f.min_height is not None:       cs.append(f"height >= {int(f.min_height)}")
+        if f.max_height is not None:       cs.append(f"height <= {int(f.max_height)}")
+        if f.min_short_side is not None:   cs.append(f"LEAST(width, height) >= {int(f.min_short_side)}")
+        if f.max_short_side is not None:   cs.append(f"LEAST(width, height) <= {int(f.max_short_side)}")
+        if f.min_long_side is not None:    cs.append(f"GREATEST(width, height) >= {int(f.min_long_side)}")
+        if f.max_long_side is not None:    cs.append(f"GREATEST(width, height) <= {int(f.max_long_side)}")
+        if f.min_aspect is not None:       cs.append(f"(CAST(width AS DOUBLE) / CAST(height AS DOUBLE)) >= {float(f.min_aspect)}")
+        if f.max_aspect is not None:       cs.append(f"(CAST(width AS DOUBLE) / CAST(height AS DOUBLE)) <= {float(f.max_aspect)}")
+        if f.min_filesize is not None:     cs.append(f"filesize >= {int(f.min_filesize)}")
+        if f.max_filesize is not None:     cs.append(f"filesize <= {int(f.max_filesize)}")
+        return " AND ".join(cs) if cs else None
+
+    @staticmethod
     def _folder_where(folder: str | None) -> str | None:
         """SQL predicate restricting ``path`` to files under ``folder`` (any depth),
         or None for no scoping. Uses a half-open string range ``[prefix, prefix⁺)``
@@ -229,15 +419,23 @@ class MuserIndex:
         return f"path >= '{lo}' AND path < '{hi}'"
 
     def search(
-        self, model: str, query_vec: np.ndarray, k: int = 12, folder: str | None = None
+        self, model: str, query_vec: np.ndarray, k: int = 12,
+        folder: str | None = None, meta: MetaFilter | None = None,
     ) -> list[tuple[str, float]]:
         t = self._open(model)
         if t is None:
             return []
         q = t.search(query_vec.tolist()).distance_type("cosine")
-        where = self._folder_where(folder)
-        if where:
-            q = q.where(where, prefilter=True)
+        # Compose folder + metadata constraints into one AND-chain; both run as
+        # a single prefilter so the kNN limit applies AFTER the cut (otherwise
+        # a top-k of out-of-filter neighbors could return zero matches).
+        clauses: list[str] = []
+        if (fw := self._folder_where(folder)):
+            clauses.append(fw)
+        if (mw := self._metadata_where(meta)):
+            clauses.append(mw)
+        if clauses:
+            q = q.where(" AND ".join(clauses), prefilter=True)
         rows = q.limit(k).to_list()
         return [(r["path"], 1.0 - float(r["_distance"])) for r in rows]
 
@@ -255,6 +453,7 @@ class MuserIndex:
         method: str = "embed",
         phash_hamming: int = 8,
         folder: str | None = None,
+        meta: MetaFilter | None = None,
     ) -> list[dict]:
         """Search, collapsing near-identical images (same picture saved in many
         folders, or recompressed/resized/cropped copies) into one result.
@@ -288,9 +487,13 @@ class MuserIndex:
             return []
         n = max(k * 12, 200)
         q = t.search(query_vec.tolist()).distance_type("cosine")
-        where = self._folder_where(folder)
-        if where:
-            q = q.where(where, prefilter=True)
+        clauses: list[str] = []
+        if (fw := self._folder_where(folder)):
+            clauses.append(fw)
+        if (mw := self._metadata_where(meta)):
+            clauses.append(mw)
+        if clauses:
+            q = q.where(" AND ".join(clauses), prefilter=True)
         rows = q.limit(n).to_list()
 
         use_phash = method in ("phash", "both")
@@ -332,6 +535,49 @@ class MuserIndex:
             }
             for kp in kept
         ]
+
+    def filter(
+        self,
+        model: str,
+        *,
+        meta: MetaFilter | None = None,
+        folder: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> tuple[list[dict], int]:
+        """List rows matching the given metadata constraints, no vector query.
+        Returns ``(page, total_matched)``. All bounds inclusive; None unbounded.
+        ``short_side`` / ``long_side`` are derived via SQL ``LEAST`` / ``GREATEST``
+        so the filter still runs as a single LanceDB where-clause (no Python
+        post-filter), and folder + metadata predicates compose with AND.
+
+        Filters that need a non-null width/height implicitly drop rows with
+        missing metadata — that's the intended semantic, and matches what the
+        Filter panel surfaces (it explicitly opts into "rows we know about").
+        """
+        t = self._open(model)
+        if t is None:
+            return [], 0
+        self._ensure_metadata_cols(t)
+
+        clauses: list[str] = []
+        if (mw := self._metadata_where(meta)):
+            clauses.append(mw)
+        if (fw := self._folder_where(folder)):
+            clauses.append(fw)
+        where = " AND ".join(clauses) if clauses else None
+
+        # No vector query → use the plain row-filter path. Fetch only the
+        # metadata columns (no vectors) so 27k matches doesn't ship megabytes.
+        q = t.search().select(["path", "width", "height", "filesize"])
+        if where:
+            q = q.where(where)
+        rows = q.limit(10_000_000).to_list()
+        # Path-ascending order so pagination is deterministic across requests
+        # — LanceDB's natural insertion order isn't.
+        rows.sort(key=lambda r: r["path"])
+        total = len(rows)
+        return rows[offset : offset + limit], total
 
     @staticmethod
     def _phash_pair(path: str) -> tuple[int | None, int | None]:
