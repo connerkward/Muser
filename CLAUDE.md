@@ -50,6 +50,11 @@ See `REQUIREMENTS.md` for scope/decisions.
   dirs + counts from `/api/folders`); free-text so any path prefix works. Same
   scoping on the CLI (`muser search "…" --in <folder>`) and MCP
   (`search_images(query, k, folder=…)`) — both thin clients of `/api/search`.
+- `muser/caption.py` — per-image natural-language captions via Florence-2-base-ft
+  (`<MORE_DETAILED_CAPTION>` task, ~270 MB, greedy on MPS/CUDA/CPU). `muser caption`
+  writes one row per image to `~/.muser/captions.jsonl` (append-only:
+  `{path, caption, model, mtime, ts}`); resumes by (path, mtime), skip via cache.
+  `/api/caption?path=…` returns the latest caption for a single file.
 - `eval/datasets.py` — standard benchmarks reduced to {image_paths, queries,
   qrels}. Flickr30k via HF's `refs/convert/parquet` branch (scripts unsupported).
 - `eval/harness.py` — embeds corpus → LanceDB → queries → **ranx** metrics

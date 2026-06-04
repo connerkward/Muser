@@ -221,6 +221,37 @@ def score(model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to sc
 
 
 @app.command()
+def caption(
+    folder: str = typer.Argument(None, help="Optional folder prefix to restrict (else: every indexed image)"),
+    model: str = typer.Option("florence-2-base", help="Captioning model"),
+    force: bool = typer.Option(False, "--force", help="Re-caption images already in the cache"),
+    limit: int = typer.Option(None, "--limit", help="Cap N images (for testing)"),
+    batch_size: int = typer.Option(4, "--batch-size", help="Batch size — drop to 2 if MPS OOM"),
+):
+    """Caption every indexed image — writes ~/.muser/captions.jsonl.
+
+    Runs Florence-2-base-ft (~270 MB, one-time download) locally on MPS/CUDA/CPU
+    with the <MORE_DETAILED_CAPTION> task: 1-3 sentence natural-language
+    descriptions suitable for SDXL / Flux LoRA training prompts.
+
+    JSONL append-only, one row per image: {path, caption, model, mtime, ts}.
+    Resume support — already-captioned (path, mtime) rows are skipped unless
+    --force. Per-image failures are logged once and skipped (no crash).
+    """
+    from .caption import caption_all
+
+    folder_path = str(Path(folder).expanduser()) if folder else None
+    out = caption_all(
+        model_name=model, folder=folder_path, force=force, limit=limit, batch_size=batch_size,
+        on_progress=lambda m: con.print(f"[dim]{m}[/]"),
+    )
+    con.print(
+        f"captioned {out['written']} (skipped {out['skipped']} cached, "
+        f"{out['failed']} failed) of {out['total']} indexed"
+    )
+
+
+@app.command()
 def detect(
     folder: str = typer.Option(None, "--in", help="Restrict the scan to images under this folder"),
     model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to scan"),

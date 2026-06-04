@@ -13,6 +13,7 @@ import os
 import platform
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -38,6 +39,11 @@ class ModelReq(BaseModel):
 
 class CartReq(BaseModel):
     paths: list[str]
+
+
+class CaptionWriteReq(BaseModel):
+    path: str
+    caption: str
 
 
 class State:
@@ -494,8 +500,15 @@ def create_app(model: str = DEFAULT_MODEL):
         # formats, so deflate would burn CPU for ~0% gain. In-memory build
         # (not streaming) because ZipFile's central directory writes back into
         # the buffer at the end, which streaming-by-truncation breaks.
+        #
+        # For LoRA training (fal flux-lora-fast-training / kohya), each image
+        # also gets a sibling `<stem>.txt` containing its caption — same stem
+        # as the (possibly disambiguated) image file. Images without a cached
+        # caption ship plain (no .txt); we surface the missing count in the
+        # `X-Captions-Missing` response header so the UI can warn.
         import io, zipfile
         from fastapi.responses import Response
+        captions = _load_captions()
         seen, members = {}, []
         for p in req.paths:
             if not p or not os.path.isfile(p):
@@ -504,18 +517,31 @@ def create_app(model: str = DEFAULT_MODEL):
             stem, ext = os.path.splitext(base)
             n = seen.get(base, 0) + 1
             seen[base] = n
-            arcname = base if n == 1 else f"{stem}_{n}{ext}"
-            members.append((p, arcname))
+            arc_stem = stem if n == 1 else f"{stem}_{n}"
+            arcname = f"{arc_stem}{ext}"
+            members.append((p, arcname, arc_stem))
         if not members:
             raise HTTPException(400, "no valid files in cart")
+        missing = 0
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
-            for src, arc in members:
+            for src, arc, arc_stem in members:
                 zf.write(src, arc)
+                cap = captions.get(src)
+                if cap:
+                    # UTF-8, no trailing newline — fal/kohya read the file verbatim
+                    # as the training caption.
+                    zf.writestr(f"{arc_stem}.txt", cap.encode("utf-8"))
+                else:
+                    missing += 1
         return Response(
             content=buf.getvalue(),
             media_type="application/zip",
-            headers={"Content-Disposition": 'attachment; filename="muser-cart.zip"'},
+            headers={
+                "Content-Disposition": 'attachment; filename="muser-cart.zip"',
+                "X-Captions-Missing": str(missing),
+                "X-Captions-Total": str(len(members)),
+            },
         )
 
     @app.post("/api/pick-folder")
@@ -710,6 +736,93 @@ def create_app(model: str = DEFAULT_MODEL):
         members = c["methods"][method]["members"].get(str(id), [])
         page = members[offset : offset + limit]
         return {"total": len(members), "members": [{"path": p, "name": os.path.basename(p)} for p in page]}
+
+    # ---- per-image captions: Florence-2 + user edits (~/.muser/captions.jsonl) ----
+    # JSONL is append-only. Multiple rows per path are kept on disk for history;
+    # in memory we collapse to latest-wins by `ts` (so a user-edited row written
+    # after the model's row beats it, even if the model row appears later in the
+    # file). Cached by file mtime; the captioning pass may append while we read,
+    # but `stat().st_mtime` jumps on each append, so the next request re-parses.
+    # Reads-of-partial-final-line are safe: we skip lines that fail to JSON-parse.
+    CAPTIONS = Path.home() / ".muser" / "captions.jsonl"
+    _captions: dict = {"mtime": -1.0, "map": {}}
+    _captions_lock = threading.Lock()
+
+    def _load_captions() -> dict[str, str]:
+        try:
+            mt = CAPTIONS.stat().st_mtime
+        except OSError:
+            with _captions_lock:
+                _captions["map"] = {}
+                _captions["mtime"] = -1.0
+                return _captions["map"]
+        with _captions_lock:
+            if mt == _captions["mtime"]:
+                return _captions["map"]
+        # Re-parse outside the lock to avoid holding it during file IO.
+        latest: dict[str, tuple[int, str]] = {}  # path -> (ts, caption)
+        try:
+            with CAPTIONS.open("r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except Exception:
+                        continue  # partial-final-line during a concurrent append
+                    p = row.get("path")
+                    cap = row.get("caption")
+                    if not p or not cap:
+                        continue
+                    ts = int(row.get("ts") or 0)
+                    cur = latest.get(p)
+                    if cur is None or ts >= cur[0]:
+                        latest[p] = (ts, cap)
+        except OSError:
+            pass
+        m = {p: cap for p, (_, cap) in latest.items()}
+        with _captions_lock:
+            _captions["map"] = m
+            _captions["mtime"] = mt
+        return m
+
+    def _save_caption(path: str, caption: str) -> None:
+        # Append-only. Latest-wins on load, so a freshly-appended user-edit row
+        # immediately overrides any prior model row for this path. The cache is
+        # invalidated naturally by the file's mtime bumping on append.
+        try:
+            mtime = int(os.path.getmtime(path))
+        except OSError:
+            mtime = 0
+        row = {
+            "path": path,
+            "caption": caption,
+            "model": "user-edited",
+            "mtime": mtime,
+            "ts": int(time.time()),
+        }
+        CAPTIONS.parent.mkdir(parents=True, exist_ok=True)
+        with _captions_lock:
+            with CAPTIONS.open("a") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            # Eagerly merge into the cache so the next /api/caption GET reflects
+            # the edit even before the OS settles the mtime tick.
+            _captions["map"][path] = caption
+
+    @app.get("/api/caption")
+    def caption(path: str):
+        cap = _load_captions().get(path)
+        if not cap:
+            raise HTTPException(404, "no caption for this path")
+        return {"path": path, "caption": cap}
+
+    @app.post("/api/caption")
+    def caption_write(req: CaptionWriteReq):
+        if not os.path.isfile(req.path):
+            raise HTTPException(404, f"no such image: {req.path}")
+        _save_caption(req.path, req.caption)
+        return {"ok": True}
 
     # ---- per-image scores: Interesting / Review (read ~/.muser/scores.json) ----
     SCORES = Path.home() / ".muser" / "scores.json"
