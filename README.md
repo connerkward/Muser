@@ -2,11 +2,20 @@
 
 [![CI](https://github.com/connerkward/Muser/actions/workflows/ci.yml/badge.svg)](https://github.com/connerkward/Muser/actions/workflows/ci.yml)
 
-Index, vectorize, and search a folder of images **by natural language** — fully local,
-no API keys, offline. Muser embeds every image with a CLIP/SigLIP-family model (running
-on-device via [transformers](https://github.com/huggingface/transformers)) and stores the
-vectors in an embedded [LanceDB](https://lancedb.com) table. Search with a text query like
-_"a dog on a beach at sunset"_ and get back the closest-matching photos.
+**Accessible, local-first image search — with features pointed at asset generation
+and taste / curation for model training.**
+
+Muser indexes a folder of images, lets you search it by natural language, and treats
+that index as the substrate for two adjacent jobs: (1) **finding source assets** for
+generative work — image-to-image search, the selection cart, reverse-image lookup,
+NSFW / C2PA-provenance filters — and (2) **curating training sets** for personal
+LoRAs and aesthetic models — cluster exploration, aesthetic ranking via LAION-V2
+and PickScore, selection/export. Everything runs on-device: no API keys, no cloud
+round-trip, no telemetry. The same SigLIP embeddings power semantic search and
+feed downstream scoring/curation so there's no second model pass for any of it.
+
+Search with a text query like _"a dog on a beach at sunset"_ and get back the
+closest-matching photos.
 
 Three surfaces over one core (a warm local service that owns the model + index):
 
