@@ -318,6 +318,7 @@
     </select>
     <span class="mut" id="imsg"></span>
   </div>
+  <div id="icov" style="margin:-6px 0 14px;font-size:12px"></div>
   <div class="grid" id="scoreGrid"></div>
 </div>
 
@@ -1024,10 +1025,24 @@ function renderAI(items){
 async function loadScores(gridSel,msgSel,metricSel){
   const metric=$(metricSel).value;
   $(msgSel).textContent="loading…";
+  const cov=(metricSel==="#imetric") ? $("#icov") : null;
+  if(cov) cov.innerHTML="";
   const r=await (await fetch(`/api/score?metric=${metric}&order=desc&limit=140`)).json();
   const g=$(gridSel); g.innerHTML="";
   if(!r.built){ $(msgSel).textContent="Not built yet — run:  muser score"; return; }
   $(msgSel).textContent=`${r.total.toLocaleString()} images · sorted by ${metric} (highest first)`;
+  if(cov && r.coverage){
+    const {scored, total} = r.coverage;
+    const pct = total ? (100*scored/total) : 0;
+    const num = `${scored.toLocaleString()} / ${total.toLocaleString()} scored`;
+    if(scored>=total){
+      cov.innerHTML=`<span style="color:#7a7468">Coverage: ${num}</span>`;
+    } else {
+      const pctStr = pct<1 ? pct.toFixed(2) : pct.toFixed(1);
+      cov.innerHTML=`<span style="color:#caa468">Coverage: ${num} (${pctStr}%)</span> `+
+        `<i style="font-family:'Cormorant Garamond',Georgia,serif;color:#caa468;opacity:.85">— sort below this point is not meaningful</i>`;
+    }
+  }
   r.items.forEach(h=>{
     const dupe = (h.dupe_count||1)>1 ? `<span class="dupe" title="${h.dupe_count} copies">${h.dupe_count} copies</span>` : "";
     const c=document.createElement("div"); c.className="card";

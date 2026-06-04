@@ -523,15 +523,26 @@ def _hps_v21(paths: list[str], on_progress, batch_size: int = 8) -> np.ndarray:
 
 
 def score_all(model: str = "siglip2-b", on_progress=print) -> dict:
+    """Score every image and write ~/.muser/scores.json.
+
+    Canonical paths are processed in lexicographic order so partial-coverage runs
+    are deterministic and cross-metric comparable — a subset run scoring the
+    "first 200" always picks the same 200, and per-metric caches accumulate
+    against the same path prefix across runs.
+    """
     idx = MuserIndex()
     t = idx._open(model)
     if t is None:
         raise RuntimeError(f"nothing indexed for {model}")
     rows = t.search().select(["path", "vector"]).limit(100_000_000).to_list()
+    # Deterministic order: LanceDB row order isn't guaranteed across runs/iterations.
+    # Sorting by path here makes every downstream slice (including the canonical
+    # subset and any partial-coverage scoring pass) reproducible.
+    rows.sort(key=lambda r: r["path"])
     paths = [r["path"] for r in rows]
     X = np.asarray([r["vector"] for r in rows], dtype=np.float32)  # already L2-normalized
     n = len(paths)
-    on_progress(f"loaded {n} vectors (dim {X.shape[1]})")
+    on_progress(f"loaded {n} vectors (dim {X.shape[1]}, sorted by path)")
 
     emb = load_model(model)
 
@@ -602,6 +613,11 @@ def score_all(model: str = "siglip2-b", on_progress=print) -> dict:
     on_progress(f"  {len(canonical)} canonical of {n}")
 
     # ---- heavy real aesthetic models — compute on canonical only, broadcast to dupes ----
+    # Sort canonical_idx by path so canon_paths is strictly lexicographic — partial
+    # runs (the heavy passes that hours and get killed) accumulate cache entries
+    # against the same alphabetical prefix every time, making subset comparisons
+    # across metrics apples-to-apples.
+    canonical_idx.sort(key=lambda i: paths[i])
     canon_paths = [paths[i] for i in canonical_idx]
     canon_X = X[canonical_idx]  # for the clip-l14 fast path
 

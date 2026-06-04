@@ -826,6 +826,30 @@ def create_app(model: str = DEFAULT_MODEL):
 
     # ---- per-image scores: Interesting / Review (read ~/.muser/scores.json) ----
     SCORES = Path.home() / ".muser" / "scores.json"
+    MUSER_DIR = Path.home() / ".muser"
+    # Metrics backed by a per-image model pass (slow, often subset-scored). Coverage
+    # = entries in the cache file / total canonical. Everything else is derived
+    # in-script from the SigLIP embeddings and is implicitly 100% covered.
+    CACHE_BACKED = {
+        "aesthetic_v2": "aesthetic_v2_cache.json",
+        "pickscore": "pickscore_cache.json",
+        "aesthetic_v25": "aesthetic_v25_cache.json",
+        "hps_v21": "hps_v21_cache.json",
+    }
+
+    def _metric_coverage(metric: str, total: int) -> dict:
+        """{scored, total} for a metric. Derived metrics are 100%; cache-backed
+        metrics report cache-file length capped at total."""
+        if metric not in CACHE_BACKED:
+            return {"scored": total, "total": total}
+        cache_path = MUSER_DIR / CACHE_BACKED[metric]
+        if not cache_path.exists():
+            return {"scored": 0, "total": total}
+        try:
+            scored = len(json.loads(cache_path.read_text()))
+        except Exception:
+            scored = 0
+        return {"scored": min(scored, total), "total": total}
 
     @app.get("/api/score")
     def score_rank(metric: str = "interesting", order: str = "desc", offset: int = 0, limit: int = 80):
@@ -845,7 +869,8 @@ def create_app(model: str = DEFAULT_MODEL):
                 "path": p, "name": os.path.basename(p), "score": s["scores"][p].get(metric, 0),
                 "scores": s["scores"][p], "dupes": d, "dupe_count": len(d),
             })
-        return {"built": True, "metric": metric, "metrics": s["metrics"], "total": len(ranked), "items": items}
+        return {"built": True, "metric": metric, "metrics": s["metrics"], "total": len(ranked),
+                "items": items, "coverage": _metric_coverage(metric, len(canon))}
 
     return app
 
