@@ -135,6 +135,33 @@
   .cart-actions button:hover { color:var(--fg); border-bottom-color:var(--fg); }
   .cart-actions button#cartDownload { color:var(--fg); border-bottom-color:var(--fg); }
   .cart-actions button#cartDownload:hover { opacity:.7; }
+  /* Cost / time estimate panel — italic-serif labels paired with right-aligned
+     numbers in a mut tone, so the eye reads "Captioning ……… ~$0.05 ~3 min" as
+     a single information row. Rendered above .cart-actions; collapses to a
+     single .estTotal row for an empty cart so the panel never disappears. */
+  .cart-est { margin-top:22px; padding-top:18px; border-top:1px solid var(--line); }
+  .cart-est .estHead { font-size:12px; color:var(--mut); letter-spacing:.05em;
+                       text-transform:uppercase; margin-bottom:10px; }
+  .cart-est .estGroup { margin-bottom:10px; }
+  .cart-est .estGroupTitle { font-family:Georgia,serif; font-style:italic;
+                             font-size:13px; color:var(--fg); margin-bottom:4px; }
+  .cart-est .estRow { display:grid; grid-template-columns:1fr auto auto;
+                      gap:12px; font-size:13px; padding:2px 0;
+                      font-variant-numeric:tabular-nums; }
+  .cart-est .estRow .estLabel { font-family:Georgia,serif; font-style:italic;
+                                color:var(--fg); padding-left:14px; }
+  .cart-est .estRow .estCost { color:var(--mut); min-width:60px; text-align:right; }
+  .cart-est .estRow .estTime { color:var(--mut); min-width:80px; text-align:right; }
+  .cart-est .estRow .estNote { color:var(--mut); font-style:normal; font-family:inherit;
+                               font-size:11px; margin-left:6px; }
+  .cart-est .estRow.estRec .estLabel { color:var(--fg); }
+  .cart-est .estTotal { display:grid; grid-template-columns:1fr auto auto;
+                        gap:12px; font-size:13px; padding-top:10px; margin-top:8px;
+                        border-top:1px dotted var(--line); font-variant-numeric:tabular-nums; }
+  .cart-est .estTotal .estLabel { font-family:Georgia,serif; font-style:italic; color:var(--fg); }
+  .cart-est .estTotal .estCost,
+  .cart-est .estTotal .estTime { color:var(--fg); min-width:60px; text-align:right; }
+  .cart-est .estTotal .estTime { min-width:80px; }
   .busy { position:fixed; inset:0; background:var(--bg); z-index:30;
           display:flex; align-items:center; justify-content:center; }
   .busy-card { display:flex; flex-direction:column; align-items:center; gap:14px;
@@ -604,6 +631,7 @@
   <h3>Selection</h3>
   <div class="sub" id="cartSub"></div>
   <div class="files" id="cartFiles"></div>
+  <div class="cart-est" id="cartEst"></div>
   <div class="cart-actions">
     <button id="cartDownload">Download zip</button>
     <button id="cartClear">Clear</button>
@@ -665,6 +693,78 @@ function updateCartUI(){
   const n = _cart.size;
   $("#cartN").textContent = n;
   $("#cartOpen").style.display = n > 0 ? "" : "none";
+  updateCartEst();
+}
+
+// ---- checkout cost + time estimate panel (live-updates on cart changes).
+// Numbers are deliberately rough: caption price is OpenAI public pricing
+// (gpt-4o-mini, ~$0.001/img with `detail:"low"`); LoRA training prices are
+// fal.ai public per-endpoint pricing as of 2026-06. Recommended combo
+// (GPT-4o-mini + Flux fast) is what the Total row sums. No UI to pick a
+// different combo on purpose — keep it static.
+function updateCartEst(){
+  const el = $("#cartEst");
+  if (!el) return;
+  const total = _cart.size;
+  if (total === 0) { el.innerHTML = ""; return; }
+
+  // Captioning: (N − already-captioned) × $0.001. Caption cache populates
+  // lazily when the modal opens; before then we assume all need captioning,
+  // which is the safer upper bound for the panel.
+  let captioned = 0;
+  for (const p of _cart) { if (typeof _capCache.get(p) === "string") captioned++; }
+  const capRemaining = Math.max(0, total - captioned);
+  const capCost = capRemaining * 0.001;
+  // ~4 s/image at sequential rate; round to whole minutes.
+  const capSeconds = Math.round(capRemaining * 4);
+  const capMin = Math.max(1, Math.round(capSeconds / 60));
+
+  const fmt$ = v => v < 1 ? `~$${v.toFixed(2)}` : `~$${v.toFixed(2).replace(/\.?0+$/, "")}`;
+  const capCostStr = capRemaining === 0 ? "$0" : fmt$(capCost);
+  const capTimeStr = capRemaining === 0 ? "—" : (capSeconds < 60 ? `~${capSeconds} s` : `~${capMin} min`);
+  const capNote = captioned > 0 ? ` <span class="estNote">${captioned} cached</span>` : "";
+
+  // Total: GPT-4o-mini caption (above) + Flux fast LoRA training.
+  // Flux fast midpoint ≈ $2.50. Time = caption time + ~8 min training midpoint.
+  const trainFastCost = 3;          // ~$2-3, use $3 as the headline number
+  const trainFastTimeMin = 8;       // 5-10 min midpoint
+  const totalCost = capCost + trainFastCost;
+  const totalTimeMin = Math.max(1, capMin + trainFastTimeMin);
+
+  el.innerHTML = `
+    <div class="estHead">Estimate for ${total.toLocaleString()} selected image${total === 1 ? "" : "s"}</div>
+    <div class="estGroup">
+      <div class="estGroupTitle">Captioning</div>
+      <div class="estRow">
+        <span class="estLabel">GPT-4o-mini <span class="estNote">cloud, ~$0.001/img${capNote ? "" : ""}</span>${capNote}</span>
+        <span class="estCost">${capCostStr}</span>
+        <span class="estTime">${capTimeStr}</span>
+      </div>
+    </div>
+    <div class="estGroup">
+      <div class="estGroupTitle">LoRA training (fal)</div>
+      <div class="estRow estRec">
+        <span class="estLabel">Flux fast <span class="estNote">recommended</span></span>
+        <span class="estCost">~$3</span>
+        <span class="estTime">5-10 min</span>
+      </div>
+      <div class="estRow">
+        <span class="estLabel">Flux general <span class="estNote">more knobs, longer</span></span>
+        <span class="estCost">~$5-15</span>
+        <span class="estTime">15-30 min</span>
+      </div>
+      <div class="estRow">
+        <span class="estLabel">SDXL fast</span>
+        <span class="estCost">~$1</span>
+        <span class="estTime">~5 min</span>
+      </div>
+    </div>
+    <div class="estTotal">
+      <span class="estLabel">Total estimate <span class="estNote">GPT-4o-mini + Flux fast</span></span>
+      <span class="estCost">${fmt$(totalCost)}</span>
+      <span class="estTime">~${totalTimeMin} min</span>
+    </div>
+  `;
 }
 function syncCartButtons(){
   document.querySelectorAll(".card .foot .add").forEach(b => {
@@ -702,6 +802,7 @@ async function loadCaptionsForCart(paths){
   const workers = Array.from({length: Math.min(CONCURRENCY, paths.length)}, worker);
   await Promise.all(workers);
   updateCartCapNote();
+  updateCartEst();
 }
 function applyCaptionToCard(path, caption){
   // Cards are keyed by data-path on the .file element. The modal may have been
@@ -798,6 +899,7 @@ async function saveCaption(path, caption, savedEl){
     savedEl.textContent = "✓ saved"; savedEl.classList.add("on");
     setTimeout(() => savedEl.classList.remove("on"), 800);
     updateCartCapNote();
+    updateCartEst();
   } catch {
     savedEl.textContent = "save failed"; savedEl.classList.add("on");
   }
@@ -830,6 +932,7 @@ function openCart(){
     f.appendChild(d);
   });
   $("#cartCapNote").textContent = paths.length ? "Loading captions…" : "";
+  updateCartEst();
   $("#cartModal").classList.add("show");
   if (paths.length) loadCaptionsForCart(paths);
 }
