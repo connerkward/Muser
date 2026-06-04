@@ -670,7 +670,7 @@
     <span class="mut" id="skinmsg">…</span>
     <button id="skinScan" style="display:none">Scan library</button>
   </div>
-  <div style="font-size:11px;color:var(--mut);margin-bottom:14px">Faces are detected (YuNet), skin is sampled and mapped to the 10-point <b>Monk Skin Tone</b> scale. Detection is the ceiling — occluded / extreme-angle / tiny faces aren’t counted, and strong color casts shift the sampled tone. A positive signal, not a demographic classifier.</div>
+  <div style="font-size:11px;color:var(--mut);margin-bottom:14px"><b>Faces</b> (YuNet) and, for people whose face isn’t visible, <b>bodies</b> (MobileNet-SSD) are detected; skin is sampled and mapped to the 10-point <b>Monk Skin Tone</b> scale. Detection is the ceiling — and a person with no visible skin (fully clothed / back turned) yields no tone. Strong color casts shift the sampled tone. A positive signal, not a demographic classifier.</div>
   <div class="grid" id="skinGrid"></div>
 </div>
 
