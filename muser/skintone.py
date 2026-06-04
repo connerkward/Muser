@@ -43,7 +43,7 @@ _PERSON_MODEL = _ASSETS / "MobileNetSSD_deploy.caffemodel"
 
 # Bump when the detection/sampling algorithm changes so the incremental scan
 # recomputes already-indexed images instead of skipping them by mtime.
-SCAN_VERSION = 2  # v1 = face-only; v2 = face + person-fallback
+SCAN_VERSION = 3  # v1 face-only; v2 +person; v3 central-region + specular/shadow trim
 
 # Official Monk Skin Tone 10-point scale (Google), sRGB hex, light → dark.
 MST_HEX = [
@@ -111,22 +111,41 @@ def _person_net():
     return n
 
 
-def _tone_from_crop(crop) -> tuple[int, list[int]] | None:
-    """Median skin tone within a crop → (mst, lab) or None if too little skin."""
+def _skin_tone(crop) -> tuple[int, list[int]] | None:
+    """Robust median skin tone within a crop → (mst, lab) or None.
+
+    Widened YCrCb skin mask (the classic 135–180 / 85–135 box under-selects very
+    dark skin, biasing the MST estimate light — widened to reduce that), then a
+    25–75th luminance trim drops specular highlights and cast shadows that would
+    otherwise pull the median toward white/black. Median of what remains.
+    """
     import cv2
 
     if crop.size == 0:
         return None
     ycc = cv2.cvtColor(crop, cv2.COLOR_RGB2YCrCb)
     cr, cb = ycc[:, :, 1], ycc[:, :, 2]
-    mask = (cr >= 135) & (cr <= 180) & (cb >= 85) & (cb <= 135)
+    mask = (cr >= 133) & (cr <= 183) & (cb >= 77) & (cb <= 133)
     pix = crop[mask]
     if len(pix) < MIN_SKIN_PX:
         return None
+    yv = ycc[:, :, 0][mask].astype(np.float32)
+    lo, hi = np.percentile(yv, [25, 75])
+    keep = (yv >= lo) & (yv <= hi)
+    if keep.sum() >= MIN_SKIN_PX:
+        pix = pix[keep]
     med = np.median(pix, axis=0).astype(np.uint8)
     lab = cv2.cvtColor(med.reshape(1, 1, 3), cv2.COLOR_RGB2LAB)[0, 0].astype(np.float32)
     mst = int(np.argmin(np.linalg.norm(_mst_lab_arr() - lab, axis=1))) + 1
     return mst, [int(lab[0]), int(lab[1]), int(lab[2])]
+
+
+def _face_tone(box) -> tuple[int, list[int]] | None:
+    """Sample a face: prefer the central cheek/jaw region (drops hairline, side
+    hair, eyes/brows, and background corners), fall back to the whole box."""
+    h, w = box.shape[:2]
+    rect = box[int(0.35 * h):int(0.92 * h), int(0.18 * w):int(0.82 * w)]
+    return (rect.size and _skin_tone(rect)) or _skin_tone(box)
 
 
 def _detect_and_tone(path: str) -> dict:
@@ -146,7 +165,7 @@ def _detect_and_tone(path: str) -> dict:
         x, y, fw, fh = (int(v) for v in f[:4])
         x, y = max(0, x), max(0, y)
         face_centers.append((x + fw / 2, y + fh / 2))
-        tone = _tone_from_crop(img[y:y + fh, x:x + fw])
+        tone = _face_tone(img[y:y + fh, x:x + fw])
         if tone is None:
             continue
         mst, lab = tone
@@ -170,7 +189,9 @@ def _detect_and_tone(path: str) -> dict:
             # already represents that person and is the better sample.
             if any(x1 <= cx <= x2 and y1 <= cy <= y2 for cx, cy in face_centers):
                 continue
-            tone = _tone_from_crop(img[y1:y2, x1:x2])
+            # Body: skin is on arms/hands/legs, not the box center (that's torso/
+            # clothing) — so sample the whole person box, not a central crop.
+            tone = _skin_tone(img[y1:y2, x1:x2])
             if tone is None:
                 continue
             mst, lab = tone
