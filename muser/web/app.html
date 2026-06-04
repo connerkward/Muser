@@ -521,9 +521,64 @@ function updateCartCapNote(){
   for (const p of _cart){ if (_capCache.get(p) == null) missing++; }
   const note = $("#cartCapNote");
   if (!note) return;
-  note.textContent = total === 0 ? "" :
-    missing === 0 ? "Zip includes captions for every item." :
-    `Zip includes captions where available. Missing: ${missing} of ${total}.`;
+  if (total === 0) { note.textContent = ""; return; }
+  if (missing === 0) { note.textContent = "Zip includes captions for every item."; return; }
+  // Render a plain "Caption missing (N) →" text-button to match the cart-actions idiom.
+  // Inline styles only so this doesn't depend on a new CSS class.
+  note.innerHTML =
+    `Zip includes captions where available. Missing: ${missing} of ${total}. ` +
+    `<a href="#" id="cartCapBtn" style="color:#caa468;text-decoration:underline;cursor:pointer;margin-left:6px">` +
+    `Caption missing (${missing}) →</a>`;
+  const btn = document.getElementById("cartCapBtn");
+  if (btn) btn.onclick = (e) => { e.preventDefault(); captionMissingInCart(); };
+}
+
+// Caption-on-demand: POST the cart's missing paths to /api/caption-bulk. The
+// existing pollStatus() picks up the "captioning" task and drives the busy
+// overlay; when the POST resolves we re-fetch captions for the cart items.
+let _capBulkInFlight = false;
+async function captionMissingInCart(){
+  if (_capBulkInFlight) return;
+  const missing = [..._cart].filter(p => _capCache.get(p) == null);
+  if (!missing.length) return;
+  _capBulkInFlight = true;
+  // Kick the status poll fast so the busy overlay shows up immediately.
+  pollStatus();
+  let res;
+  try {
+    res = await fetch("/api/caption-bulk", {
+      method: "POST", headers: {"content-type": "application/json"},
+      body: JSON.stringify({paths: missing}),
+    });
+  } catch (e) {
+    _capBulkInFlight = false;
+    toast("Caption request failed — is the service running?");
+    return;
+  }
+  _capBulkInFlight = false;
+  if (!res.ok) {
+    let msg = "";
+    try { const j = await res.json(); msg = j.detail || ""; } catch {}
+    if (res.status === 400 && /OPENAI_API_KEY/i.test(msg)) {
+      toast("Set OPENAI_API_KEY in central/.env, then reload.");
+    } else if (res.status === 409) {
+      toast("Service busy — try again in a moment.");
+    } else {
+      toast("Captioning failed: " + (msg || res.status));
+    }
+    return;
+  }
+  let summary;
+  try { summary = await res.json(); } catch { summary = {captioned: 0, errors: []}; }
+  // Re-fetch captions for cart items (drop our null cache for missing paths so
+  // loadCaptionsForCart hits /api/caption again).
+  for (const p of missing) _capCache.delete(p);
+  await loadCaptionsForCart([..._cart]);
+  if (summary.errors && summary.errors.length) {
+    toast(`Captioned ${summary.captioned}; ${summary.errors.length} failed`);
+  } else {
+    toast(`Captioned ${summary.captioned} image(s)`);
+  }
 }
 async function saveCaption(path, caption, savedEl){
   try {
@@ -698,6 +753,11 @@ function renderStatus(s){
     } else if (t.kind === "indexing_error") {
       $("#busyText").textContent = "Index failed";
       $("#busySub").textContent = t.error;
+    } else if (t.kind === "captioning") {
+      const tot = t.total || 0, done = t.done || 0;
+      $("#busyText").textContent = "Captioning images";
+      $("#busySub").textContent = tot ? `${done.toLocaleString()} / ${tot.toLocaleString()} · ${t.backend || "gpt-4o-mini"}` : (t.backend || "gpt-4o-mini");
+      if (tot) { bar.style.display = ""; barI.style.width = `${Math.round((done/tot)*100)}%`; }
     }
   } else if (s.ready) {
     busy.style.display = "none";

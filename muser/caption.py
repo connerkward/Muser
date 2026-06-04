@@ -1,173 +1,197 @@
-"""Image captions — natural-language descriptions per image.
+"""Image captions — natural-language descriptions per image, tuned for LoRA training.
 
-Batch artifact (`muser caption`): run a small vision-language model over every
-indexed image, write one caption per image to ``~/.muser/captions.jsonl``.
+Captioner: **OpenAI GPT-4o-mini** (vision via chat-completions, ``image_url`` with a
+data: URL). System prompt is baked for SDXL/Flux LoRA captions: one sentence, concrete
+nouns, framing if obvious, NO style words ("watercolor", "anime", "cinematic" — the
+LoRA learns style as an implicit trigger binding), no editorializing.
 
-Default model: Microsoft Florence-2-base-ft (~230 M params; ~270 MB on disk),
-greedy decoding with the ``<MORE_DETAILED_CAPTION>`` task. 1-3 sentence
-descriptions suitable for SDXL / Flux LoRA training prompts. JSONL (one row per
-image) so re-runs can append and a crash mid-pass loses nothing.
+Persistence (unchanged shape): one JSONL row per image at ``~/.muser/captions.jsonl``::
 
-Schema (per line):
-    {"path": str, "caption": str, "model": "florence-2-base", "mtime": int, "ts": int}
+    {"path": str, "caption": str, "model": "gpt-4o-mini", "mtime": int, "ts": int}
 
-Resume: existing rows are loaded on startup, indexed by path+mtime, and skipped
-unless ``--force``. Failures are logged once and the image is skipped (no retry).
+Resume: existing (path, mtime) rows are skipped unless ``--force``. JSONL is
+append-only — a crash mid-pass loses only the in-flight image.
 
-Florence-2 + transformers >= 4.55: the model's bundled
-``prepare_inputs_for_generation`` was written against the old tuple-form
-``past_key_values`` interface and crashes on the new ``DynamicCache``. We
-monkey-patch it on the language model to translate the cache before delegating —
-cheap, reliable, and isolated to this module.
+Networking: stdlib ``urllib.request`` only — no ``openai`` SDK dependency. Three
+attempts with 1s/2s/4s backoff on 429 / 5xx; the final failure raises so the caller
+(CLI or ``/api/caption-bulk``) decides what to do.
+
+Cost: at ``detail="low"`` each image is ~85 input image tokens; a typical caption
+runs ~$0.001-0.005. We parse the ``usage`` field of every response, accumulate, and
+print a one-line summary at the end of a batch.
 """
 
 from __future__ import annotations
 
+import base64
+import io
 import json
+import os
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 CAPTIONS_JSONL = Path.home() / ".muser" / "captions.jsonl"
-DEFAULT_CAPTION_MODEL = "florence-2-base"
-FLORENCE_REPO = "microsoft/Florence-2-base-ft"
-CAPTION_TASK = "<MORE_DETAILED_CAPTION>"
+DEFAULT_CAPTION_MODEL = "gpt-4o-mini"
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+
+# OpenAI public pricing for gpt-4o-mini (per 1M tokens) — used only to print the
+# post-batch cost estimate. Update if the public price changes; doesn't affect calls.
+_PRICE_IN_PER_M = 0.15
+_PRICE_OUT_PER_M = 0.60
+
+SYSTEM_PROMPT = (
+    "You write training captions for SDXL/Flux LoRA models. Output a single sentence that:\n"
+    "- Describes the subject, action, composition, and key visual elements with concrete nouns\n"
+    "- Includes camera framing if obvious (close-up / wide shot / overhead)\n"
+    '- Skips style descriptors (no "watercolor", "oil painting", "pixel art", "anime style", "cinematic") '
+    "— the LoRA learns style as an implicit trigger binding\n"
+    '- Skips editorializing words like "beautiful", "stunning", "interesting"\n'
+    "- 15-35 words, no trailing punctuation, no quotes, no markdown"
+)
 
 
-def _patch_florence_cache(model) -> None:
-    """Bridge Florence-2's tuple-form past_key_values to transformers' DynamicCache.
+def _load_env_file(path: str = "/Users/conner/dev/central/.env") -> None:
+    """Hand-parse ``KEY=value`` lines into os.environ (no python-dotenv dep).
 
-    Florence-2's ``prepare_inputs_for_generation`` does ``past_key_values[0][0].shape[2]``
-    — only valid for the legacy tuple-of-tuples cache. Newer transformers passes a
-    ``DynamicCache`` object. We wrap ``prepare_inputs_for_generation`` on the inner
-    language model to translate the cache (or drop it if empty) before delegating.
-    Idempotent — safe to call repeatedly.
+    central/.env is the source of truth for shared secrets, so this **overwrites**
+    pre-existing shell exports for select keys (notably ``OPENAI_API_KEY`` — a
+    common local LM Studio stub in the user's shell would otherwise win and shadow
+    the real production key here). Other unrelated env vars use ``setdefault`` to
+    preserve shell intent. Malformed lines / missing file: silent no-op.
     """
-    lm = model.language_model
-    if getattr(lm, "_muser_cache_patched", False):
+    # Keys whose central/.env value should always win over a shell export.
+    OVERRIDE = {"OPENAI_API_KEY", "GCP_VISION_API_KEY", "ANTHROPIC_API_KEY"}
+    if not os.path.isfile(path):
         return
-    orig = lm.prepare_inputs_for_generation
-
-    def _patched(input_ids, past_key_values=None, attention_mask=None, use_cache=None, **kw):
-        if past_key_values is not None and not isinstance(past_key_values, tuple):
-            try:
-                legacy = past_key_values.to_legacy_cache()
-                # An empty cache round-trips to a tuple-of-Nones; treat as "no cache".
-                if (
-                    not legacy
-                    or legacy[0] is None
-                    or (isinstance(legacy[0], tuple) and (not legacy[0] or legacy[0][0] is None))
-                ):
-                    past_key_values = None
-                else:
-                    past_key_values = legacy
-            except Exception:
-                past_key_values = None
-        return orig(
-            input_ids,
-            past_key_values=past_key_values,
-            attention_mask=attention_mask,
-            use_cache=use_cache,
-            **kw,
-        )
-
-    lm.prepare_inputs_for_generation = _patched
-    lm._muser_cache_patched = True
-
-
-_MODEL: dict = {"proc": None, "model": None, "dev": None, "dtype": None}
-
-
-def _load_florence():
-    """Lazy-load Florence-2 + processor, cached at module level. Returns (proc, model, dev, dtype)."""
-    if _MODEL["model"] is not None:
-        return _MODEL["proc"], _MODEL["model"], _MODEL["dev"], _MODEL["dtype"]
-    import torch
-    from transformers import AutoModelForCausalLM, AutoProcessor
-
-    from .embedders import _device
-
-    dev = _device()
-    # fp16 on MPS/CUDA (well-tested for Florence-2), fp32 on CPU.
-    dtype = torch.float16 if dev in ("mps", "cuda") else torch.float32
-    proc = AutoProcessor.from_pretrained(FLORENCE_REPO, trust_remote_code=True)
-    # attn_implementation="eager" sidesteps a transformers>=4.55 check that breaks
-    # on Florence-2's custom modeling code (missing _supports_sdpa attribute).
-    model = (
-        AutoModelForCausalLM.from_pretrained(
-            FLORENCE_REPO, trust_remote_code=True, dtype=dtype, attn_implementation="eager",
-        )
-        .to(dev)
-        .eval()
-    )
-    _patch_florence_cache(model)
-    _MODEL.update(proc=proc, model=model, dev=dev, dtype=dtype)
-    return proc, model, dev, dtype
-
-
-def _caption_batch(paths: list[str], proc, model, dev, dtype, max_new_tokens: int = 96) -> list[str | None]:
-    """Caption a batch of images. Returns one caption per path (or None on failure).
-
-    Failures fall back to per-image retries so one bad file doesn't sink the batch.
-    """
-    import torch
-
-    from .embedders import _load_rgb
-
-    imgs: list = []
-    keep: list[int] = []
-    for i, p in enumerate(paths):
-        try:
-            imgs.append(_load_rgb(p))
-            keep.append(i)
-        except Exception:
-            pass  # caller fills None for missing slots
-    out: list[str | None] = [None] * len(paths)
-    if not imgs:
-        return out
-
-    def _run(batch_imgs):
-        inputs = proc(text=[CAPTION_TASK] * len(batch_imgs), images=batch_imgs, return_tensors="pt",
-                      padding=True).to(dev, dtype)
-        # input_ids must stay int64 (the .to(dtype) cast above flips them to float16 otherwise).
-        inputs["input_ids"] = inputs["input_ids"].long()
-        with torch.inference_mode():
-            gen = model.generate(
-                input_ids=inputs["input_ids"],
-                pixel_values=inputs["pixel_values"],
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-                num_beams=1,
-            )
-        texts = proc.batch_decode(gen, skip_special_tokens=False)
-        captions: list[str] = []
-        for img, txt in zip(batch_imgs, texts):
-            parsed = proc.post_process_generation(txt, task=CAPTION_TASK, image_size=(img.width, img.height))
-            # post_process_generation leaves the <pad> padding tokens in — strip them
-            # along with any stray whitespace so the caption is clean for downstream use.
-            cap = str(parsed.get(CAPTION_TASK, "")).replace("<pad>", "").strip()
-            captions.append(cap)
-        return captions
-
     try:
-        captions = _run(imgs)
-        for ki, cap in zip(keep, captions):
-            out[ki] = cap
-        return out
-    except Exception:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                k = k.strip()
+                v = v.strip().strip('"').strip("'")
+                if not k:
+                    continue
+                if k in OVERRIDE:
+                    os.environ[k] = v
+                else:
+                    os.environ.setdefault(k, v)
+    except OSError:
         pass
 
-    # Retry one-by-one so one bad/oversized image doesn't kill the whole batch.
-    for ki, img in zip(keep, imgs):
+
+_load_env_file()
+
+
+def _encode_image_b64(path: str, max_side: int = 1024) -> str:
+    """Read ``path``, downscale (long side ≤ ``max_side``), JPEG-encode, base64.
+
+    Reuses the project's ``_load_rgb`` so corrupt files raise consistently.
+    ``detail="low"`` on the OpenAI side keeps image tokens to ~85 regardless,
+    but we still resize locally to bound the upload size.
+    """
+    from .embedders import _load_rgb  # lazy: pulls PIL
+
+    img = _load_rgb(path)
+    # _load_rgb already caps to ≤1024px, but be defensive in case its cap moves.
+    if max(img.size) > max_side:
+        scale = max_side / float(max(img.size))
+        img = img.resize((max(1, int(img.size[0] * scale)), max(1, int(img.size[1] * scale))))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85, optimize=True)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _post_openai(payload: dict, api_key: str, timeout: float = 90.0) -> dict:
+    """POST chat-completions; raise urllib.error.HTTPError on non-2xx."""
+    req = urllib.request.Request(
+        OPENAI_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+def _retry(call, *, label: str = "openai"):
+    """3 attempts, 1s/2s/4s sleep on 429 or 5xx. Other errors raise immediately."""
+    last_exc: Exception | None = None
+    for attempt, sleep_s in enumerate((1, 2, 4)):
         try:
-            cap = _run([img])[0]
-            out[ki] = cap
-        except Exception:
-            out[ki] = None
-    return out
+            return call()
+        except urllib.error.HTTPError as e:
+            last_exc = e
+            if e.code != 429 and e.code < 500:
+                # Not a transient class — surface immediately (401 invalid key, 400 bad
+                # payload, etc.). Caller wants the specific error.
+                raise
+            if attempt < 2:
+                time.sleep(sleep_s)
+        except (urllib.error.URLError, TimeoutError) as e:
+            last_exc = e
+            if attempt < 2:
+                time.sleep(sleep_s)
+    raise RuntimeError(f"{label}: retries exhausted: {last_exc!r}")
+
+
+def _api_key() -> str:
+    """Pull OPENAI_API_KEY from env. Raise RuntimeError if missing — never echo the value."""
+    key = os.environ.get("OPENAI_API_KEY")
+    if not key:
+        raise RuntimeError(
+            "OPENAI_API_KEY not set. Add it to /Users/conner/dev/central/.env and retry."
+        )
+    return key
+
+
+def caption_image(path: str) -> tuple[str, dict]:
+    """Caption one image. Returns ``(caption, usage_dict)``.
+
+    ``usage_dict`` is the OpenAI ``usage`` field (``prompt_tokens``,
+    ``completion_tokens``, ``total_tokens``) for cost accounting; ``{}`` if the
+    server omitted it.
+    """
+    key = _api_key()
+    b64 = _encode_image_b64(path)
+    payload = {
+        "model": DEFAULT_CAPTION_MODEL,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{b64}",
+                            "detail": "low",
+                        },
+                    }
+                ],
+            },
+        ],
+        "max_tokens": 200,
+    }
+    resp = _retry(lambda: _post_openai(payload, key), label="gpt-4o-mini")
+    try:
+        text = resp["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError, AttributeError) as e:
+        raise RuntimeError(f"unexpected OpenAI response shape: {e}: {resp!r}")
+    # Defensive cleanup: strip wrapping quotes / trailing punctuation in case the
+    # model ignores the system prompt's "no trailing punctuation" rule.
+    text = text.strip().strip('"').strip("'").rstrip(".")
+    return text, resp.get("usage", {}) or {}
 
 
 def _read_existing(path: Path) -> dict[str, int]:
-    """Load already-captioned {path: mtime} from JSONL. Missing/corrupt → empty."""
+    """Load already-captioned ``{path: mtime}`` from JSONL. Missing/corrupt → empty."""
     if not path.exists():
         return {}
     have: dict[str, int] = {}
@@ -187,49 +211,25 @@ def _read_existing(path: Path) -> dict[str, int]:
     return have
 
 
-def _humantime(seconds: float) -> str:
-    s = int(seconds)
-    if s < 60:
-        return f"{s}s"
-    m, s = divmod(s, 60)
-    if m < 60:
-        return f"{m}m{s:02d}s"
-    h, m = divmod(m, 60)
-    return f"{h}h{m:02d}m"
+def _estimate_cost(prompt_tokens: int, completion_tokens: int) -> float:
+    return (prompt_tokens / 1_000_000.0) * _PRICE_IN_PER_M + (
+        completion_tokens / 1_000_000.0
+    ) * _PRICE_OUT_PER_M
 
 
-def caption_all(
-    model_name: str = DEFAULT_CAPTION_MODEL,
-    folder: str | None = None,
-    force: bool = False,
-    limit: int | None = None,
-    batch_size: int = 4,
+def caption_paths(
+    paths: list[str],
     on_progress=print,
-) -> dict:
-    """Caption every indexed image (or those under ``folder``).
+    force: bool = False,
+) -> list[dict]:
+    """Caption many images. Skips those already in ``captions.jsonl`` unless ``force``.
 
-    Appends one JSON row per image to ``~/.muser/captions.jsonl``. Resumes by
-    skipping paths whose (path, mtime) is already on disk unless ``force=True``.
+    Calls ``on_progress(done, total)`` per image (or ``on_progress(message: str)`` for
+    a textual status). Returns the list of newly-written rows
+    (``{path, caption, model, mtime, ts}``) and appends each to the JSONL on disk.
     """
-    import os
-
-    from .index import MuserIndex
-    from .registry import DEFAULT_MODEL
-
-    if model_name != DEFAULT_CAPTION_MODEL:
-        raise ValueError(f"only {DEFAULT_CAPTION_MODEL} is wired up today, got {model_name!r}")
-
-    idx = MuserIndex()
-    # The captioner is index-agnostic — we just need the list of indexed paths.
-    # Use the active default embedding model's table as the source of truth.
-    embed_model = DEFAULT_MODEL
-    paths = idx.paths(embed_model, under=folder)
-    if not paths:
-        raise RuntimeError(
-            f"no indexed images for embedding model {embed_model}"
-            + (f" under {folder}" if folder else "")
-            + " — run `muser index <folder>` first"
-        )
+    # Resolve the key up-front: fail fast with a clean error instead of midway.
+    _api_key()
 
     have = {} if force else _read_existing(CAPTIONS_JSONL)
     todo: list[str] = []
@@ -242,79 +242,59 @@ def caption_all(
             continue
         todo.append(p)
 
-    if limit is not None:
-        todo = todo[:limit]
-
     n = len(todo)
-    on_progress(f"caption: {len(paths)} indexed, {len(paths) - n} already cached, {n} to caption")
+    skipped = len(paths) - n
+    on_progress(f"caption: {len(paths)} requested, {skipped} already cached, {n} to caption")
     if n == 0:
-        return {"written": 0, "skipped": 0, "failed": 0, "total": len(paths)}
-
-    on_progress(f"caption: loading {FLORENCE_REPO} (~270 MB, one-time download)…")
-    proc, model, dev, dtype = _load_florence()
-    on_progress(f"caption: running on {dev} dtype={dtype} batch={batch_size}")
+        return []
 
     CAPTIONS_JSONL.parent.mkdir(parents=True, exist_ok=True)
-    written = 0
-    failed = 0
+    written: list[dict] = []
+    failed: list[tuple[str, str]] = []
+    total_in = 0
+    total_out = 0
     t0 = time.time()
-    last_print = t0
-    with CAPTIONS_JSONL.open("a", buffering=1) as out:  # line-buffered: durable mid-run
-        for i in range(0, n, batch_size):
-            chunk = todo[i : i + batch_size]
+    with CAPTIONS_JSONL.open("a", buffering=1) as out:
+        for i, p in enumerate(todo, start=1):
             try:
-                caps = _caption_batch(chunk, proc, model, dev, dtype)
+                cap, usage = caption_image(p)
+                mt = int(os.path.getmtime(p))
+                row = {
+                    "path": p,
+                    "caption": cap,
+                    "model": DEFAULT_CAPTION_MODEL,
+                    "mtime": mt,
+                    "ts": int(time.time()),
+                }
+                out.write(json.dumps(row, ensure_ascii=False) + "\n")
+                written.append(row)
+                total_in += int(usage.get("prompt_tokens") or 0)
+                total_out += int(usage.get("completion_tokens") or 0)
             except Exception as e:
-                on_progress(f"  batch {i} failed entirely ({type(e).__name__}: {e})")
-                caps = [None] * len(chunk)
-            ts = int(time.time())
-            for p, cap in zip(chunk, caps):
-                if not cap:
-                    failed += 1
-                    continue
-                try:
-                    mt = int(os.path.getmtime(p))
-                except OSError:
-                    failed += 1
-                    continue
-                out.write(json.dumps({
-                    "path": p, "caption": cap, "model": DEFAULT_CAPTION_MODEL,
-                    "mtime": mt, "ts": ts,
-                }) + "\n")
-                written += 1
-
-            done = min(i + batch_size, n)
-            # Progress ping every ~50 images OR every 30s, whichever comes first.
-            now = time.time()
-            if (done % 50 < batch_size) or (now - last_print > 30):
-                last_print = now
-                elapsed = now - t0
-                rate = done / max(elapsed, 1e-6)
-                eta = (n - done) / max(rate, 1e-6)
-                bar_w = 24
-                filled = int(bar_w * done / max(n, 1))
-                bar = "#" * filled + "-" * (bar_w - filled)
-                on_progress(
-                    f"  caption [{bar}] {done}/{n} "
-                    f"({rate:.2f} img/s, elapsed {_humantime(elapsed)}, eta {_humantime(eta)}, "
-                    f"failed {failed})"
-                )
+                failed.append((p, f"{type(e).__name__}: {e}"))
+            # Numeric progress hook (done, total) — service.py uses this; CLI's
+            # `print` callback just stringifies the call. Wrap so a (done,total) call
+            # works for both.
+            try:
+                on_progress(i, n)
+            except TypeError:
+                pass
 
     elapsed = time.time() - t0
+    cost = _estimate_cost(total_in, total_out)
+    per = (cost / max(len(written), 1)) if written else 0.0
     on_progress(
-        f"caption: done — wrote {written}, failed {failed} in {_humantime(elapsed)} "
-        f"({written / max(elapsed, 1e-6):.2f} img/s) → {CAPTIONS_JSONL}"
+        f"caption: done — wrote {len(written)}, failed {len(failed)} in "
+        f"{elapsed:.1f}s · usage in={total_in} out={total_out} "
+        f"· ~${cost:.3f} total (~${per:.4f}/img)"
     )
-    return {"written": written, "skipped": len(paths) - n, "failed": failed, "total": len(paths)}
+    if failed:
+        on_progress(f"caption: {len(failed)} failed — first: {failed[0][0]}: {failed[0][1]}")
+    return written
 
 
 def lookup(path: str) -> str | None:
-    """Most recent caption for ``path`` from ``captions.jsonl``, or None.
-
-    JSONL append-only; later rows win on duplicate path (re-caption / --force).
-    Scans the file linearly — fine for single lookups and small files; the
-    service caches the read.
-    """
+    """Most recent caption for ``path`` from ``captions.jsonl``, or ``None``."""
     if not CAPTIONS_JSONL.exists():
         return None
     found: str | None = None

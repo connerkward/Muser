@@ -46,6 +46,11 @@ class CaptionWriteReq(BaseModel):
     caption: str
 
 
+class BulkCaptionReq(BaseModel):
+    paths: list[str]
+    force: bool = False
+
+
 class State:
     def __init__(self, model: str):
         self.model_name = model
@@ -259,6 +264,11 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.on_event("startup")
     def _startup():
+        # Pull OPENAI_API_KEY (and any other shared secrets) from the central .env
+        # before anything that might need them — caption.py does the same at import,
+        # but calling here too keeps the service self-contained if started standalone.
+        from .caption import _load_env_file
+        _load_env_file()
         # Non-blocking: fire the warm in a thread so uvicorn starts accepting
         # connections in milliseconds. The page can load, see task=loading_model
         # in /api/status, and render its overlay while weights load.
@@ -795,7 +805,7 @@ def create_app(model: str = DEFAULT_MODEL):
             "members": [{"path": p, "name": os.path.basename(p), "uid": uid_for(p)} for p in page],
         }
 
-    # ---- per-image captions: Florence-2 + user edits (~/.muser/captions.jsonl) ----
+    # ---- per-image captions: GPT-4o-mini + user edits (~/.muser/captions.jsonl) ----
     # JSONL is append-only. Multiple rows per path are kept on disk for history;
     # in memory we collapse to latest-wins by `ts` (so a user-edited row written
     # after the model's row beats it, even if the model row appears later in the
@@ -881,6 +891,80 @@ def create_app(model: str = DEFAULT_MODEL):
             raise HTTPException(404, f"no such image: {req.path}")
         _save_caption(req.path, req.caption)
         return {"ok": True}
+
+    @app.post("/api/caption-bulk")
+    def caption_bulk(req: BulkCaptionReq):
+        """Caption many paths via GPT-4o-mini. Publishes progress to state.task so
+        the frontend's busy overlay shows N/M while it runs.
+
+        Skips paths already in captions.jsonl (latest-wins). Cached-only requests
+        return immediately. The newly-written rows land in JSONL on disk and the
+        in-memory cache is invalidated by the file's mtime tick.
+        """
+        # Concurrency guard: refuse if another long-running task is in flight
+        # (model loading / indexing). Caption tasks themselves we let through —
+        # the second call just re-uses the same task slot's progress feed.
+        if state.task is not None and state.task.get("kind") not in (None, "captioning"):
+            raise HTTPException(409, f"busy: {state.task.get('kind')}")
+        if state.task is not None and state.task.get("kind") == "captioning":
+            raise HTTPException(409, "busy: captioning")
+
+        existing = _load_captions()
+        paths = [p for p in (req.paths or []) if isinstance(p, str)]
+        if req.force:
+            todo = [p for p in paths if os.path.isfile(p)]
+        else:
+            todo = [p for p in paths if os.path.isfile(p) and p not in existing]
+        skipped = len(paths) - len(todo)
+        if not todo:
+            return {"captioned": 0, "skipped": skipped, "errors": [], "total": len(paths)}
+
+        from .caption import caption_paths
+
+        state.task = {"kind": "captioning", "done": 0, "total": len(todo), "backend": "gpt-4o-mini"}
+        errors: list[dict] = []
+        written_n = 0
+
+        def on_progress(*args):
+            # caption_paths calls on_progress(done, total) per image AND on_progress(str) for status.
+            if len(args) == 2 and isinstance(args[0], int):
+                t = state.task
+                if t and t.get("kind") == "captioning":
+                    t["done"] = args[0]
+                    t["total"] = args[1]
+
+        try:
+            written_rows = caption_paths(todo, on_progress=on_progress, force=req.force)
+            written_n = len(written_rows)
+            # Any path that was in `todo` but not in `written_rows` failed.
+            written_paths = {r["path"] for r in written_rows}
+            for p in todo:
+                if p not in written_paths:
+                    errors.append({"path": p, "error": "caption failed (see service logs)"})
+            # Bump our in-memory cache so subsequent /api/caption GETs see the new rows
+            # without waiting for the file-mtime check to round-trip.
+            _load_captions()
+        except RuntimeError as e:
+            # Most common: OPENAI_API_KEY missing. Surface a structured error the UI
+            # can map to a "set OPENAI_API_KEY" toast — never echo the key.
+            msg = str(e)
+            state.task = None
+            if "OPENAI_API_KEY" in msg:
+                raise HTTPException(400, "OPENAI_API_KEY not set")
+            raise HTTPException(500, msg)
+        finally:
+            # Auto-clear after a short window (mirrors indexing) so the next call isn't blocked.
+            def _clear():
+                if state.task and state.task.get("kind") == "captioning":
+                    state.task = None
+            threading.Timer(1.5, _clear).start()
+
+        return {
+            "captioned": written_n,
+            "skipped": skipped,
+            "errors": errors,
+            "total": len(paths),
+        }
 
     # ---- per-image scores: Interesting / Review (read ~/.muser/scores.json) ----
     SCORES = Path.home() / ".muser" / "scores.json"

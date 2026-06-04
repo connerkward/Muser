@@ -50,10 +50,16 @@ See `REQUIREMENTS.md` for scope/decisions.
   dirs + counts from `/api/folders`); free-text so any path prefix works. Same
   scoping on the CLI (`muser search "…" --in <folder>`) and MCP
   (`search_images(query, k, folder=…)`) — both thin clients of `/api/search`.
-- `muser/caption.py` — per-image natural-language captions via Florence-2-base-ft
-  (`<MORE_DETAILED_CAPTION>` task, ~270 MB, greedy on MPS/CUDA/CPU). `muser caption`
-  writes one row per image to `~/.muser/captions.jsonl` (append-only:
-  `{path, caption, model, mtime, ts}`); resumes by (path, mtime), skip via cache.
+- `muser/caption.py` — per-image natural-language captions via **OpenAI GPT-4o-mini**
+  (chat-completions, stdlib `urllib` only — no `openai` SDK dep). System prompt
+  baked for SDXL/Flux LoRA captions (one sentence, concrete subjects, no style
+  descriptors). Images sent as JPEG-base64 data URLs with `detail: "low"`
+  (~85 image tokens). Cost ~$0.001-0.005/image. `OPENAI_API_KEY` auto-loaded from
+  `/Users/conner/dev/central/.env`. `muser caption [folder] [--paths …]` writes
+  one row per image to `~/.muser/captions.jsonl` (append-only:
+  `{path, caption, model, mtime, ts}` — `model="gpt-4o-mini"`). Cart UI's
+  "Caption missing (N)" button POSTs to `/api/caption-bulk`, which drives the
+  existing busy overlay via `state.task = {"kind": "captioning", done, total}`.
   `/api/caption?path=…` returns the latest caption for a single file.
 - `eval/datasets.py` — standard benchmarks reduced to {image_paths, queries,
   qrels}. Flickr30k via HF's `refs/convert/parquet` branch (scripts unsupported).

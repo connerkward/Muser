@@ -17,7 +17,7 @@ Live ideas to revisit, not yet scheduled. Promote to issues / commits when picke
 
 ## Workflow
 
-- **Caption-on-demand for cart items** — small "Caption missing" button in the cart modal that subprocess-calls `muser caption --paths …` for missing items. Avoids the 12-hour full caption pass (Florence-2 on MPS is slow). ~80 LOC.
+- **Caption-on-demand for cart items** — ✅ shipped 2026-06-03 (GPT-4o-mini via `/api/caption-bulk`; "Caption missing (N) →" button in the cart modal; busy overlay shows progress).
 - **Daemonize `muser serve`** — LaunchDaemon mirroring the Caddy pattern documented in `central/skills/machines/personal-machines/references/per_lappy_heavy.md`. Currently service requires manual `uv run muser serve` after reboot.
 - **Cart count in mini bar** — the mini search sliver doesn't surface cart status; should mirror the header's `Cart (N)` link.
 
@@ -29,7 +29,7 @@ Live ideas to revisit, not yet scheduled. Promote to issues / commits when picke
 
 ## LoRA pipeline
 
-- **Captioner upgrade path** — Florence-2 is fast-but-coarse for LoRA prompts. Consider JoyCaption-Alpha-Two's "Training Prompt" mode (slower, purpose-built for LoRA captions) when going from "pipeline works" to "LoRA quality matters."
+- **Captioner upgrade path** — current captioner is OpenAI GPT-4o-mini (single-sentence LoRA-shaped output, ~$0.001-0.005/img). Consider JoyCaption-Alpha-Two's "Training Prompt" mode (local, purpose-built for LoRA captions) or GPT-4o-full when going from "pipeline works" to "LoRA quality matters."
 - **Caption post-process** — for style LoRAs, strip style-describing phrases from generated captions so the LoRA binds style to the trigger, not to explicit text. For subject LoRAs, leave style words in.
 - **End-to-end Muser → fal automation** — once cart-with-captions zip exports cleanly, wire `muser train-lora <zip> --base flux-fast` to call the fal MCP and surface the resulting `.safetensors` URL + a few sample generations for human verification.
 

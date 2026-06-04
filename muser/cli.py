@@ -223,32 +223,55 @@ def score(model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to sc
 @app.command()
 def caption(
     folder: str = typer.Argument(None, help="Optional folder prefix to restrict (else: every indexed image)"),
-    model: str = typer.Option("florence-2-base", help="Captioning model"),
+    paths: list[str] = typer.Option(None, "--paths", help="Explicit paths to caption (bypasses the index)"),
     force: bool = typer.Option(False, "--force", help="Re-caption images already in the cache"),
     limit: int = typer.Option(None, "--limit", help="Cap N images (for testing)"),
-    batch_size: int = typer.Option(4, "--batch-size", help="Batch size — drop to 2 if MPS OOM"),
 ):
-    """Caption every indexed image — writes ~/.muser/captions.jsonl.
+    """Caption images via OpenAI GPT-4o-mini — writes ~/.muser/captions.jsonl.
 
-    Runs Florence-2-base-ft (~270 MB, one-time download) locally on MPS/CUDA/CPU
-    with the <MORE_DETAILED_CAPTION> task: 1-3 sentence natural-language
-    descriptions suitable for SDXL / Flux LoRA training prompts.
+    Captions are tuned for SDXL/Flux LoRA training: one sentence, concrete subjects,
+    no style descriptors. Cost ~$0.001-0.005/image (~$0.20 for 65 images).
+    Requires OPENAI_API_KEY in env (auto-loaded from /Users/conner/dev/central/.env).
 
     JSONL append-only, one row per image: {path, caption, model, mtime, ts}.
-    Resume support — already-captioned (path, mtime) rows are skipped unless
-    --force. Per-image failures are logged once and skipped (no crash).
+    Resume support — already-captioned (path, mtime) rows are skipped unless --force.
     """
-    from .caption import caption_all
+    if not os.environ.get("OPENAI_API_KEY"):
+        # Ensure the central .env loader has had a chance to fire.
+        from .caption import _load_env_file
+        _load_env_file()
+    if not os.environ.get("OPENAI_API_KEY"):
+        con.print(
+            "[red]OPENAI_API_KEY not set[/] — add it to "
+            "/Users/conner/dev/central/.env, then retry."
+        )
+        raise typer.Exit(1)
 
-    folder_path = str(Path(folder).expanduser()) if folder else None
-    out = caption_all(
-        model_name=model, folder=folder_path, force=force, limit=limit, batch_size=batch_size,
-        on_progress=lambda m: con.print(f"[dim]{m}[/]"),
+    from .caption import caption_paths
+
+    if paths:
+        targets = [str(Path(p).expanduser()) for p in paths]
+    else:
+        from .index import MuserIndex
+        from .registry import DEFAULT_MODEL as EMBED_DEFAULT
+
+        idx = MuserIndex()
+        folder_path = str(Path(folder).expanduser()) if folder else None
+        targets = idx.paths(EMBED_DEFAULT, under=folder_path)
+        if not targets:
+            where = f" under {folder_path}" if folder_path else ""
+            con.print(f"[red]no indexed images[/]{where} — run `muser index <folder>` first")
+            raise typer.Exit(1)
+
+    if limit is not None:
+        targets = targets[:limit]
+
+    written = caption_paths(
+        targets,
+        on_progress=lambda *a: con.print(f"[dim]{a[0]}[/]") if len(a) == 1 and isinstance(a[0], str) else None,
+        force=force,
     )
-    con.print(
-        f"captioned {out['written']} (skipped {out['skipped']} cached, "
-        f"{out['failed']} failed) of {out['total']} indexed"
-    )
+    con.print(f"captioned {len(written)} image(s) → ~/.muser/captions.jsonl")
 
 
 @app.command()
