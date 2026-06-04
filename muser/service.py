@@ -49,6 +49,10 @@ class CaptionWriteReq(BaseModel):
 class BulkCaptionReq(BaseModel):
     paths: list[str]
     force: bool = False
+    # Backend chosen per request — see muser/caption.py BACKENDS for valid values.
+    # Default kept as gpt-4o-mini so legacy clients (no backend field) behave
+    # exactly as they did before JoyCaption was wired in.
+    backend: str = "gpt-4o-mini"
 
 
 class State:
@@ -894,13 +898,22 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.post("/api/caption-bulk")
     def caption_bulk(req: BulkCaptionReq):
-        """Caption many paths via GPT-4o-mini. Publishes progress to state.task so
-        the frontend's busy overlay shows N/M while it runs.
+        """Caption many paths via the named backend. Publishes progress to state.task
+        so the frontend's busy overlay shows N/M while it runs.
+
+        Two backends: ``gpt-4o-mini`` (cloud, default) and ``joycaption-beta-one``
+        (local LLaVA, ~10s/img on Apple Silicon). The active backend is published as
+        ``state.task.backend`` so the UI's busy subtitle can name it.
 
         Skips paths already in captions.jsonl (latest-wins). Cached-only requests
         return immediately. The newly-written rows land in JSONL on disk and the
         in-memory cache is invalidated by the file's mtime tick.
         """
+        from .caption import BACKENDS
+
+        if req.backend not in BACKENDS:
+            raise HTTPException(400, f"unknown backend {req.backend!r}; choose from {list(BACKENDS)}")
+
         # Concurrency guard: refuse if another long-running task is in flight
         # (model loading / indexing). Caption tasks themselves we let through —
         # the second call just re-uses the same task slot's progress feed.
@@ -917,11 +930,12 @@ def create_app(model: str = DEFAULT_MODEL):
             todo = [p for p in paths if os.path.isfile(p) and p not in existing]
         skipped = len(paths) - len(todo)
         if not todo:
-            return {"captioned": 0, "skipped": skipped, "errors": [], "total": len(paths)}
+            return {"captioned": 0, "skipped": skipped, "errors": [], "total": len(paths),
+                    "backend": req.backend}
 
         from .caption import caption_paths
 
-        state.task = {"kind": "captioning", "done": 0, "total": len(todo), "backend": "gpt-4o-mini"}
+        state.task = {"kind": "captioning", "done": 0, "total": len(todo), "backend": req.backend}
         errors: list[dict] = []
         written_n = 0
 
@@ -934,7 +948,9 @@ def create_app(model: str = DEFAULT_MODEL):
                     t["total"] = args[1]
 
         try:
-            written_rows = caption_paths(todo, on_progress=on_progress, force=req.force)
+            written_rows = caption_paths(
+                todo, on_progress=on_progress, force=req.force, backend=req.backend,
+            )
             written_n = len(written_rows)
             # Any path that was in `todo` but not in `written_rows` failed.
             written_paths = {r["path"] for r in written_rows}
@@ -945,8 +961,8 @@ def create_app(model: str = DEFAULT_MODEL):
             # without waiting for the file-mtime check to round-trip.
             _load_captions()
         except RuntimeError as e:
-            # Most common: OPENAI_API_KEY missing. Surface a structured error the UI
-            # can map to a "set OPENAI_API_KEY" toast — never echo the key.
+            # Most common: OPENAI_API_KEY missing on gpt-4o-mini path. Surface a structured
+            # error the UI can map to a "set OPENAI_API_KEY" toast — never echo the key.
             msg = str(e)
             state.task = None
             if "OPENAI_API_KEY" in msg:
@@ -964,6 +980,7 @@ def create_app(model: str = DEFAULT_MODEL):
             "skipped": skipped,
             "errors": errors,
             "total": len(paths),
+            "backend": req.backend,
         }
 
     # ---- per-image scores: Interesting / Review (read ~/.muser/scores.json) ----

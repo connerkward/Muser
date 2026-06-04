@@ -223,31 +223,52 @@ def score(model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to sc
 @app.command()
 def caption(
     folder: str = typer.Argument(None, help="Optional folder prefix to restrict (else: every indexed image)"),
+    backend: str = typer.Option(
+        "gpt-4o-mini",
+        "--backend",
+        help=(
+            "gpt-4o-mini: OpenAI API, ~$0.001-0.005/image, 3-5s/image. Needs OPENAI_API_KEY. "
+            "joycaption-beta-one: Local, $0, ~5-15s/image on Apple Silicon, "
+            "~8 GB one-time model download. JoyCaption Beta One (newer than Alpha-Two)."
+        ),
+    ),
     paths: list[str] = typer.Option(None, "--paths", help="Explicit paths to caption (bypasses the index)"),
     force: bool = typer.Option(False, "--force", help="Re-caption images already in the cache"),
     limit: int = typer.Option(None, "--limit", help="Cap N images (for testing)"),
 ):
-    """Caption images via OpenAI GPT-4o-mini — writes ~/.muser/captions.jsonl.
+    """Caption images for SDXL/Flux LoRA training — writes ~/.muser/captions.jsonl.
 
-    Captions are tuned for SDXL/Flux LoRA training: one sentence, concrete subjects,
-    no style descriptors. Cost ~$0.001-0.005/image (~$0.20 for 65 images).
-    Requires OPENAI_API_KEY in env (auto-loaded from /Users/conner/dev/central/.env).
+    Two backends, pick one per pass:
 
-    JSONL append-only, one row per image: {path, caption, model, mtime, ts}.
-    Resume support — already-captioned (path, mtime) rows are skipped unless --force.
+      gpt-4o-mini (default)   OpenAI vision chat-completions; ~$0.001-0.005/image,
+                              ~3-5s/image; needs OPENAI_API_KEY in central/.env.
+      joycaption-beta-one     Local LLaVA VLM (Llama-3.1-8B + SigLIP2 vision tower);
+                              ~8 GB one-time download, ~5-15s/image on M1 Max MPS,
+                              $0, no network. Newer than the older Alpha-Two release.
+
+    Both backends share the same baked prompt (single sentence, concrete nouns,
+    no style descriptors). JSONL append-only, one row per image:
+    {path, caption, model, mtime, ts}. The ``model`` field is the backend name so
+    you can tell after the fact which captioner wrote a row. Resume support —
+    already-captioned (path, mtime) rows are skipped unless --force.
     """
-    if not os.environ.get("OPENAI_API_KEY"):
-        # Ensure the central .env loader has had a chance to fire.
-        from .caption import _load_env_file
-        _load_env_file()
-    if not os.environ.get("OPENAI_API_KEY"):
-        con.print(
-            "[red]OPENAI_API_KEY not set[/] — add it to "
-            "/Users/conner/dev/central/.env, then retry."
-        )
+    from .caption import BACKENDS, caption_paths
+
+    if backend not in BACKENDS:
+        con.print(f"[red]unknown backend[/] {backend!r} — choose from: {', '.join(BACKENDS)}")
         raise typer.Exit(1)
 
-    from .caption import caption_paths
+    if backend == "gpt-4o-mini":
+        if not os.environ.get("OPENAI_API_KEY"):
+            # Ensure the central .env loader has had a chance to fire.
+            from .caption import _load_env_file
+            _load_env_file()
+        if not os.environ.get("OPENAI_API_KEY"):
+            con.print(
+                "[red]OPENAI_API_KEY not set[/] — add it to "
+                "/Users/conner/dev/central/.env, then retry."
+            )
+            raise typer.Exit(1)
 
     if paths:
         targets = [str(Path(p).expanduser()) for p in paths]
@@ -270,8 +291,9 @@ def caption(
         targets,
         on_progress=lambda *a: con.print(f"[dim]{a[0]}[/]") if len(a) == 1 and isinstance(a[0], str) else None,
         force=force,
+        backend=backend,
     )
-    con.print(f"captioned {len(written)} image(s) → ~/.muser/captions.jsonl")
+    con.print(f"captioned {len(written)} image(s) via {backend} → ~/.muser/captions.jsonl")
 
 
 @app.command()
