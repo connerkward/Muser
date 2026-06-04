@@ -37,8 +37,23 @@ class ModelReq(BaseModel):
     name: str
 
 
+class CartItem(BaseModel):
+    # Per-cart-item flag pair used by /api/zip. `upscale=True` runs the file
+    # through muser/upscale.py (4x UltraSharp) and bundles the upscaled bytes
+    # under the original filename (with a .jpg extension); `upscale=False`
+    # bundles the file verbatim.
+    path: str
+    upscale: bool = False
+
+
 class CartReq(BaseModel):
-    paths: list[str]
+    # Two accepted shapes:
+    #   - new:    {items: [{path, upscale}, ...]}     -- preferred, supports flags
+    #   - legacy: {paths: [...]}                       -- pre-flag clients (CLI, MCP)
+    # When both are present, `items` wins; when only `paths` is sent, every
+    # item is treated as `upscale=false`.
+    paths: list[str] | None = None
+    items: list[CartItem] | None = None
 
 
 class CaptionWriteReq(BaseModel):
@@ -808,28 +823,68 @@ def create_app(model: str = DEFAULT_MODEL):
         # as the (possibly disambiguated) image file. Images without a cached
         # caption ship plain (no .txt); we surface the missing count in the
         # `X-Captions-Missing` response header so the UI can warn.
+        #
+        # Items flagged `upscale=true` are routed through muser/upscale.py
+        # (4x UltraSharp) — original bytes are NOT bundled, only the upscaled
+        # JPEG. The arcname keeps the original stem but forces ``.jpg``
+        # extension (lossless source extensions like PNG/AVIF would be
+        # misleading otherwise). The upscaler caches per (path, mtime), so a
+        # second zip of the same cart returns in milliseconds.
         import io, zipfile
         from fastapi.responses import Response
+
+        # Normalize input shapes. The web UI sends `items`; older CLI/MCP
+        # clients still send `paths`. Treat absent flags as upscale=False.
+        if req.items:
+            in_items = [(it.path, bool(it.upscale)) for it in req.items]
+        elif req.paths:
+            in_items = [(p, False) for p in req.paths]
+        else:
+            raise HTTPException(400, "request must include `items` or `paths`")
+
         captions = _load_captions()
         seen, members = {}, []
-        for p in req.paths:
+        for p, upscale in in_items:
             if not p or not os.path.isfile(p):
                 continue
             base = os.path.basename(p)
             stem, ext = os.path.splitext(base)
+            # Upscaled bytes are JPEG regardless of source format. PNG/AVIF
+            # input keeps its stem but the extension flips to .jpg so the
+            # downstream consumer doesn't get a PNG with JPEG bytes.
+            out_ext = ".jpg" if upscale else ext
             n = seen.get(base, 0) + 1
             seen[base] = n
             arc_stem = stem if n == 1 else f"{stem}_{n}"
-            arcname = f"{arc_stem}{ext}"
-            members.append((p, arcname, arc_stem))
+            arcname = f"{arc_stem}{out_ext}"
+            members.append((p, arcname, arc_stem, upscale))
         if not members:
             raise HTTPException(400, "no valid files in cart")
+        # Lazy-import so the spandrel + torch model load only happens when an
+        # actual upscale is requested (don't pay the latency on plain zips).
+        upscale_fn = None
+        if any(u for _, _, _, u in members):
+            from .upscale import upscale_4x as upscale_fn  # noqa: F811
+
         missing = 0
+        upscaled_n = 0
         manifest: dict[str, dict] = {}
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
-            for src, arc, arc_stem in members:
-                zf.write(src, arc)
+            for src, arc, arc_stem, upscale in members:
+                if upscale:
+                    try:
+                        data = upscale_fn(src)
+                        zf.writestr(arc, data)
+                        upscaled_n += 1
+                    except Exception as e:
+                        # Don't kill the whole zip if one item fails — bundle
+                        # the original instead and tell the user via the
+                        # X-Upscale-Errors header.
+                        print(f"[upscale] failed for {src}: {e}", flush=True)
+                        zf.write(src, arc)
+                else:
+                    zf.write(src, arc)
                 cap = captions.get(src)
                 if cap:
                     # UTF-8, no trailing newline — fal/kohya read the file verbatim
@@ -837,13 +892,15 @@ def create_app(model: str = DEFAULT_MODEL):
                     zf.writestr(f"{arc_stem}.txt", cap.encode("utf-8"))
                 else:
                     missing += 1
-                # Manifest: uid → {path, arcname, caption?}. Lets a downstream
-                # LoRA training run correlate every shipped basename back to its
-                # original source on disk (and the captioning provenance).
+                # Manifest: uid → {path, arcname, caption?, upscaled}. Lets a
+                # downstream LoRA training run correlate every shipped
+                # basename back to its original source on disk (and know
+                # which items were upscaled, in case it cares).
                 manifest[uid_for(src)] = {
                     "path": src,
                     "arcname": arc,
                     "caption": cap or None,
+                    "upscaled": bool(upscale),
                 }
             zf.writestr(
                 "manifest.json",
@@ -856,6 +913,7 @@ def create_app(model: str = DEFAULT_MODEL):
                 "Content-Disposition": 'attachment; filename="muser-cart.zip"',
                 "X-Captions-Missing": str(missing),
                 "X-Captions-Total": str(len(members)),
+                "X-Upscaled-Count": str(upscaled_n),
             },
         )
 

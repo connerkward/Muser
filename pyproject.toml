@@ -33,6 +33,7 @@ dependencies = [
     "hdbscan>=0.8.43",
     "scikit-learn>=1.8.0",
     "open_clip_torch>=2.30",
+    "spandrel>=0.4.2",
 ]
 
 [project.scripts]

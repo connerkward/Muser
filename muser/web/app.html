@@ -666,6 +666,7 @@
   <div class="cart-est" id="cartEst"></div>
   <div class="cart-actions">
     <button id="cartDownload">Download zip</button>
+    <button id="cartUpAll" title="Toggle the 4× UltraSharp upscale flag on every cart item">Toggle upscale all</button>
     <button id="cartClear">Clear</button>
   </div>
   <div class="cart-note" id="cartCapNote"></div>
@@ -709,16 +710,57 @@ window.fetch = (...args) => {
 // ---- selection cart: accumulate picks across searches, download as a zip.
 // localStorage so curation work survives tab close + reboot. Clear with the
 // "Clear" button in the cart modal or by downloading (download auto-clears).
-// Migrates any leftover sessionStorage cart from before this change.
+//
+// Cart shape: Map<path, {upscale:boolean}>. Persisted as a JSON array of
+// [path, meta] pairs (Map.entries-shaped). Migrates two legacy shapes
+// non-destructively:
+//   1) sessionStorage cart from before localStorage move.
+//   2) localStorage array-of-strings ['/a','/b'] from before per-item flags;
+//      each becomes {upscale:false}.
 const CART_KEY = "muser-cart";
 const _legacy = sessionStorage.getItem(CART_KEY);
 if (_legacy && !localStorage.getItem(CART_KEY)) { localStorage.setItem(CART_KEY, _legacy); sessionStorage.removeItem(CART_KEY); }
-const _cart = new Set(JSON.parse(localStorage.getItem(CART_KEY) || "[]"));
-function saveCart(){ localStorage.setItem(CART_KEY, JSON.stringify([..._cart])); updateCartUI(); }
+function _readCart(){
+  let raw;
+  try { raw = JSON.parse(localStorage.getItem(CART_KEY) || "[]"); }
+  catch { return new Map(); }
+  const m = new Map();
+  if (!Array.isArray(raw)) return m;
+  for (const entry of raw) {
+    if (typeof entry === "string") {                       // legacy v1: array-of-strings
+      m.set(entry, {upscale: false});
+    } else if (Array.isArray(entry) && entry.length === 2) {  // current: [path, {…}]
+      const [p, meta] = entry;
+      if (typeof p === "string") m.set(p, {upscale: !!(meta && meta.upscale)});
+    }
+  }
+  return m;
+}
+const _cart = _readCart();
+function saveCart(){
+  localStorage.setItem(CART_KEY, JSON.stringify([..._cart.entries()]));
+  updateCartUI();
+}
 function cartHas(p){ return _cart.has(p); }
+function cartGet(p){ return _cart.get(p) || null; }
 function cartToggle(p, btn){
-  if (_cart.has(p)) { _cart.delete(p); btn.textContent = "+ Add";   btn.classList.remove("added"); }
-  else              { _cart.add(p);    btn.textContent = "× Added"; btn.classList.add("added"); }
+  if (_cart.has(p)) { _cart.delete(p); if(btn){ btn.textContent = "+ Add";   btn.classList.remove("added"); } }
+  else              { _cart.set(p, {upscale:false}); if(btn){ btn.textContent = "× Added"; btn.classList.add("added"); } }
+  saveCart();
+}
+// Per-item upscale flag. Adds the item to the cart if absent. Detail-page's
+// "Add upscaled to cart" button + the cart modal's per-item toggle both call this.
+function cartSetUpscale(p, on){
+  const cur = _cart.get(p) || {};
+  cur.upscale = !!on;
+  _cart.set(p, cur);
+  saveCart();
+}
+// Single link in cart-actions that flips every item's flag at once. If every
+// item is already flagged, this clears all; otherwise it flags all.
+function cartToggleUpscaleAll(){
+  const allOn = _cart.size > 0 && [..._cart.values()].every(v => v.upscale);
+  for (const [k, v] of _cart) { v.upscale = !allOn; _cart.set(k, v); }
   saveCart();
 }
 function updateCartUI(){
@@ -859,7 +901,8 @@ function cssEsc(s){ return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replac
 function updateCartCapNote(){
   const total = _cart.size;
   let missing = 0;
-  for (const p of _cart){ if (_capCache.get(p) == null) missing++; }
+  // `_cart` is a Map; iterate by key (path).
+  for (const p of _cart.keys()){ if (_capCache.get(p) == null) missing++; }
   const note = $("#cartCapNote");
   if (!note) return;
   if (total === 0) { note.textContent = ""; return; }
@@ -879,7 +922,7 @@ function updateCartCapNote(){
 let _capBulkInFlight = false;
 async function captionMissingInCart(){
   if (_capBulkInFlight) return;
-  const missing = [..._cart].filter(p => _capCache.get(p) == null);
+  const missing = [..._cart.keys()].filter(p => _capCache.get(p) == null);
   if (!missing.length) return;
   _capBulkInFlight = true;
   // Kick the status poll fast so the busy overlay shows up immediately.
@@ -913,7 +956,7 @@ async function captionMissingInCart(){
   // Re-fetch captions for cart items (drop our null cache for missing paths so
   // loadCaptionsForCart hits /api/caption again).
   for (const p of missing) _capCache.delete(p);
-  await loadCaptionsForCart([..._cart]);
+  await loadCaptionsForCart([..._cart.keys()]);
   if (summary.errors && summary.errors.length) {
     toast(`Captioned ${summary.captioned}; ${summary.errors.length} failed`);
   } else {
@@ -940,17 +983,28 @@ function openCart(){
   $("#cartSub").textContent = _cart.size === 1 ? "1 item" : `${_cart.size} items`;
   const f = $("#cartFiles"); f.innerHTML = "";
   _capCache = new Map();
-  const paths = [..._cart];
+  const paths = [..._cart.keys()];
   paths.forEach(p => {
+    const meta = _cart.get(p) || {};
+    const upscaled = !!meta.upscale;
     const d = document.createElement("div"); d.className = "file"; d.dataset.path = p;
+    // Italic-serif "(upscaled)" tag after the filename — visual cue that this
+    // item won't ship as-is. The per-item upscale toggle sits in the frow next
+    // to Reveal / Remove so the user can flip the flag without leaving the modal.
     d.innerHTML = `<img loading="lazy" src="/api/thumb?path=${enc(p)}" title="${p}">`
-      + `<div class="fn">${p}</div>`
+      + `<div class="fn">${p}<span class="upmark" style="display:${upscaled?'inline':'none'};font:italic 400 11px/1 var(--serif);color:var(--mut);margin-left:6px"> (upscaled)</span></div>`
       + `<textarea class="cap" rows="1" placeholder="loading caption…"></textarea>`
       + `<div class="capsaved"></div>`
-      + `<div class="frow"><button class="rev">Reveal</button><button class="rem">Remove</button></div>`;
+      + `<div class="frow"><button class="rev">Reveal</button><button class="up">${upscaled?"× Don’t upscale":"+ Upscale"}</button><button class="rem">Remove</button></div>`;
     d.querySelector("img").onclick = () => window.open(`/api/image?path=${enc(p)}`, "_blank");
     d.querySelector(".rev").onclick = async () => { await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:p})}); toast("revealed in Finder"); };
     d.querySelector(".rem").onclick = () => { _cart.delete(p); _capCache.delete(p); saveCart(); openCart(); syncCartButtons(); };
+    d.querySelector(".up").onclick = (e) => {
+      const now = !(_cart.get(p) || {}).upscale;
+      cartSetUpscale(p, now);
+      e.currentTarget.textContent = now ? "× Don’t upscale" : "+ Upscale";
+      d.querySelector(".upmark").style.display = now ? "inline" : "none";
+    };
     const ta = d.querySelector(".cap");
     const savedEl = d.querySelector(".capsaved");
     ta.addEventListener("input", () => autosizeTa(ta));
@@ -970,13 +1024,21 @@ function openCart(){
 }
 async function downloadCart(){
   if (!_cart.size) return;
+  // New shape: items array carries the per-path upscale flag. Server still
+  // accepts legacy `paths:[…]` for non-UI clients.
+  const items = [..._cart.entries()].map(([path, meta]) => ({path, upscale: !!(meta && meta.upscale)}));
+  const upN = items.filter(it => it.upscale).length;
+  if (upN > 0) {
+    toast(`Upscaling ${upN} item${upN===1?"":"s"} — first one takes ~10 s while UltraSharp loads.`);
+  }
   const res = await fetch("/api/zip", {
     method: "POST", headers: {"content-type": "application/json"},
-    body: JSON.stringify({paths: [..._cart]}),
+    body: JSON.stringify({items}),
   });
   if (!res.ok) { toast("zip failed"); return; }
   const missing = parseInt(res.headers.get("X-Captions-Missing") || "0", 10);
   const total = parseInt(res.headers.get("X-Captions-Total") || "0", 10);
+  const upscaled = parseInt(res.headers.get("X-Upscaled-Count") || "0", 10);
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -984,14 +1046,16 @@ async function downloadCart(){
   URL.revokeObjectURL(url);
   _cart.clear(); saveCart(); syncCartButtons();
   $("#cartModal").classList.remove("show");
+  const upTag = upscaled ? ` · ${upscaled} upscaled` : "";
   toast(missing
-    ? `Downloaded — ${total - missing}/${total} with captions`
-    : "Downloaded — cart cleared");
+    ? `Downloaded — ${total - missing}/${total} with captions${upTag}`
+    : `Downloaded — cart cleared${upTag}`);
 }
 $("#cartOpen").onclick = openCart;
 $("#cartClose").onclick = () => $("#cartModal").classList.remove("show");
 $("#cartModal").onclick = (e) => { if (e.target === $("#cartModal")) $("#cartModal").classList.remove("show"); };
 $("#cartDownload").onclick = downloadCart;
+$("#cartUpAll").onclick = () => { cartToggleUpscaleAll(); openCart(); };
 $("#cartClear").onclick = () => { _cart.clear(); saveCart(); syncCartButtons(); $("#cartModal").classList.remove("show"); toast("Cart cleared"); };
 updateCartUI();
 
@@ -1782,6 +1846,8 @@ function renderImageDetail(d){
 
   // In cart? mirror state for the Add button.
   const inCart = cartHas(d.path);
+  const cartMeta = cartGet(d.path);
+  const inCartUp = !!(cartMeta && cartMeta.upscale);
 
   $("#dbody").innerHTML = `
     <div class="dwrap">
@@ -1829,7 +1895,7 @@ function renderImageDetail(d){
       <span class="sep">·</span>
       <button id="dreveal">Reveal</button>
       <span class="sep">·</span>
-      <button id="daddUp">Add upscaled to cart</button>
+      <button id="daddUp" class="${inCartUp?"added":""}">${inCartUp?"× Upscale queued":"Add upscaled to cart"}</button>
       <span class="sep">·</span>
       <button id="dopen">Open externally</button>
     </div>
@@ -1878,17 +1944,26 @@ function renderImageDetail(d){
   document.getElementById("dlens").onclick = (e) => lensSearch(d.path, e.currentTarget);
   document.getElementById("dopen").onclick = () => window.open(`/api/image?path=${enc(d.path)}`,"_blank");
   document.getElementById("daddUp").onclick = (e) => {
-    // Feature-B hook: if cart entries carry an `upscale` flag, set it true here.
-    // Until B lands, this just behaves like Add and toasts a note.
-    if (typeof cartSetUpscale === "function") {
+    // Toggle: if this path is already in the cart with upscale=true, this
+    // clears the flag (and removes the item if it was *only* there for the
+    // upscale flag). Otherwise add-with-upscale.
+    const meta = _cart.get(d.path);
+    if (meta && meta.upscale) {
+      cartSetUpscale(d.path, false);
+      e.currentTarget.textContent = "Add upscaled to cart";
+      e.currentTarget.classList.remove("added");
+      toast("Upscale flag cleared — still in cart");
+    } else {
       cartSetUpscale(d.path, true);
       e.currentTarget.textContent = "× Upscale queued";
       e.currentTarget.classList.add("added");
+      // Also reflect "Add to cart" button state — same path now lives in cart.
+      const dadd = document.getElementById("dadd");
+      if (dadd && cartHas(d.path)) {
+        dadd.textContent = "× Remove from cart";
+        dadd.classList.add("added");
+      }
       toast("Will upscale this on zip download");
-    } else {
-      cartToggle(d.path, e.currentTarget);
-      e.currentTarget.textContent = "× Added (upscale flag pending Feature B)";
-      toast("Added — upscale flag will apply once shipped");
     }
   };
   // Cluster link → back to Explore with that cluster opened.
