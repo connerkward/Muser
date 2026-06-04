@@ -200,7 +200,20 @@ def cluster(
 
 @app.command()
 def score(model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to score")):
-    """Score every image (interesting / novelty / aesthetic / nsfw / private / political)."""
+    """Score every image — writes ~/.muser/scores.json.
+
+    Metrics: interesting / novelty / aesthetic (zero-shot, weak) /
+    aesthetic_v2 (LAION-Aesthetics V2 MLP on CLIP-L/14) /
+    pickscore (PickScore v1, CLIP-H/14 fine-tuned on human prefs) /
+    nsfw (Falconsai ViT) / private (zero-shot).
+
+    First run downloads:
+      ~3.7 MB LAION-Aes V2 MLP  (camenduru/improved-aesthetic-predictor)
+      ~700 MB PickScore v1      (yuvalkirstain/PickScore_v1)
+      plus CLIP-L/14 weights if the active index isn't already clip-l14.
+    PickScore is slow: ~50 ms/image on MPS. Cached by path|mtime|size so re-runs
+    only score new/changed files.
+    """
     from .score import score_all
 
     out = score_all(model, on_progress=lambda m: con.print(f"[dim]{m}[/]"))

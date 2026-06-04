@@ -5,8 +5,20 @@ pass) to compute, for every image:
 
   - novelty      — how isolated the image is in embedding space (mean similarity to
                    its nearest neighbors, inverted). High = unusual / one-of-a-kind.
-  - aesthetic    — a zero-shot "striking photo" vs "dull snapshot" signal (a weak,
-                   free proxy; a real aesthetic model like PickScore is the upgrade).
+  - aesthetic    — a zero-shot "striking photo" vs "dull snapshot" signal — weak,
+                   free proxy; kept for comparison against the real models below.
+  - aesthetic_v2 — LAION-Aesthetics V2 (Schuhmann et al.): a tiny MLP
+                   (768→1024→128→64→16→1) trained on SAC+LOGOS+AVA1 ratings, on top
+                   of OpenAI CLIP-ViT-L/14 image features. Raw output ≈ 1 (ugly) to
+                   ~7.5 (beautiful); we percentile-normalize. Weights:
+                   `camenduru/improved-aesthetic-predictor/sac+logos+ava1-l14-linearMSE.pth`
+                   (~3.7 MB). Runs CLIP-L/14 if the active model isn't already it.
+  - pickscore    — PickScore v1 (Kirstain et al., NeurIPS 2023): a CLIP-H/14 model
+                   fine-tuned on human pairwise preferences from Pick-a-Pic. Per
+                   image we compute the calibrated cosine `logit_scale·cos(img, txt)`
+                   against the neutral prompt "a high-quality image" — an
+                   "unconditional aesthetic" reading. Weights: `yuvalkirstain/PickScore_v1`
+                   (~700 MB). Slow first pass: ~50 ms/image on MPS (CLIP-H is large).
   - interesting  — blend of novelty + aesthetic.
   - nsfw / private / political — zero-shot similarity to sensitivity concept sets.
                    These are HEURISTIC FLAGS FOR HUMAN REVIEW of your own library
@@ -14,6 +26,12 @@ pass) to compute, for every image:
 
 Each metric is percentile-normalized to [0,1] so they're comparable and sortable.
 Writes ~/.muser/scores.json; the Explore "Interesting" and "Review" tabs read it.
+
+The heavy new metrics (`aesthetic_v2`, `pickscore`) are computed only on the
+canonical set (deduped representatives), then broadcast to each dup group's members —
+near-identical copies share a score by definition. Per-path results are cached to
+`~/.muser/{aesthetic_v2,pickscore}_cache.json` keyed by `path|mtime|size` so
+incremental re-runs only score new/changed files.
 """
 
 from __future__ import annotations
@@ -88,6 +106,214 @@ def _pct(x: np.ndarray) -> np.ndarray:
     return ranks / max(len(x) - 1, 1)
 
 
+def _cache_key(p: str) -> str | None:
+    """Stable per-file cache key: `<path>|<mtime>|<size>`. None if file missing."""
+    try:
+        st = Path(p).stat()
+    except OSError:
+        return None
+    return f"{p}|{int(st.st_mtime)}|{st.st_size}"
+
+
+def _read_cache(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+
+def _write_cache(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data))
+
+
+# ---- LAION-Aesthetics V2 ----------------------------------------------------
+# Tiny MLP (768→1024→128→64→16→1) trained on SAC+LOGOS+AVA1 ratings, on top of
+# OpenAI CLIP-ViT-L/14 L2-normalized image features. ~3.7 MB checkpoint.
+AES_V2_REPO = "camenduru/improved-aesthetic-predictor"
+AES_V2_FILE = "sac+logos+ava1-l14-linearMSE.pth"
+AES_V2_CACHE = Path.home() / ".muser" / "aesthetic_v2_cache.json"
+
+
+def _laion_aes_mlp(state_path: str):
+    """Build the LAION-Aes V2 MLP and load the checkpoint."""
+    import torch
+    from torch import nn
+
+    mlp = nn.Sequential(
+        nn.Linear(768, 1024), nn.Dropout(0.2),
+        nn.Linear(1024, 128), nn.Dropout(0.2),
+        nn.Linear(128, 64),   nn.Dropout(0.1),
+        nn.Linear(64, 16),
+        nn.Linear(16, 1),
+    )
+    # The published checkpoint nests the layers under "layers." so reshape it:
+    sd = torch.load(state_path, map_location="cpu", weights_only=True)
+    # Remap "layers.N.{weight,bias}" → "N.{weight,bias}" (nn.Sequential names by index).
+    remap = {k.replace("layers.", "", 1): v for k, v in sd.items()}
+    mlp.load_state_dict(remap)
+    mlp.eval()
+    return mlp
+
+
+def _aesthetic_v2(paths: list[str], active_model: str, X: np.ndarray, on_progress) -> np.ndarray:
+    """LAION-Aesthetics V2 score per path.
+
+    If the active model is `clip-l14`, reuse its 768-d L2-normalized vectors (X is
+    aligned to paths). Otherwise, run CLIP-L/14 over `paths` (cache by mtime+size).
+    Returns float32 array aligned to `paths`.
+    """
+    from huggingface_hub import hf_hub_download
+
+    on_progress("aesthetic_v2: downloading LAION-Aes V2 MLP (~3.7 MB)…")
+    weights = hf_hub_download(repo_id=AES_V2_REPO, filename=AES_V2_FILE)
+    mlp = _laion_aes_mlp(weights)
+
+    cache = _read_cache(AES_V2_CACHE)
+    out = np.zeros(len(paths), dtype=np.float32)
+
+    if active_model == "clip-l14" and X.shape[1] == 768:
+        on_progress("aesthetic_v2: scoring from indexed CLIP-L/14 vectors…")
+        import torch
+        with torch.no_grad():
+            scores = mlp(torch.from_numpy(X)).squeeze(-1).numpy()
+        for i, p in enumerate(paths):
+            out[i] = float(scores[i])
+            key = _cache_key(p)
+            if key:
+                cache[key] = float(scores[i])
+        _write_cache(AES_V2_CACHE, cache)
+        return out
+
+    # Otherwise embed via CLIP-L/14 ourselves, batched, with mtime+size cache.
+    needed_idx = []
+    needed_paths = []
+    for i, p in enumerate(paths):
+        key = _cache_key(p)
+        if key and key in cache:
+            out[i] = cache[key]
+        else:
+            needed_idx.append(i)
+            needed_paths.append(p)
+    if not needed_paths:
+        on_progress(f"aesthetic_v2: all {len(paths)} cached, skipping CLIP-L/14 pass")
+        return out
+
+    on_progress(f"aesthetic_v2: loading CLIP-L/14 for {len(needed_paths)} new/changed images…")
+    clip_l14 = load_model("clip-l14")
+    import torch
+    bs = 32
+    t0 = _now()
+    for k in range(0, len(needed_paths), bs):
+        chunk = needed_paths[k : k + bs]
+        try:
+            vecs = clip_l14.embed_images(chunk, batch_size=len(chunk))  # already L2-normalized
+            with torch.no_grad():
+                s = mlp(torch.from_numpy(np.asarray(vecs, dtype=np.float32))).squeeze(-1).numpy()
+            for j, p in enumerate(chunk):
+                v = float(s[j])
+                out[needed_idx[k + j]] = v
+                key = _cache_key(p)
+                if key:
+                    cache[key] = v
+        except Exception as e:
+            on_progress(f"  skip batch {k} ({e})")
+        if (k // bs) % 10 == 0:
+            done = min(k + bs, len(needed_paths))
+            eta = (_now() - t0) / max(done, 1) * (len(needed_paths) - done)
+            on_progress(f"  aesthetic_v2 {done}/{len(needed_paths)} (~{int(eta)}s left)")
+    _write_cache(AES_V2_CACHE, cache)
+    return out
+
+
+# ---- PickScore (Kirstain et al., NeurIPS 2023) -------------------------------
+# CLIP-ViT-H/14 fine-tuned on Pick-a-Pic human pairwise preferences. We score
+# each image against a neutral prompt for an "unconditional aesthetic" reading.
+PICKSCORE_MODEL = "yuvalkirstain/PickScore_v1"
+PICKSCORE_PROCESSOR = "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"
+PICKSCORE_PROMPT = "a high-quality image"
+PICKSCORE_CACHE = Path.home() / ".muser" / "pickscore_cache.json"
+
+
+def _now() -> float:
+    import time
+    return time.time()
+
+
+def _pickscore(paths: list[str], on_progress, batch_size: int = 16) -> np.ndarray:
+    """PickScore per path. Calibrated cosine against a fixed neutral prompt.
+
+    Score = logit_scale · cos(image_emb, text_emb), with both L2-normalized — the
+    same per-image scalar PickScore returns before its softmax. Higher = more
+    aligned with what humans called "high quality." Cached by path+mtime+size.
+    """
+    import torch
+    from transformers import AutoModel, AutoProcessor
+
+    from .embedders import _device, _load_rgb
+
+    cache = _read_cache(PICKSCORE_CACHE)
+    out = np.zeros(len(paths), dtype=np.float32)
+
+    needed_idx, needed_paths = [], []
+    for i, p in enumerate(paths):
+        key = _cache_key(p)
+        if key and key in cache:
+            out[i] = cache[key]
+        else:
+            needed_idx.append(i)
+            needed_paths.append(p)
+    if not needed_paths:
+        on_progress(f"pickscore: all {len(paths)} cached, skipping model load")
+        return out
+
+    on_progress(f"pickscore: loading PickScore v1 (~700 MB, one-time download)…")
+    dev = _device()
+    processor = AutoProcessor.from_pretrained(PICKSCORE_PROCESSOR, use_fast=True)
+    model = AutoModel.from_pretrained(PICKSCORE_MODEL).eval().to(dev)
+    on_progress(f"pickscore: scoring {len(needed_paths)} images on {dev}…")
+
+    # Compute text embedding once.
+    with torch.no_grad():
+        text_inputs = processor(text=[PICKSCORE_PROMPT], padding=True, truncation=True,
+                                max_length=77, return_tensors="pt").to(dev)
+        text_emb = model.get_text_features(**text_inputs)
+        text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)
+        logit_scale = float(model.logit_scale.exp())
+
+    t0 = _now()
+    n = len(needed_paths)
+    for k in range(0, n, batch_size):
+        chunk = needed_paths[k : k + batch_size]
+        try:
+            imgs = [_load_rgb(p) for p in chunk]
+            with torch.no_grad():
+                img_inputs = processor(images=imgs, return_tensors="pt").to(dev)
+                img_emb = model.get_image_features(**img_inputs)
+                img_emb = img_emb / img_emb.norm(dim=-1, keepdim=True)
+                scores = (logit_scale * (img_emb @ text_emb.T)).squeeze(-1).float().cpu().numpy()
+            for j, p in enumerate(chunk):
+                v = float(scores[j])
+                out[needed_idx[k + j]] = v
+                key = _cache_key(p)
+                if key:
+                    cache[key] = v
+        except Exception as e:
+            on_progress(f"  skip batch {k} ({type(e).__name__}: {e})")
+        if (k // batch_size) % 5 == 0:
+            done = min(k + batch_size, n)
+            elapsed = _now() - t0
+            eta = elapsed / max(done, 1) * (n - done)
+            bar_w = 20
+            filled = int(bar_w * done / max(n, 1))
+            bar = "#" * filled + "-" * (bar_w - filled)
+            on_progress(f"  pickscore [{bar}] {done}/{n} ({int(elapsed)}s elapsed, ~{int(eta)}s left)")
+    _write_cache(PICKSCORE_CACHE, cache)
+    return out
+
+
 def score_all(model: str = "siglip2-b", on_progress=print) -> dict:
     idx = MuserIndex()
     t = idx._open(model)
@@ -129,14 +355,7 @@ def score_all(model: str = "siglip2-b", on_progress=print) -> dict:
     nsfw_blend = NSFW_W * falcon + (1 - NSFW_W) * _pct(risk["nsfw"])
 
     nov_p, aes_p = _pct(novelty), _pct(aesthetic)
-    interesting = 0.6 * nov_p + 0.4 * aes_p
-    metrics = {
-        "interesting": _pct(interesting), "novelty": nov_p, "aesthetic": aes_p,
-        "nsfw": _pct(nsfw_blend), "private": _pct(risk["private"]),
-    }
-
-    scores = {paths[i]: {m: round(float(metrics[m][i]), 4) for m in metrics} for i in range(n)}
-
+    interesting = 0.6 * nov_p + 0.4 * aes_p  # initial blend (zero-shot aesthetic only)
     # ---- duplicate groups (reuse the kNN graph): union near-identical images so the
     # ranked tabs show one canonical per group with its copies, like search dedup. ----
     on_progress("duplicate groups…")
@@ -159,14 +378,59 @@ def score_all(model: str = "siglip2-b", on_progress=print) -> dict:
     groups = defaultdict(list)
     for i in range(n):
         groups[find(i)].append(i)
-    inter = metrics["interesting"]
-    canonical, dupes = [], {}
+    canon_idx_for: dict[int, int] = {}  # global idx → its canonical idx
+    canonical_idx: list[int] = []
+    canonical: list[str] = []
+    dupes: dict[str, list[str]] = {}
     for members in groups.values():
-        members.sort(key=lambda i: -inter[i])  # representative = highest-interesting copy
-        canon = paths[members[0]]
-        canonical.append(canon)
+        members.sort(key=lambda i: -interesting[i])  # rep = highest-interesting copy
+        rep_i = members[0]
+        canonical_idx.append(rep_i)
+        canonical.append(paths[rep_i])
+        for m in members:
+            canon_idx_for[m] = rep_i
         if len(members) > 1:
-            dupes[canon] = [paths[i] for i in members]
+            dupes[paths[rep_i]] = [paths[i] for i in members]
+    on_progress(f"  {len(canonical)} canonical of {n}")
+
+    # ---- heavy real aesthetic models — compute on canonical only, broadcast to dupes ----
+    canon_paths = [paths[i] for i in canonical_idx]
+    canon_X = X[canonical_idx]  # for the clip-l14 fast path
+
+    on_progress(f"aesthetic_v2: LAION-Aes V2 (MLP on CLIP-L/14) over {len(canon_paths)} canonical…")
+    try:
+        aes_v2_canon = _aesthetic_v2(canon_paths, model, canon_X, on_progress)
+    except Exception as e:
+        on_progress(f"  aesthetic_v2 FAILED: {type(e).__name__}: {e}")
+        aes_v2_canon = np.full(len(canon_paths), np.nan, dtype=np.float32)
+
+    on_progress(f"pickscore: PickScore v1 over {len(canon_paths)} canonical…")
+    try:
+        pick_canon = _pickscore(canon_paths, on_progress)
+    except Exception as e:
+        on_progress(f"  pickscore FAILED: {type(e).__name__}: {e}")
+        pick_canon = np.full(len(canon_paths), np.nan, dtype=np.float32)
+
+    # Broadcast canonical scores to every member of the group.
+    aes_v2 = np.zeros(n, dtype=np.float32)
+    pick = np.zeros(n, dtype=np.float32)
+    canon_pos = {ci: k for k, ci in enumerate(canonical_idx)}
+    for i in range(n):
+        k = canon_pos[canon_idx_for[i]]
+        aes_v2[i] = aes_v2_canon[k]
+        pick[i] = pick_canon[k]
+
+    aes_v2_p = _pct(aes_v2) if not np.all(np.isnan(aes_v2)) else np.zeros(n, dtype=np.float64)
+    pick_p = _pct(pick) if not np.all(np.isnan(pick)) else np.zeros(n, dtype=np.float64)
+
+    metrics = {
+        "interesting": _pct(interesting),  # unchanged blend (novelty + zero-shot aesthetic)
+        "novelty": nov_p, "aesthetic": aes_p,
+        "aesthetic_v2": aes_v2_p, "pickscore": pick_p,
+        "nsfw": _pct(nsfw_blend), "private": _pct(risk["private"]),
+    }
+
+    scores = {paths[i]: {m: round(float(metrics[m][i]), 4) for m in metrics} for i in range(n)}
 
     out = {"model": model, "n": n, "metrics": list(metrics.keys()), "scores": scores,
            "canonical": canonical, "dupes": dupes}
