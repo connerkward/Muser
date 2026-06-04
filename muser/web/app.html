@@ -1134,6 +1134,10 @@ $("#dupes").onclick=e=>{ if(e.target.id==="dupes") $("#dupes").classList.remove(
 // ---- view switching (Search / Explore / Interesting / Review) ----
 const VIEWS={search:"searchView",explore:"exploreView",interesting:"interestingView",review:"reviewView",ai:"aiView"};
 const NAVS={search:"navSearch",explore:"navExplore",interesting:"navInteresting",review:"navReview",ai:"navAI"};
+const VIEW_TITLES={search:"Search",explore:"Explore",interesting:"Interesting",review:"Review",ai:"AI"};
+// Internal flag: when popstate or initial-route call showView, suppress the
+// pushState so back/forward don't double-stack history entries.
+let _suppressHistory=false;
 function showView(v){
   for(const k in VIEWS) $("#"+VIEWS[k]).style.display = k===v?"":"none";
   for(const k in NAVS) $("#"+NAVS[k]).className="nav"+(k===v?" on":"");
@@ -1150,12 +1154,38 @@ function showView(v){
   if(v==="interesting") loadScores("#scoreGrid","#imsg","#imetric");
   if(v==="review") loadScores("#reviewGrid","#rmsg","#rcat");
   if(v==="ai") loadAI();
+  // ---- URL + title sync ----
+  // One push per user-initiated tab switch; popstate/initial routing pass
+  // through _suppressHistory so back/forward don't stack duplicates.
+  document.title = "Muser — " + (VIEW_TITLES[v] || "semantic image search");
+  if(!_suppressHistory){
+    const url = "#/" + v;
+    // Skip pushing if the hash already matches (e.g. user clicked the active tab).
+    if(location.hash !== url) history.pushState({view:v}, "", url);
+  }
 }
 // Wire the mini-nav buttons to the same showView pipeline.
 document.querySelectorAll(".mini-nav button").forEach(b => {
   b.onclick = () => showView(b.dataset.view);
 });
 for(const k in NAVS) $("#"+NAVS[k]).onclick=()=>showView(k);
+
+// ---- hash routing: #/explore -> Explore tab, back/forward restores prior tab ----
+// Parse the leading view segment from a hash like "#/explore" or "#/search?q=..".
+function viewFromHash(){
+  const h = location.hash || "";
+  const m = h.match(/^#\/?([a-z]+)/i);
+  const v = m && m[1] in VIEWS ? m[1] : null;
+  if(h && h !== "#" && h !== "#/" && !v){
+    console.warn("muser: unknown route hash", h, "— falling back to search");
+  }
+  return v || "search";
+}
+window.addEventListener("popstate", (e) => {
+  const v = (e.state && e.state.view && e.state.view in VIEWS) ? e.state.view : viewFromHash();
+  _suppressHistory = true;
+  try { showView(v); } finally { _suppressHistory = false; }
+});
 
 // ---- AI tab: images whose C2PA Content Credentials declare AI origin ----
 // Backed by a one-time, persisted library scan (~/.muser/c2pa.json) — probing
@@ -1353,7 +1383,16 @@ $("#indexPick").onclick = async () => {
   } catch (e) { toast("index failed (check path)"); }
 };
 
-pollStatus(); loadFolders(); loadClusterChips(); showView("search");
+pollStatus(); loadFolders(); loadClusterChips();
+// Initial route: respect ?#/<view> in the URL so deep-links / reload land on
+// the right tab. Use replaceState (via the suppress flag + explicit replace) so
+// we don't leave an empty entry behind the first real navigation.
+{
+  const initial = viewFromHash();
+  _suppressHistory = true;
+  try { showView(initial); } finally { _suppressHistory = false; }
+  history.replaceState({view: initial}, "", "#/" + initial);
+}
 </script>
 </body>
 </html>
