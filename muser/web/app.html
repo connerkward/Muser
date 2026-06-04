@@ -276,6 +276,11 @@
     <button class="primary" id="go">Search</button>
   </div>
   <div class="chips" id="chips"></div>
+  <div class="row tools" id="negStrengthRow" style="display:none">
+    <span>Exclude strength:</span>
+    <input type="range" id="negStrength" min="0" max="1.5" step="0.05" value="0.5" />
+    <span class="mut" id="negStrengthVal">0.50</span>
+  </div>
   <div class="row tools">
     <span>Scope:</span>
     <button id="scopePick" title="Limit search to a folder"><span id="scopeLabel">All folders</span></button>
@@ -400,12 +405,15 @@ window.fetch = (...args) => {
   return _origFetch(...args).finally(done);
 };
 
-// ---- selection cart: accumulate picks across searches, download as a zip,
-// clear on download or tab close. sessionStorage (not localStorage) gives us
-// the "end of session" semantics for free.
+// ---- selection cart: accumulate picks across searches, download as a zip.
+// localStorage so curation work survives tab close + reboot. Clear with the
+// "Clear" button in the cart modal or by downloading (download auto-clears).
+// Migrates any leftover sessionStorage cart from before this change.
 const CART_KEY = "muser-cart";
-const _cart = new Set(JSON.parse(sessionStorage.getItem(CART_KEY) || "[]"));
-function saveCart(){ sessionStorage.setItem(CART_KEY, JSON.stringify([..._cart])); updateCartUI(); }
+const _legacy = sessionStorage.getItem(CART_KEY);
+if (_legacy && !localStorage.getItem(CART_KEY)) { localStorage.setItem(CART_KEY, _legacy); sessionStorage.removeItem(CART_KEY); }
+const _cart = new Set(JSON.parse(localStorage.getItem(CART_KEY) || "[]"));
+function saveCart(){ localStorage.setItem(CART_KEY, JSON.stringify([..._cart])); updateCartUI(); }
 function cartHas(p){ return _cart.has(p); }
 function cartToggle(p, btn){
   if (_cart.has(p)) { _cart.delete(p); btn.textContent = "+ Add";   btn.classList.remove("added"); }
@@ -746,7 +754,8 @@ async function search(){
   if(_searchAbort) _searchAbort.abort();
   _searchAbort = new AbortController();
   let r;
-  try { r = await (await fetch(`/api/search?q=${enc(q)}&k=${_k}${folder?`&folder=${enc(folder)}`:""}${neg?`&neg=${enc(neg)}`:""}`, {signal:_searchAbort.signal})).json(); }
+  const negS = parseFloat($("#negStrength").value);
+  try { r = await (await fetch(`/api/search?q=${enc(q)}&k=${_k}${folder?`&folder=${enc(folder)}`:""}${neg?`&neg=${enc(neg)}&neg_strength=${negS}`:""}`, {signal:_searchAbort.signal})).json(); }
   catch(e){ if(e.name==="AbortError") return; _loading=false; throw e; }   // abort: a newer search now owns _loading
   _renderHits(r);
   _loading=false;
@@ -892,7 +901,15 @@ $("#q").addEventListener("input", ()=>{
   $("#qMini").value = $("#q").value;     // mirror main → mini
   liveSearch();
 });
-$("#neg").addEventListener("input", () => { $("#negMini").value = $("#neg").value; });
+$("#neg").addEventListener("input", () => {
+  $("#negMini").value = $("#neg").value;
+  // Show the strength slider only when an exclude term exists.
+  $("#negStrengthRow").style.display = $("#neg").value.trim() ? "" : "none";
+});
+$("#negStrength").addEventListener("input", () => {
+  $("#negStrengthVal").textContent = parseFloat($("#negStrength").value).toFixed(2);
+  if ($("#q").value.trim().length >= 2 && $("#neg").value.trim()) liveSearch();
+});
 $("#q").addEventListener("keydown", e => {
   if (e.key === "Enter") { clearTimeout(_searchTimer); search(); }
 });
