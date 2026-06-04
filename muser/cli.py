@@ -312,5 +312,23 @@ def web():
     launch()
 
 
+@app.command()
+def uid(path: str = typer.Argument(..., help="Image path to hash")):
+    """Print the stable 12-char uid for a given path.
+
+    Uid = blake2b(path, digest_size=6).hexdigest(). Same string in, same uid
+    out, forever. Useful for joining cache files (~/.muser/scores.json,
+    aesthetic_v2_cache.json, captions.jsonl) keyed by path back to uids
+    surfaced by the API and web UI. No DB lookup — just a hash of the string,
+    so the path doesn't need to be indexed.
+    """
+    from .index import uid_for
+
+    # Match the canonical-path resolution the indexer uses (Path.resolve()),
+    # so `muser uid ./foo.jpg` and `muser uid /abs/.../foo.jpg` agree.
+    resolved = str(Path(path).expanduser().resolve())
+    con.print(uid_for(resolved))
+
+
 if __name__ == "__main__":
     app()

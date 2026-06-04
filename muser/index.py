@@ -8,6 +8,7 @@ measure the real path, not a separate in-memory shortcut.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,24 @@ from .embedders import Embedder
 
 DEFAULT_DB = Path.home() / ".muser" / "db"
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif", ".tiff"}
+
+
+def uid_for(path: str) -> str:
+    """Stable, short, comparable-across-runs id for a path. 12-char hex (48 bits
+    of blake2b — collision prob negligible at 27k images). Pure function: same
+    path string in, same uid out, forever. Moving the file changes the path,
+    which changes the uid — that's the right behavior for an indexer keyed by
+    canonical absolute path.
+
+    No DB lookup needed; this is hash-of-the-path. Computed on the fly at read
+    time everywhere (cheap — ~µs per call), so we don't need to migrate the
+    LanceDB schema or force a re-embed of the existing 27k rows.
+    """
+    return hashlib.blake2b(path.encode("utf-8"), digest_size=6).hexdigest()
+
+
+# Alias kept private for callers that want the underscored convention.
+_uid_for = uid_for
 
 
 def walk_images(folder: str | Path, recursive: bool = True) -> list[str]:

@@ -780,10 +780,15 @@ function _renderHits(r){
     const scoreTitle = h.prob!=null ? "match probability (SigLIP-calibrated)" : "cosine similarity";
     const dupes=h.dupe_count||1;
     const badge = dupes>1 ? `<span class="dupe" title="${dupes} copies — click to see all">${dupes} copies</span>` : "";
+    // uid: stable 12-char blake2b of the path — set as data-uid on the card so
+    // it's queryable from DevTools, and as the `title` tooltip so the user can
+    // see it. Not rendered visually (keeps the filename UI intact).
+    const uid=h.uid||"";
     const c=document.createElement("div"); c.className="card";
+    c.dataset.uid=uid;
     c.innerHTML=`
-      <div class="thumb"><span class="scoreb" title="${scoreTitle}">${pct}</span>${badge}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}&size=${THUMB}" title="${h.name}"></div>
-      <div class="meta"><div class="name" title="${h.path}">${h.name}</div>
+      <div class="thumb"><span class="scoreb" title="${scoreTitle}">${pct}</span>${badge}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}&size=${THUMB}" title="${h.name} · uid:${uid}"></div>
+      <div class="meta"><div class="name" title="${h.path}${uid?' · uid:'+uid:''}">${h.name}</div>
         <div class="bar"><i style="width:${pct}%"></i></div></div>
       <div class="foot">
         <button class="add" data-path="${h.path.replace(/"/g, '&quot;')}" title="Add to selection (session cart)">${cartHas(h.path) ? "× Added" : "+ Add"}</button>
@@ -1062,9 +1067,11 @@ async function loadScores(gridSel,msgSel,metricSel){
   }
   r.items.forEach(h=>{
     const dupe = (h.dupe_count||1)>1 ? `<span class="dupe" title="${h.dupe_count} copies">${h.dupe_count} copies</span>` : "";
+    const uid=h.uid||"";
     const c=document.createElement("div"); c.className="card";
-    c.innerHTML=`<div class="thumb"><span class="scoreb">${Math.round(h.score*100)}</span>${dupe}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}"></div>
-      <div class="meta"><div class="name" title="${h.path}">${h.name}</div></div>
+    c.dataset.uid=uid;
+    c.innerHTML=`<div class="thumb"><span class="scoreb">${Math.round(h.score*100)}</span>${dupe}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}" title="${h.name}${uid?' · uid:'+uid:''}"></div>
+      <div class="meta"><div class="name" title="${h.path}${uid?' · uid:'+uid:''}">${h.name}</div></div>
       <div class="foot"><button class="lens" title="Copy image + open Google Lens (⌘V to search where it appears)">Lens</button></div>`;
     c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
     c.querySelector(".lens").onclick=e=>lensSearch(h.path,e.currentTarget);
@@ -1090,7 +1097,14 @@ async function loadClusters(){
   if(!r.built){ $("#cmsg").textContent="Not built yet — run:  muser cluster"; return; }
   $("#cmsg").textContent=`${r.clusters.length} clusters · ${r.n.toLocaleString()} images`;
   r.clusters.forEach(c=>{
-    const mos=c.reps.slice(0,4).map(p=>`<img loading="lazy" src="/api/thumb?path=${enc(p)}">`).join("");
+    const mos=c.reps.slice(0,4).map(r=>{
+      // /api/clusters now returns reps as [{path, uid}, …]; tolerate the older
+      // list-of-strings shape too so a hot-reload of the page during a service
+      // restart doesn't blank the cluster grid.
+      const p=(typeof r==="string")?r:r.path;
+      const uid=(typeof r==="string")?"":r.uid;
+      return `<img loading="lazy" src="/api/thumb?path=${enc(p)}" data-uid="${uid}" title="${p}">`;
+    }).join("");
     const card=document.createElement("div"); card.className="card cluster";
     card.innerHTML=`<div class="mos">${mos}</div><div class="lab">${c.label}</div>
       <div class="sub" title="${c.sublabel}">${c.sublabel}</div><div class="cnt">${c.size.toLocaleString()} images</div>`;
@@ -1145,9 +1159,11 @@ async function loadMoreClusterMembers(isFirst){
   const g=$("#cdgrid");
   if(isFirst) g.replaceChildren();                    // drop skeletons before the first real page lands
   r.members.forEach(h=>{
+    const uid=h.uid||"";
     const c=document.createElement("div"); c.className="card";
-    c.innerHTML=`<div class="thumb"><img loading="lazy" src="/api/thumb?path=${enc(h.path)}"></div>
-      <div class="meta"><div class="name" title="${h.path}">${h.name}</div></div>`;
+    c.dataset.uid=uid;
+    c.innerHTML=`<div class="thumb"><img loading="lazy" src="/api/thumb?path=${enc(h.path)}" title="${h.name}${uid?' · uid:'+uid:''}"></div>
+      <div class="meta"><div class="name" title="${h.path}${uid?' · uid:'+uid:''}">${h.name}</div></div>`;
     c.querySelector(".thumb").onclick=()=>window.open(`/api/image?path=${enc(h.path)}`,"_blank");
     g.appendChild(c);
   });

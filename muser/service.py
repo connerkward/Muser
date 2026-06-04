@@ -18,7 +18,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from .index import MuserIndex
+from .index import MuserIndex, uid_for
 from .registry import DEFAULT_MODEL, load_model, model_names
 
 WEB = Path(__file__).resolve().parent / "web" / "app.html"
@@ -434,6 +434,8 @@ def create_app(model: str = DEFAULT_MODEL):
                 {"path": p, "name": os.path.basename(p), "score": round(s, 4), "dupes": [p], "dupe_count": 1}
                 for p, s in state.index.search(state.model_name, qv, k=k, folder=folder)
             ]
+        for r in results:
+            r["uid"] = uid_for(r["path"])
         _add_prob(results)
         return results
 
@@ -490,7 +492,12 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.get("/api/folders")
     def folders():
-        return {"folders": state.index.folders(state.model_name)}
+        # uid the folder *path* itself so the picker has stable React-style keys
+        # (same hash function — a folder is just another path string).
+        items = state.index.folders(state.model_name)
+        for it in items:
+            it["uid"] = uid_for(it["folder"])
+        return {"folders": items}
 
     @app.post("/api/zip")
     def cart_zip(req: CartReq):
@@ -523,6 +530,7 @@ def create_app(model: str = DEFAULT_MODEL):
         if not members:
             raise HTTPException(400, "no valid files in cart")
         missing = 0
+        manifest: dict[str, dict] = {}
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
             for src, arc, arc_stem in members:
@@ -534,6 +542,18 @@ def create_app(model: str = DEFAULT_MODEL):
                     zf.writestr(f"{arc_stem}.txt", cap.encode("utf-8"))
                 else:
                     missing += 1
+                # Manifest: uid → {path, arcname, caption?}. Lets a downstream
+                # LoRA training run correlate every shipped basename back to its
+                # original source on disk (and the captioning provenance).
+                manifest[uid_for(src)] = {
+                    "path": src,
+                    "arcname": arc,
+                    "caption": cap or None,
+                }
+            zf.writestr(
+                "manifest.json",
+                json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
+            )
         return Response(
             content=buf.getvalue(),
             media_type="application/zip",
@@ -723,7 +743,13 @@ def create_app(model: str = DEFAULT_MODEL):
         return {
             "built": True, "method": method, "methods": list(c["methods"].keys()), "n": c["n"],
             "clusters": [
-                {"id": cl["id"], "label": cl["label"], "sublabel": cl["sublabel"], "size": cl["size"], "reps": cl["reps"]}
+                {
+                    "id": cl["id"], "label": cl["label"], "sublabel": cl["sublabel"],
+                    "size": cl["size"],
+                    # reps is a list of path strings; promote to {path, uid} objects
+                    # so the UI can use uid as a stable React-style key.
+                    "reps": [{"path": p, "uid": uid_for(p)} for p in cl["reps"]],
+                }
                 for cl in m["clusters"]
             ],
         }
@@ -735,7 +761,10 @@ def create_app(model: str = DEFAULT_MODEL):
             return {"total": 0, "members": []}
         members = c["methods"][method]["members"].get(str(id), [])
         page = members[offset : offset + limit]
-        return {"total": len(members), "members": [{"path": p, "name": os.path.basename(p)} for p in page]}
+        return {
+            "total": len(members),
+            "members": [{"path": p, "name": os.path.basename(p), "uid": uid_for(p)} for p in page],
+        }
 
     # ---- per-image captions: Florence-2 + user edits (~/.muser/captions.jsonl) ----
     # JSONL is append-only. Multiple rows per path are kept on disk for history;
@@ -815,7 +844,7 @@ def create_app(model: str = DEFAULT_MODEL):
         cap = _load_captions().get(path)
         if not cap:
             raise HTTPException(404, "no caption for this path")
-        return {"path": path, "caption": cap}
+        return {"path": path, "uid": uid_for(path), "caption": cap}
 
     @app.post("/api/caption")
     def caption_write(req: CaptionWriteReq):
@@ -866,7 +895,8 @@ def create_app(model: str = DEFAULT_MODEL):
         for p in page:
             d = dupes.get(p, [p])
             items.append({
-                "path": p, "name": os.path.basename(p), "score": s["scores"][p].get(metric, 0),
+                "path": p, "uid": uid_for(p), "name": os.path.basename(p),
+                "score": s["scores"][p].get(metric, 0),
                 "scores": s["scores"][p], "dupes": d, "dupe_count": len(d),
             })
         return {"built": True, "metric": metric, "metrics": s["metrics"], "total": len(ranked),
