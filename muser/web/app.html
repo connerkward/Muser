@@ -135,6 +135,11 @@
   .cart-actions button:hover { color:var(--fg); border-bottom-color:var(--fg); }
   .cart-actions button#cartDownload { color:var(--fg); border-bottom-color:var(--fg); }
   .cart-actions button#cartDownload:hover { opacity:.7; }
+  /* Checkout — the headline primary action: solid fg pill, distinct from the
+     plain "Download zip" no-processing fallback beside it. */
+  .cart-actions button#cartCheckout { background:var(--fg); color:var(--bg);
+                                      border:1px solid var(--fg); padding:7px 16px; border-radius:2px; }
+  .cart-actions button#cartCheckout:hover { opacity:.85; border-bottom-color:var(--fg); }
   /* Cost / time estimate panel — italic-serif labels paired with right-aligned
      numbers in a mut tone, so the eye reads "Captioning ……… ~$0.05 ~3 min" as
      a single information row. Rendered above .cart-actions; collapses to a
@@ -174,6 +179,47 @@
   .busy-bar { width:220px; height:1px; background:var(--line); overflow:hidden; }
   .busy-bar > i { display:block; height:100%; background:var(--fg);
                   transition:width .2s linear; width:0; }
+
+  /* Checkout progress — a NON-blocking floating panel (not the .busy overlay).
+     Sits bottom-right, no backdrop, so the rest of the app stays clickable
+     while captioning + upscaling run in the background. */
+  .ckout { position:fixed; right:22px; bottom:22px; z-index:28; width:340px;
+           max-width:calc(100vw - 44px); background:var(--bg);
+           border:1px solid var(--line); padding:18px 20px 16px;
+           box-shadow:0 8px 30px rgba(0,0,0,.18);
+           display:none; animation:ckoutIn .26s cubic-bezier(0.22,1,0.36,1); }
+  .ckout.show { display:block; }
+  @keyframes ckoutIn { from { opacity:0; transform:translateY(10px); }
+                       to   { opacity:1; transform:translateY(0); } }
+  .ckout h4 { margin:0 0 12px; font:italic 400 17px/1.2 var(--serif); color:var(--fg); }
+  .ckout .x { float:right; cursor:pointer; color:var(--mut); font-size:18px; line-height:1; }
+  .ckout .pbrow { margin:10px 0; }
+  .ckout .pblab { display:flex; justify-content:space-between; font-size:11px;
+                  color:var(--mut); margin-bottom:5px; font-variant-numeric:tabular-nums; }
+  .ckout .pbar { width:100%; height:2px; background:var(--line); overflow:hidden; }
+  .ckout .pbar > i { display:block; height:100%; background:var(--fg);
+                     transition:width .25s linear; width:0; }
+  .ckout .ckfoot { margin-top:14px; display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  .ckout .ckfoot button { background:transparent; border:0; padding:0; color:var(--mut);
+                          font-size:12px; cursor:pointer; border-bottom:1px solid transparent; }
+  .ckout .ckfoot button:hover { color:var(--fg); border-bottom-color:var(--fg); }
+  .ckout .ckfoot button.primary-x { color:var(--fg); border-bottom-color:var(--fg); padding:0; background:none; }
+  .ckout .cksum { font-size:12px; color:var(--fg); line-height:1.5; margin-top:6px;
+                  font-family:var(--serif); font-style:italic; }
+  .ckout .ckerr { color:#c0392b; font-style:normal; font-family:var(--sans); }
+  .ckout .ckerr-list { font-size:11px; color:var(--mut); margin-top:6px; max-height:120px;
+                       overflow:auto; font-family:var(--sans); word-break:break-all; }
+  .ckout .ckerr-list div { padding:2px 0; }
+  /* Minimized pill: clickable chip that re-opens the panel; polling continues. */
+  .ckpill { position:fixed; right:22px; bottom:22px; z-index:28; display:none;
+            align-items:center; gap:8px; background:var(--fg); color:var(--bg);
+            padding:8px 14px; font-size:12px; cursor:pointer;
+            font-variant-numeric:tabular-nums; box-shadow:0 6px 22px rgba(0,0,0,.22);
+            animation:ckoutIn .26s cubic-bezier(0.22,1,0.36,1); }
+  .ckpill.show { display:inline-flex; }
+  .ckpill .ckspin { width:9px; height:9px; border:1.5px solid rgba(255,255,255,.35);
+                    border-top-color:var(--bg); border-radius:50%;
+                    animation:spin .9s linear infinite; display:inline-block; }
 
   .empty { color:var(--mut); text-align:center; padding:90px 0;
            font:italic 400 15px/1.4 var(--serif); }
@@ -704,13 +750,45 @@
   <div class="sub" id="cartSub"></div>
   <div class="files" id="cartFiles"></div>
   <div class="cart-est" id="cartEst"></div>
+  <div class="cart-capprompt" style="margin-top:18px">
+    <div style="font-size:11px;color:var(--mut);letter-spacing:.05em;text-transform:uppercase;margin-bottom:6px;display:flex;justify-content:space-between;align-items:baseline">
+      <span>Caption prompt</span>
+      <a href="#" id="capPromptReset" style="color:var(--mut);font-size:11px;text-transform:none;letter-spacing:0;text-decoration:underline;cursor:pointer">reset to default</a>
+    </div>
+    <textarea id="capPrompt" rows="2"
+      placeholder="Default: one concrete sentence, subjects only, no style words — type to override"
+      style="width:100%;font:italic 400 12px/1.5 var(--serif);color:var(--fg);background:transparent;border:1px solid var(--line);border-radius:2px;padding:8px 10px;resize:vertical;outline:none;box-sizing:border-box"></textarea>
+  </div>
   <div class="cart-actions">
+    <button id="cartCheckout" class="primary-action">Checkout</button>
     <button id="cartDownload">Download zip</button>
     <button id="cartUpAll" title="Toggle the 4× UltraSharp upscale flag on every cart item">Toggle upscale all</button>
     <button id="cartClear">Clear</button>
   </div>
   <div class="cart-note" id="cartCapNote"></div>
 </div></div>
+
+<!-- Checkout progress — NON-blocking floating panel + minimized pill. -->
+<div class="ckout" id="ckout">
+  <span class="x" id="ckoutHide" title="Hide (keeps running)">×</span>
+  <h4 id="ckoutTitle">Checkout</h4>
+  <div class="pbrow">
+    <div class="pblab"><span>Captioning</span><span id="ckCapN">0 / 0</span></div>
+    <div class="pbar"><i id="ckCapBar"></i></div>
+  </div>
+  <div class="pbrow">
+    <div class="pblab"><span>Upscaling</span><span id="ckUpN">0 / 0</span></div>
+    <div class="pbar"><i id="ckUpBar"></i></div>
+  </div>
+  <div class="cksum" id="ckSum" style="display:none"></div>
+  <div class="ckerr-list" id="ckErrList" style="display:none"></div>
+  <div class="ckfoot" id="ckFoot">
+    <button id="ckoutHideBtn">Hide</button>
+  </div>
+</div>
+<div class="ckpill" id="ckpill" title="Open checkout progress">
+  <span class="ckspin" id="ckpillSpin"></span><span id="ckpillTxt">Checkout ⟳ 0%</span>
+</div>
 <div class="toast" id="toast"></div>
 
 <div class="modal" id="dupes"><div class="box">
@@ -1117,6 +1195,182 @@ $("#cartDownload").onclick = downloadCart;
 $("#cartUpAll").onclick = () => { cartToggleUpscaleAll(); openCart(); };
 $("#cartClear").onclick = () => { _cart.clear(); saveCart(); syncCartButtons(); $("#cartModal").classList.remove("show"); toast("Cart cleared"); };
 updateCartUI();
+
+// ---- caption-prompt override: persisted, optional. Empty = server default.
+const CAP_PROMPT_KEY = "muser-caption-prompt";
+(function initCapPrompt(){
+  const ta = $("#capPrompt");
+  if (!ta) return;
+  ta.value = localStorage.getItem(CAP_PROMPT_KEY) || "";
+  ta.addEventListener("input", () => {
+    const v = ta.value;
+    if (v.trim()) localStorage.setItem(CAP_PROMPT_KEY, v);
+    else localStorage.removeItem(CAP_PROMPT_KEY);
+  });
+  const reset = $("#capPromptReset");
+  if (reset) reset.onclick = (e) => {
+    e.preventDefault();
+    ta.value = "";
+    localStorage.removeItem(CAP_PROMPT_KEY);
+    toast("Caption prompt reset to default");
+  };
+})();
+
+// ---- Checkout: non-blocking background job (caption + upscale → zip).
+// Distinct from the model-load busy overlay; the user keeps searching while
+// this runs. State lives in `_ckoutJob` (current job id) so a re-click re-opens
+// the existing panel rather than starting a duplicate.
+let _ckoutJob = null;       // active/last job id, or null
+let _ckoutTimer = null;     // poll setTimeout handle
+const CKOUT_POLL_MS = 700;
+
+function ckPct(s){
+  const cd = (s.caption && s.caption.done) || 0;
+  const ct = (s.caption && s.caption.total) || 0;
+  const ud = (s.upscale && s.upscale.done) || 0;
+  const ut = (s.upscale && s.upscale.total) || 0;
+  const total = ct + ut;
+  return total ? Math.round((cd + ud) / total * 100) : (s.status === "done" ? 100 : 0);
+}
+function setBar(barEl, done, total){
+  barEl.style.width = (total ? Math.round(done / total * 100) : (done ? 100 : 0)) + "%";
+}
+function showCkout(){ $("#ckout").classList.add("show"); $("#ckpill").classList.remove("show"); }
+function hideCkout(){ $("#ckout").classList.remove("show"); $("#ckpill").classList.add("show"); }
+
+async function startCheckout(){
+  // Already running/finished → just re-open the panel, never start a duplicate.
+  if (_ckoutJob) { showCkout(); return; }
+  if (!_cart.size) return;
+  const items = [..._cart.entries()].map(([path, meta]) => ({path, upscale: !!(meta && meta.upscale)}));
+  const promptVal = ($("#capPrompt").value || "").trim();
+  let res;
+  try {
+    res = await fetch("/api/checkout", {
+      method: "POST", headers: {"content-type": "application/json"},
+      body: JSON.stringify({ items, caption_prompt: promptVal || null, force_caption: false }),
+    });
+  } catch {
+    toast("Checkout failed — is the service running?");
+    return;
+  }
+  if (!res.ok) {
+    let msg = ""; try { const j = await res.json(); msg = j.detail || ""; } catch {}
+    toast("Checkout failed: " + (msg || res.status));
+    return;
+  }
+  let j; try { j = await res.json(); } catch { j = {}; }
+  if (!j.job_id) { toast("Checkout failed: no job id"); return; }
+  _ckoutJob = j.job_id;
+  // Reset panel UI for a fresh run.
+  $("#ckoutTitle").textContent = "Checkout";
+  $("#ckCapN").textContent = "0 / 0"; $("#ckUpN").textContent = "0 / 0";
+  setBar($("#ckCapBar"), 0, 0); setBar($("#ckUpBar"), 0, 0);
+  $("#ckSum").style.display = "none"; $("#ckSum").innerHTML = "";
+  $("#ckErrList").style.display = "none"; $("#ckErrList").innerHTML = "";
+  $("#ckFoot").innerHTML = `<button id="ckoutHideBtn">Hide</button>`;
+  $("#ckoutHideBtn").onclick = hideCkout;
+  $("#ckpillSpin").style.display = "";
+  $("#cartModal").classList.remove("show");
+  showCkout();
+  pollCheckout();
+}
+
+async function pollCheckout(){
+  if (!_ckoutJob) return;
+  let s;
+  try {
+    const r = await fetch(`/api/checkout/status?id=${enc(_ckoutJob)}`);
+    if (!r.ok) throw new Error(r.status);
+    s = await r.json();
+  } catch {
+    // transient — retry on the same cadence.
+    _ckoutTimer = setTimeout(pollCheckout, CKOUT_POLL_MS);
+    return;
+  }
+  renderCheckout(s);
+  if (s.status === "running") {
+    _ckoutTimer = setTimeout(pollCheckout, CKOUT_POLL_MS);
+  } else {
+    if (_ckoutTimer) { clearTimeout(_ckoutTimer); _ckoutTimer = null; }
+  }
+}
+
+function renderCheckout(s){
+  const cap = s.caption || {done:0,total:0};
+  const up = s.upscale || {done:0,total:0};
+  $("#ckCapN").textContent = `${cap.done||0} / ${cap.total||0}`;
+  $("#ckUpN").textContent = `${up.done||0} / ${up.total||0}`;
+  setBar($("#ckCapBar"), cap.done||0, cap.total||0);
+  setBar($("#ckUpBar"), up.done||0, up.total||0);
+  const pct = ckPct(s);
+  // Pill text mirrors live progress (or terminal state).
+  const pillTxt = $("#ckpillTxt"), pillSpin = $("#ckpillSpin");
+
+  if (s.status === "running") {
+    pillTxt.textContent = `Checkout ⟳ ${pct}%`;
+    pillSpin.style.display = "";
+    return;
+  }
+  if (s.status === "error") {
+    $("#ckoutTitle").textContent = "Checkout failed";
+    pillTxt.textContent = "✕ Checkout failed"; pillSpin.style.display = "none";
+    const sum = $("#ckSum");
+    sum.style.display = ""; sum.innerHTML = `<span class="ckerr">${s.error || "Unknown error."}</span>`;
+    renderCkErrors(s.errors);
+    $("#ckFoot").innerHTML = `<button id="ckoutCloseBtn" class="primary-x">Close</button>`;
+    $("#ckoutCloseBtn").onclick = closeCheckout;
+    return;
+  }
+  // done
+  $("#ckoutTitle").textContent = "Checkout ready";
+  pillTxt.textContent = "✓ Checkout ready"; pillSpin.style.display = "none";
+  const captioned = s.captioned != null ? s.captioned : (cap.done || 0);
+  const upscaled = s.upscaled != null ? s.upscaled : (up.done || 0);
+  const errs = s.errors || [];
+  const sum = $("#ckSum");
+  sum.style.display = "";
+  let html = `✓ ${captioned} captioned · ${upscaled} upscaled`;
+  if (s.captions_missing > 0) html += ` <span style="color:var(--mut)">· ${s.captions_missing} without caption</span>`;
+  if (errs.length) {
+    html += ` · <a href="#" id="ckErrToggle" class="ckerr" style="text-decoration:underline;cursor:pointer">${errs.length} failed</a>`;
+  }
+  sum.innerHTML = html;
+  if (errs.length) {
+    $("#ckErrToggle").onclick = (e) => {
+      e.preventDefault();
+      const list = $("#ckErrList");
+      list.style.display = list.style.display === "none" ? "" : "none";
+    };
+    renderCkErrors(errs);
+  }
+  // Footer: Download zip (only meaningful when ready) + Close.
+  const zipBtn = s.zip_ready === false ? "" : `<button id="ckoutZip" class="primary-x">Download zip</button>`;
+  $("#ckFoot").innerHTML = `${zipBtn}<button id="ckoutCloseBtn">Close</button>`;
+  const z = $("#ckoutZip");
+  if (z) z.onclick = () => { window.location = "/api/checkout/zip?id=" + enc(_ckoutJob); };
+  $("#ckoutCloseBtn").onclick = closeCheckout;
+}
+
+function renderCkErrors(errs){
+  if (!errs || !errs.length) return;
+  const list = $("#ckErrList");
+  list.innerHTML = errs.map(e =>
+    `<div>${(e.stage||"?")}: ${e.path||""} — ${e.error||""}</div>`).join("");
+}
+
+// Close: dismiss the panel AND drop the job reference (so a later checkout
+// starts fresh). Only offered on terminal states; Hide is the non-terminal exit.
+function closeCheckout(){
+  $("#ckout").classList.remove("show");
+  $("#ckpill").classList.remove("show");
+  if (_ckoutTimer) { clearTimeout(_ckoutTimer); _ckoutTimer = null; }
+  _ckoutJob = null;
+}
+
+$("#cartCheckout").onclick = startCheckout;
+$("#ckoutHide").onclick = hideCkout;
+$("#ckpill").onclick = showCkout;
 
 // ---- reverse-image search: copy the image to the clipboard, open Google Lens, ⌘V.
 // $0 (consumer Lens, not the paid Vision API). Nothing leaves the machine until the

@@ -61,10 +61,28 @@ See `REQUIREMENTS.md` for scope/decisions.
   (~85 image tokens). Cost ~$0.001-0.005/image. `OPENAI_API_KEY` auto-loaded from
   `/Users/conner/dev/central/.env`. `muser caption [folder] [--paths …]` writes
   one row per image to `~/.muser/captions.jsonl` (append-only:
-  `{path, caption, model, mtime, ts}` — `model="gpt-4o-mini"`). Cart UI's
+  `{path, caption, model, mtime, ts, prompt}` — `model="gpt-4o-mini"`; `prompt`
+  records the system prompt used, so a custom caption prompt is reproducible).
+  `caption_image`/`caption_paths` take an optional `prompt=` override (defaults to
+  `DEFAULT_CAPTION_PROMPT`). Cart UI's
   "Caption missing (N)" button POSTs to `/api/caption-bulk`, which drives the
   existing busy overlay via `state.task = {"kind": "captioning", done, total}`.
   `/api/caption?path=…` returns the latest caption for a single file.
+- `muser/jobs.py` — tiny thread-safe **in-process job registry** (`REGISTRY`) backing
+  the non-blocking cart **checkout**. `POST /api/checkout {items:[{path,upscale}],
+  caption_prompt?, force_caption?}` returns a `job_id` and runs captioning (network,
+  OpenAI) **concurrently** with upscaling (local 4×, flagged items only) in a daemon
+  thread — deliberately NOT on the single `state.task` slot, so search/index stay
+  usable while it runs. `GET /api/checkout/status?id=` reports `{status, caption:{done,
+  total}, upscale:{done,total}, errors, captioned, upscaled, captions_missing,
+  zip_ready}`; `GET /api/checkout/zip?id=` serves the prebuilt zip. The job re-loads
+  captions.jsonl before building the zip, so freshly-captioned items land in the
+  bundle (fixes the prior all-null-caption export, where "Download zip" only bundled
+  pre-cached captions). Zip-building is factored into `_build_cart_zip()` shared by
+  `/api/zip` and the checkout job. Upscaled bytes are NOT durably stored (cheap to
+  recompute — only the existing `~/.muser/upscale_cache` warm cache). Web UI: a
+  dismissible bottom-right progress panel (+ minimizable pill) polls status; the
+  optional caption-prompt textarea persists to `localStorage["muser-caption-prompt"]`.
 - `muser/facets.py` — shared sidecar scaffolding for **per-image precomputed facets**
   (the c2pa.py cache pattern factored out): a `~/.muser/<name>.json` keyed by path with
   `m`(mtime_ns)+`s`(size) for incremental skip, a thread-pool `scan(paths, compute)`, and a

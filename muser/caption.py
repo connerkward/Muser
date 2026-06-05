@@ -11,11 +11,14 @@ implicitly as a trigger binding).
 
 Persistence: one JSONL row per image at ``~/.muser/captions.jsonl``::
 
-    {"path": str, "caption": str, "model": str, "mtime": int, "ts": int}
+    {"path": str, "caption": str, "model": str, "mtime": int, "ts": int, "prompt": str}
 
 The ``model`` field is ``"gpt-4o-mini"`` for fresh rows (or ``"user-edited"``
 when the cart UI writes a manual override); legacy rows from earlier backends
 (e.g. ``"joycaption-beta-one"``) are preserved on read. Latest-wins per path.
+The ``prompt`` field records the system prompt actually used for the caption
+(``DEFAULT_CAPTION_PROMPT`` unless the caller supplied a custom one at checkout);
+legacy rows written before this field existed simply omit it.
 
 Resume: existing (path, mtime) rows are skipped unless ``force=True``. JSONL is
 append-only — a crash mid-pass loses only the in-flight image.
@@ -40,7 +43,9 @@ OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 _PRICE_IN_PER_M = 0.15
 _PRICE_OUT_PER_M = 0.60
 
-SYSTEM_PROMPT = (
+# Public name for the baked LoRA-caption system prompt. ``SYSTEM_PROMPT`` is kept
+# as an alias so existing references (and the request body below) keep working.
+DEFAULT_CAPTION_PROMPT = (
     "You write training captions for SDXL/Flux LoRA models. Output a single sentence that:\n"
     "- Describes the subject, action, composition, and key visual elements with concrete nouns\n"
     "- Includes camera framing if obvious (close-up / wide shot / overhead)\n"
@@ -49,6 +54,7 @@ SYSTEM_PROMPT = (
     '- Skips editorializing words like "beautiful", "stunning", "interesting"\n'
     "- 15-35 words, no trailing punctuation, no quotes, no markdown"
 )
+SYSTEM_PROMPT = DEFAULT_CAPTION_PROMPT
 
 
 def _load_env_file(path: str = "/Users/conner/dev/central/.env") -> None:
@@ -150,19 +156,24 @@ def _api_key() -> str:
     return key
 
 
-def caption_image(path: str) -> tuple[str, dict]:
-    """gpt-4o-mini caption for one image. Returns ``(caption, usage_dict)``.
+def caption_image(path: str, *, prompt: str | None = None) -> tuple[str, dict]:
+    """gpt-4o-mini caption for one image. Returns ``(caption, meta_dict)``.
 
-    ``usage_dict`` is the OpenAI ``usage`` field (``prompt_tokens``,
-    ``completion_tokens``, ``total_tokens``) for cost accounting; ``{}`` if the
-    server omitted it.
+    ``prompt`` overrides the baked ``DEFAULT_CAPTION_PROMPT`` as the system-prompt
+    content when it's a non-empty string; ``None``/empty falls back to the default.
+
+    ``meta_dict`` is the OpenAI ``usage`` field (``prompt_tokens``,
+    ``completion_tokens``, ``total_tokens``) for cost accounting — ``{}`` if the
+    server omitted it — plus a ``"prompt"`` key holding the system prompt actually
+    used (the default, or the caller's override).
     """
     key = _api_key()
+    system_prompt = prompt if (prompt and prompt.strip()) else DEFAULT_CAPTION_PROMPT
     b64 = _encode_image_b64(path)
     payload = {
         "model": "gpt-4o-mini",
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {
                 "role": "user",
                 "content": [
@@ -186,7 +197,9 @@ def caption_image(path: str) -> tuple[str, dict]:
     # Defensive cleanup: strip wrapping quotes / trailing punctuation in case the
     # model ignores the system prompt's "no trailing punctuation" rule.
     text = _clean_caption(text)
-    return text, resp.get("usage", {}) or {}
+    meta = dict(resp.get("usage", {}) or {})
+    meta["prompt"] = system_prompt
+    return text, meta
 
 
 def _clean_caption(text: str) -> str:
@@ -236,15 +249,21 @@ def caption_paths(
     paths: list[str],
     on_progress=print,
     force: bool = False,
+    prompt: str | None = None,
 ) -> list[dict]:
     """Caption many images via gpt-4o-mini. Skips already-cached rows unless ``force``.
 
+    ``prompt`` (a custom system prompt supplied at checkout) is threaded through to
+    every ``caption_image`` call; ``None``/empty uses ``DEFAULT_CAPTION_PROMPT``.
+
     Calls ``on_progress(done, total)`` per image (or ``on_progress(message: str)``
     for a textual status). Returns the list of newly-written rows
-    (``{path, caption, model, mtime, ts}``) and appends each to the JSONL on disk.
+    (``{path, caption, model, mtime, ts, prompt}``) and appends each to the JSONL on
+    disk. The ``prompt`` field records the resolved system prompt actually used.
     """
     # Fail fast on auth before we open the JSONL.
     _api_key()
+    resolved_prompt = prompt if (prompt and prompt.strip()) else DEFAULT_CAPTION_PROMPT
 
     have = {} if force else _read_existing(CAPTIONS_JSONL)
     todo: list[str] = []
@@ -274,7 +293,7 @@ def caption_paths(
     with CAPTIONS_JSONL.open("a", buffering=1) as out:
         for i, p in enumerate(todo, start=1):
             try:
-                cap, usage = caption_image(p)
+                cap, usage = caption_image(p, prompt=resolved_prompt)
                 mt = int(os.path.getmtime(p))
                 row = {
                     "path": p,
@@ -282,6 +301,7 @@ def caption_paths(
                     "model": "gpt-4o-mini",
                     "mtime": mt,
                     "ts": int(time.time()),
+                    "prompt": resolved_prompt,
                 }
                 out.write(json.dumps(row, ensure_ascii=False) + "\n")
                 written.append(row)

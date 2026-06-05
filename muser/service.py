@@ -56,6 +56,17 @@ class CartReq(BaseModel):
     items: list[CartItem] | None = None
 
 
+class CheckoutReq(BaseModel):
+    # Non-blocking cart checkout: caption (network) + upscale (local) run
+    # concurrently in the background, then a zip is assembled. `force_caption`
+    # re-captions even files that already have a cached caption; `caption_prompt`
+    # overrides the baked LoRA system prompt (threaded into caption.py, which
+    # persists it on each row).
+    items: list[CartItem] = []
+    caption_prompt: str | None = None
+    force_caption: bool = False
+
+
 class CaptionWriteReq(BaseModel):
     path: str
     caption: str
@@ -986,7 +997,6 @@ def create_app(model: str = DEFAULT_MODEL):
         # extension (lossless source extensions like PNG/AVIF would be
         # misleading otherwise). The upscaler caches per (path, mtime), so a
         # second zip of the same cart returns in milliseconds.
-        import io, zipfile
         from fastapi.responses import Response
 
         # Normalize input shapes. The web UI sends `items`; older CLI/MCP
@@ -998,7 +1008,45 @@ def create_app(model: str = DEFAULT_MODEL):
         else:
             raise HTTPException(400, "request must include `items` or `paths`")
 
-        captions = _load_captions()
+        try:
+            data, stats = _build_cart_zip(in_items, _load_captions())
+        except ValueError:
+            raise HTTPException(400, "no valid files in cart")
+        return Response(
+            content=data,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": 'attachment; filename="muser-cart.zip"',
+                "X-Captions-Missing": str(stats["missing"]),
+                "X-Captions-Total": str(stats["total"]),
+                "X-Upscaled-Count": str(stats["upscaled"]),
+            },
+        )
+
+    def _build_cart_zip(
+        in_items: list[tuple[str, bool]], captions: dict
+    ) -> tuple[bytes, dict]:
+        """Assemble the cart ZIP in memory. Single source of truth for both the
+        synchronous ``/api/zip`` endpoint and the async checkout job.
+
+        ``in_items`` is a list of ``(path, upscale)``. ``captions`` is a
+        ``{path: caption}`` map (caller passes ``_load_captions()``, re-loaded so
+        captions just written by a checkout job are included). Returns
+        ``(zip_bytes, {"missing", "total", "upscaled"})``.
+
+        Filenames collide on basename; disambiguated with a numeric suffix.
+        Files stored without compression (already-compressed image formats).
+        Items flagged ``upscale=True`` are routed through muser/upscale.py (4×
+        UltraSharp) — only the upscaled JPEG is bundled, under the original stem
+        with a forced ``.jpg`` extension. Each image gets a sibling
+        ``<stem>.txt`` caption when one exists (for fal/kohya LoRA training);
+        items without a caption ship plain and bump the ``missing`` count. A
+        ``manifest.json`` maps every uid → {path, arcname, caption?, upscaled}.
+
+        Raises ``ValueError`` when no input path is a real file.
+        """
+        import io, zipfile
+
         seen, members = {}, []
         for p, upscale in in_items:
             if not p or not os.path.isfile(p):
@@ -1015,7 +1063,7 @@ def create_app(model: str = DEFAULT_MODEL):
             arcname = f"{arc_stem}{out_ext}"
             members.append((p, arcname, arc_stem, upscale))
         if not members:
-            raise HTTPException(400, "no valid files in cart")
+            raise ValueError("no valid files in cart")
         # Lazy-import so the spandrel + torch model load only happens when an
         # actual upscale is requested (don't pay the latency on plain zips).
         upscale_fn = None
@@ -1062,15 +1110,132 @@ def create_app(model: str = DEFAULT_MODEL):
                 "manifest.json",
                 json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
             )
+        return buf.getvalue(), {
+            "missing": missing,
+            "total": len(members),
+            "upscaled": upscaled_n,
+        }
+
+    @app.post("/api/checkout")
+    def checkout(req: CheckoutReq):
+        # Non-blocking cart checkout. Captioning (OpenAI, network-bound) and
+        # upscaling (local 4×, MPS/CPU-bound) run CONCURRENTLY in a background
+        # thread; the zip is built once both finish. Returns a job id immediately
+        # so the UI can poll /api/checkout/status while the user keeps using
+        # search/index. Deliberately does NOT touch state.task — multiple
+        # checkouts coexist as separate jobs.
+        from .jobs import REGISTRY
+        import concurrent.futures as cf
+
+        in_items = [(it.path, bool(it.upscale)) for it in (req.items or [])]
+        in_items = [(p, u) for p, u in in_items if p and os.path.isfile(p)]
+        if not in_items:
+            raise HTTPException(400, "no valid files in cart")
+
+        have = _load_captions()
+        caption_todo = [
+            p for p, _ in in_items
+            if req.force_caption or p not in have
+        ]
+        upscale_todo = [p for p, u in in_items if u]
+
+        job_id = REGISTRY.create(
+            "checkout",
+            caption_total=len(caption_todo),
+            upscale_total=len(upscale_todo),
+        )
+
+        def _caption_worker():
+            if not caption_todo:
+                return
+            from .caption import caption_paths
+
+            def on_prog(*a):
+                # caption_paths calls (done, total) per image and (message) for
+                # status lines; we only care about the numeric pair.
+                if len(a) == 2 and isinstance(a[0], int):
+                    REGISTRY.set_progress(job_id, "caption", a[0])
+
+            written = caption_paths(
+                caption_todo,
+                on_progress=on_prog,
+                force=req.force_caption,
+                prompt=req.caption_prompt,
+            )
+            REGISTRY.update(job_id, captioned=len(written))
+            done_paths = {r["path"] for r in written}
+            for p in caption_todo:
+                if p not in done_paths:
+                    REGISTRY.add_error(job_id, p, "caption", "captioning failed or skipped")
+
+        def _upscale_worker():
+            if not upscale_todo:
+                return
+            from .upscale import upscale_4x
+
+            done = 0
+            lock = threading.Lock()
+
+            def one(p):
+                nonlocal done
+                try:
+                    upscale_4x(p)  # warms ~/.muser/upscale_cache; zip reuses it
+                except Exception as e:
+                    REGISTRY.add_error(job_id, p, "upscale", f"{type(e).__name__}: {e}")
+                with lock:
+                    done += 1
+                    REGISTRY.set_progress(job_id, "upscale", done)
+
+            # Modest pool — upscaling is MPS/CPU-bound, oversubscription hurts.
+            with cf.ThreadPoolExecutor(max_workers=2) as ex:
+                list(ex.map(one, upscale_todo))
+            REGISTRY.update(job_id, upscaled=done)
+
+        def _run():
+            try:
+                with cf.ThreadPoolExecutor(max_workers=2) as ex:
+                    futs = [ex.submit(_caption_worker), ex.submit(_upscale_worker)]
+                    for f in futs:
+                        f.result()  # re-raise a fatal worker error here
+                # Re-load captions so rows the caption worker just wrote are
+                # bundled — this is the fix for the all-null-captions export.
+                data, stats = _build_cart_zip(in_items, _load_captions())
+                REGISTRY.attach_zip(job_id, data)
+                REGISTRY.update(
+                    job_id,
+                    captions_missing=stats["missing"],
+                    status="done",
+                )
+            except Exception as e:
+                REGISTRY.update(job_id, status="error", error=str(e))
+
+        threading.Thread(target=_run, daemon=True, name=f"muser-checkout-{job_id}").start()
+        return {"job_id": job_id}
+
+    @app.get("/api/checkout/status")
+    def checkout_status(id: str):
+        from .jobs import REGISTRY, public
+
+        job = REGISTRY.get(id)
+        if job is None:
+            raise HTTPException(404, "no such checkout job")
+        return public(job)
+
+    @app.get("/api/checkout/zip")
+    def checkout_zip(id: str):
+        from .jobs import REGISTRY
+        from fastapi.responses import Response
+
+        job = REGISTRY.get(id)
+        if job is None or job["status"] != "done":
+            raise HTTPException(404, "checkout not ready")
+        data = REGISTRY.pop_zip(id)
+        if data is None:
+            raise HTTPException(404, "checkout zip unavailable")
         return Response(
-            content=buf.getvalue(),
+            content=data,
             media_type="application/zip",
-            headers={
-                "Content-Disposition": 'attachment; filename="muser-cart.zip"',
-                "X-Captions-Missing": str(missing),
-                "X-Captions-Total": str(len(members)),
-                "X-Upscaled-Count": str(upscaled_n),
-            },
+            headers={"Content-Disposition": 'attachment; filename="muser-cart.zip"'},
         )
 
     @app.post("/api/pick-folder")
