@@ -480,7 +480,8 @@
     <button class="nav" data-view="search">Search</button>
     <button class="nav" data-view="explore">Explore</button>
     <button class="nav" data-view="interesting">Interesting</button>
-    <button class="nav" data-view="review">Review</button>
+    <!-- Review = NSFW-review tab; hidden in normal mode per user request (unhide on ask) -->
+    <button class="nav" data-view="review" style="display:none">Review</button>
     <button class="nav" data-view="ai">AI</button>
   </nav>
   <input id="qMini" placeholder="Search…" autocomplete="off" />
@@ -492,7 +493,8 @@
   <button class="nav on" id="navSearch">Search</button>
   <button class="nav" id="navExplore">Explore</button>
   <button class="nav" id="navInteresting">Interesting</button>
-  <button class="nav" id="navReview">Review</button>
+  <!-- Review = NSFW-review tab; hidden in normal mode per user request (unhide on ask) -->
+  <button class="nav" id="navReview" style="display:none">Review</button>
   <button class="nav" id="navColor">Color</button>
   <button class="nav" id="navAI">AI</button>
   <span class="mut" id="status">…</span>
