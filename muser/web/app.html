@@ -347,6 +347,47 @@
   .filter-panel { display:none; border:1px solid var(--line); padding:14px 16px;
                   margin:6px 0 14px; font-size:12px; color:var(--mut); }
   .filter-panel.on { display:block; }
+  /* ---- single relevance↔aesthetic blend control ---- */
+  .blend-row .pair input[type=range] { min-width:160px; }
+  .blend-vis { margin:4px 0 12px; padding:0 0 0 108px; }
+  .blend-bar { position:relative; display:flex; height:8px; border-radius:4px;
+               overflow:hidden; border:1px solid var(--line); }
+  .blend-bar i { height:100%; transition:width 200ms ease; }
+  .blend-bar .seg-rel { background:#3a7bd5; }
+  .blend-bar .seg-aes { background:#d08a2a; }
+  .blend-marker { position:relative; height:0; }
+  .blend-marker::after { content:""; position:absolute; top:-13px; left:var(--mk,0%);
+                         width:2px; height:14px; background:var(--fg);
+                         transform:translateX(-1px); transition:left 200ms ease; }
+  .blend-ends { display:flex; justify-content:space-between; font:italic 400 11px/1 var(--serif);
+                color:var(--mut); margin-top:5px; }
+  .blend-adv { margin:2px 0 6px; }
+  #sortAdvBody { display:none; }
+  #sortAdvBody.on { display:block; }
+  /* ---- chosen-color set (multi-color picker) ---- */
+  .colorset { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .colorset .cschip { display:inline-flex; align-items:center; gap:5px; padding:3px 7px 3px 5px;
+                      border:1px solid var(--line); border-radius:14px; cursor:pointer;
+                      font-size:11px; color:var(--fg); background:transparent;
+                      font-variant-numeric:tabular-nums; transition:border-color 140ms ease; }
+  .colorset .cschip:hover { border-color:var(--fg); }
+  .colorset .cschip .sw { width:14px; height:14px; border-radius:50%; border:1px solid var(--line); }
+  .colorset .cschip .rm { color:var(--mut); font-size:13px; line-height:1; }
+  .colorset .cschip:hover .rm { color:var(--fg); }
+  /* ---- image-upload chip in the search bar ---- */
+  .imgbtn { flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center;
+            width:42px; font-size:17px; background:transparent; border:1px solid var(--line);
+            border-radius:2px; color:var(--mut); cursor:pointer; transition:color 140ms,border-color 140ms; }
+  .imgbtn:hover { color:var(--fg); border-color:var(--fg); }
+  .upchip { display:none; align-items:center; gap:9px; margin:2px 0 6px; padding:5px 8px;
+            border:1px solid var(--line); border-radius:2px; font-size:12px;
+            color:var(--mut); background:transparent; width:fit-content; }
+  .upchip.on { display:flex; }
+  .upchip img { width:40px; height:40px; object-fit:cover; border-radius:2px; border:1px solid var(--line); }
+  .upchip .uptxt { font:italic 400 12px/1.3 var(--serif); color:var(--fg); max-width:320px;
+                   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .upchip .x { cursor:pointer; color:var(--mut); font-size:15px; line-height:1; }
+  .upchip .x:hover { color:var(--fg); }
   .filter-row { display:flex; align-items:baseline; gap:18px; padding:6px 0;
                 flex-wrap:wrap; }
   .filter-row + .filter-row { border-top:1px solid var(--paper); }
@@ -525,7 +566,14 @@
   <div class="searchbar">
     <input id="q" placeholder="Describe what you're looking for — e.g. “a person on a snowy mountain”" autocomplete="off" autofocus />
     <input id="neg" class="neg" placeholder="Exclude (concept to push away from)…" title="Subtracted from the query vector — CLIP can't read 'not X' in the main box; this field does it as embedding-space arithmetic" autocomplete="off" />
+    <button class="imgbtn" id="uploadBtn" type="button" title="Search by uploading an image — find visually similar">🖼</button>
     <button class="primary" id="go">Search</button>
+    <input type="file" id="uploadInput" accept="image/*" style="display:none" />
+  </div>
+  <div class="upchip" id="uploadChip">
+    <img id="uploadThumb" alt="" />
+    <span class="uptxt" id="uploadName"></span>
+    <span class="x" id="uploadClear" title="Clear uploaded image — back to text search">×</span>
   </div>
   <div class="chips" id="chips"></div>
   <div class="row tools" id="negStrengthRow" style="display:none">
@@ -587,6 +635,25 @@
     </div>
   </div>
   <div class="filter-panel" id="sortPanel">
+    <!-- Single "blend" control: one slider from pure relevance → aesthetic-heavy.
+         Maps onto the six SORT_METRICS weights below; the six stay in sync and
+         live behind the "Advanced" disclosure. -->
+    <div class="filter-row blend-row" title="One dial: left = pure vector/relevance match, right = aesthetic-heavy. Sets the detailed weights below.">
+      <span class="lab">Relevance ↔ Aesthetic</span>
+      <span class="pair" style="flex:1">
+        <input type="range" id="sBlend" min="0" max="1" step="0.01" value="0.00" style="flex:1" />
+        <span class="unit" id="sBlendV" style="font-style:normal;font-variant-numeric:tabular-nums">0.00</span>
+      </span>
+    </div>
+    <div class="blend-vis" id="sBlendVis" title="Left segment = relevance weight, right = aesthetic weight">
+      <div class="blend-bar"><i class="seg-rel" id="sBlendRel"></i><i class="seg-aes" id="sBlendAes"></i></div>
+      <div class="blend-marker" id="sBlendMark"></div>
+      <div class="blend-ends"><span>Relevance</span><span>Aesthetic</span></div>
+    </div>
+    <button class="filter-toggle blend-adv" id="sortAdvToggle" type="button"
+            title="Show the six per-model weight sliders">
+      <span class="caret">›</span> Advanced (per-model weights)</button>
+    <div id="sortAdvBody">
     <div class="filter-row" title="Cosine similarity from the embedding model. The primary signal.">
       <span class="lab">Vector match</span>
       <span class="pair">
@@ -629,6 +696,7 @@
         <span class="unit" id="sW_aes0V" style="font-style:normal;font-variant-numeric:tabular-nums">0.00</span>
       </span>
     </div>
+    </div><!-- /sortAdvBody -->
     <div class="filter-actions">
       <button class="apply" id="sApply">Apply</button>
       <button class="reset" id="sReset">Reset</button>
@@ -720,13 +788,19 @@
   <div class="row" style="margin-bottom:8px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
     <input type="color" id="colorPicker" value="#c83c3c" title="Pick a color"
            style="width:46px;height:30px;border:1px solid var(--line);background:none;cursor:pointer;padding:0" />
+    <button id="colorAdd" title="Add the picked color to the query set">+ Add color</button>
     <button id="colorGo">Search by color</button>
     <span class="swatches" id="colorPresets" style="display:flex;gap:6px"></span>
     <span style="flex:1"></span>
     <span class="mut" id="colormsg">…</span>
     <button id="colorScan" style="display:none">Scan library</button>
   </div>
-  <div style="font-size:11px;color:var(--mut);margin-bottom:14px">Ranks images by how much of the picked color they contain — a separate <b>LAB color-palette index</b>, not the semantic model. Fully local, $0.</div>
+  <div class="row" id="colorSetRow" style="margin-bottom:8px;display:none;align-items:center;gap:10px;flex-wrap:wrap">
+    <span class="mut" style="font-size:10px;letter-spacing:.08em;text-transform:uppercase">Query colors</span>
+    <span class="colorset" id="colorSet"></span>
+    <button id="colorClear" title="Clear all query colors">clear</button>
+  </div>
+  <div style="font-size:11px;color:var(--mut);margin-bottom:14px">Ranks images by how much of the picked color(s) they contain — a separate <b>LAB color-palette index</b>, not the semantic model. Click a swatch or the picker to <b>add</b> a color; multi-color matches images containing <b>all</b> of them. Fully local, $0.</div>
   <div class="grid" id="colorGrid"></div>
 </div>
 
@@ -1791,14 +1865,71 @@ SORT_METRICS.forEach(m => {
   inp.addEventListener("input", () => {
     $("#sW_"+m.id+"V").textContent = parseFloat(inp.value).toFixed(2);
     _saveSortBlend();
+    _refreshBlendVisFromWeights();   // hand-editing the six → keep the single slider/bar in sync (estimate)
   });
 });
 $("#sApply").addEventListener("click", () => { _saveSortBlend(); applySortBlend(); });
 $("#sReset").addEventListener("click", () => {
   SORT_METRICS.forEach(m => _setSortWeight(m.id, m.def));
+  _setBlend(0); _saveBlend(0);
   _saveSortBlend(); applySortBlend();
 });
+
+// ---- Single "Relevance ↔ Aesthetic" blend (t ∈ [0,1]) ----------------------
+// t=0  → pure relevance: vec=1, every aesthetic weight=0.
+// t→1  → aesthetic-heavy: vec eases down, aes/ps rise.
+//   vec = 1 − 0.4·t   aes = 0.6·t   ps = 0.2·t   (aes25/hps/aes0 stay 0)
+// One dial drives the six underlying SORT_METRICS weights, then applySortBlend()
+// reuses the existing weight machinery. The six sliders live behind "Advanced".
+const SBLEND_KEY = "muser-sortblend-single-v1";
+function _blendWeights(t){
+  return { vec: 1 - 0.4*t, aes: 0.6*t, ps: 0.2*t, aes25: 0, hps: 0, aes0: 0 };
+}
+// Reverse-estimate t from the current six weights (for display when Advanced is
+// hand-tuned, or on load). Use the aesthetic mass relative to its max (0.6+0.2).
+function _estimateBlendT(){
+  const aes = parseFloat($("#sW_aes").value) || 0;
+  const ps  = parseFloat($("#sW_ps").value)  || 0;
+  const t = (aes + ps) / 0.8;                       // inverse of 0.6·t + 0.2·t
+  return Math.max(0, Math.min(1, t));
+}
+function _paintBlendVis(t){
+  $("#sBlendV").textContent = t.toFixed(2);
+  const w = _blendWeights(t);
+  // Two-segment bar sized by relevance(vec) vs aesthetic(aes+ps) mass.
+  const rel = w.vec, aesMass = w.aes + w.ps, tot = rel + aesMass || 1;
+  $("#sBlendRel").style.width = (100*rel/tot) + "%";
+  $("#sBlendAes").style.width = (100*aesMass/tot) + "%";
+  $("#sBlendMark").style.setProperty("--mk", (100*t) + "%");
+}
+function _setBlend(t){                               // moves the single slider + bar (no weight write)
+  $("#sBlend").value = t.toFixed(2);
+  _paintBlendVis(t);
+}
+function _refreshBlendVisFromWeights(){ _setBlend(_estimateBlendT()); }
+function _saveBlend(t){ try{ localStorage.setItem(SBLEND_KEY, String(t)); }catch{} }
+function _loadBlend(){
+  try{ const v = parseFloat(localStorage.getItem(SBLEND_KEY)); return isNaN(v) ? null : v; }catch{ return null; }
+}
+function _applyBlend(t, persist){
+  const w = _blendWeights(t);
+  SORT_METRICS.forEach(m => _setSortWeight(m.id, w[m.id]));   // push onto the six (keeps Advanced in sync)
+  _setBlend(t);
+  _saveSortBlend();                                           // persist the resulting six weights
+  if(persist) _saveBlend(t);
+  applySortBlend();
+}
+$("#sBlend").addEventListener("input", () => _applyBlend(parseFloat($("#sBlend").value), true));
+$("#sortAdvToggle").addEventListener("click", () => {
+  const open = $("#sortAdvBody").classList.toggle("on");
+  $("#sortAdvToggle").classList.toggle("open", open);
+  if(open) _refreshBlendVisFromWeights();   // opening Advanced shows the six that the single slider produced
+});
 _wireSortBlendInputs();
+// Restore the single slider from its own persisted value if present; otherwise
+// estimate it from the persisted six weights so the bar isn't blank.
+{ const tv = _loadBlend();
+  if(tv != null) _setBlend(tv); else _refreshBlendVisFromWeights(); }
 
 let _currentResults = [];                                // last /api/search payload — used by the Search-tab sort blend
 
@@ -2015,9 +2146,56 @@ function renderRefinements(refs){
 
 // ---- autocomplete: nearest cluster labels to the typed query ----
 $("#go").onclick = search;
+
+// ---- Image→image search via file upload in the search bar ------------------
+// Click 🖼 → hidden <input type=file> → on pick, show a thumbnail chip and POST
+// the file as multipart/form-data (field `file`, plus k + folder) to
+// /api/search-upload. Response {results, refinements} renders through the same
+// _renderHits() as text search, so cards are identical. The × clears the chip
+// and returns to normal text search.
+let _uploadObjURL = null;
+function _clearUploadChip(){
+  $("#uploadChip").classList.remove("on");
+  if(_uploadObjURL){ URL.revokeObjectURL(_uploadObjURL); _uploadObjURL = null; }
+  $("#uploadInput").value = "";   // allow re-picking the same file
+}
+$("#uploadBtn").onclick = () => $("#uploadInput").click();
+$("#uploadClear").onclick = () => { _clearUploadChip(); $("#q").focus(); };
+$("#uploadInput").addEventListener("change", async (e) => {
+  const file = e.target.files && e.target.files[0];
+  if(!file) return;
+  if (_busy) return;                                   // model still loading
+  // Show the chip with a local thumbnail + filename.
+  if(_uploadObjURL) URL.revokeObjectURL(_uploadObjURL);
+  _uploadObjURL = URL.createObjectURL(file);
+  $("#uploadThumb").src = _uploadObjURL;
+  $("#uploadName").textContent = file.name;
+  $("#uploadChip").classList.add("on");
+  // Typing a text query no longer owns the grid — clear it like searchImage does.
+  $("#q").value = ""; $("#neg").value = ""; closeCompose();
+  document.body.classList.remove("has-query");
+  $("#empty").style.display = "none";
+  toast(`Searching by image: ${file.name}`);
+  if(_searchAbort) _searchAbort.abort();
+  _searchAbort = new AbortController();
+  _mode = "image"; _lastKey = ""; _rendered = 0; _hasMore = false; showSkeletons(12);  // fixed top-N, no scroll-load
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("k", "120");
+  const folder = $("#scope").value.trim();
+  if(folder) fd.append("folder", folder);
+  let r;
+  try { r = await (await fetch("/api/search-upload", { method:"POST", body:fd, signal:_searchAbort.signal })).json(); }
+  catch(err){ if(err.name === "AbortError") return; toast("upload search failed"); return; }
+  if(r.detail){ toast("upload search failed: " + r.detail); return; }
+  _renderHits(r);
+});
+
 $("#q").addEventListener("input", ()=>{
   // Typing in the main searchbar exits compose mode — compose is opt-in per-search.
   if ($("#compose").classList.contains("on")) closeCompose();
+  // Typing a text query clears any uploaded-image chip — back to text search.
+  if ($("#uploadChip").classList.contains("on") && $("#q").value.trim().length > 0) _clearUploadChip();
   document.body.classList.toggle("has-query", $("#q").value.trim().length > 0);
   $("#qMini").value = $("#q").value;     // mirror main → mini
   liveSearch();
@@ -2535,19 +2713,61 @@ function _renderFacet(gridSel, j){
 
 const COLOR_PRESETS = ["#c83c3c","#e08a2a","#e8d44a","#4a9e4a","#3a7bd5","#7a4ad0","#d04a9e","#1a1a1a","#ffffff"];
 let _colorWired = false;
+// Multi-color query SET. Building a set of hexes; search joins them comma-separated
+// with mode=all (backend ranks images containing ALL). A single-color selection is
+// just a set of one, so existing single-color behavior is preserved.
+const COLORSET_KEY = "muser-colorset-v1";
+let _colorSet = (() => {
+  try { const a = JSON.parse(localStorage.getItem(COLORSET_KEY) || "[]"); return Array.isArray(a) ? a : []; }
+  catch { return []; }
+})();
+function _saveColorSet(){ try{ localStorage.setItem(COLORSET_KEY, JSON.stringify(_colorSet)); }catch{} }
+function _normHex(h){ return (h||"").trim().toLowerCase(); }
+function addColor(hex){
+  hex = _normHex(hex);
+  if(!hex) return;
+  if(!_colorSet.includes(hex)) _colorSet.push(hex);   // de-dupe
+  _saveColorSet(); _renderColorSet(); searchColor();
+}
+function removeColor(hex){
+  _colorSet = _colorSet.filter(h => h !== _normHex(hex));
+  _saveColorSet(); _renderColorSet();
+  if(_colorSet.length) searchColor();
+  else { $("#colorGrid").innerHTML = ""; $("#colormsg").textContent = "Pick a color or a swatch to search."; }
+}
+function clearColors(){
+  _colorSet = []; _saveColorSet(); _renderColorSet();
+  $("#colorGrid").innerHTML = ""; $("#colormsg").textContent = "Pick a color or a swatch to search.";
+}
+function _renderColorSet(){
+  const row = $("#colorSetRow"), box = $("#colorSet");
+  box.innerHTML = "";
+  _colorSet.forEach(hex => {
+    const b = document.createElement("button");
+    b.className = "cschip"; b.title = `Remove ${hex}`;
+    b.innerHTML = `<span class="sw" style="background:${hex}"></span><span>${hex}</span><span class="rm">×</span>`;
+    b.onclick = () => removeColor(hex);
+    box.appendChild(b);
+  });
+  row.style.display = _colorSet.length ? "flex" : "none";
+}
 async function loadColor(){
   if(!_colorWired){
     _colorWired = true;
-    $("#colorGo").onclick = searchColor;
-    $("#colorPicker").onchange = searchColor;
+    // "Search by color" re-runs the current set (or adds the picker color if empty).
+    $("#colorGo").onclick = () => { if(!_colorSet.length) addColor($("#colorPicker").value); else searchColor(); };
+    $("#colorAdd").onclick = () => addColor($("#colorPicker").value);
+    $("#colorPicker").onchange = () => addColor($("#colorPicker").value);   // picking ADDS to the set
+    $("#colorClear").onclick = clearColors;
     const ps = $("#colorPresets");
     COLOR_PRESETS.forEach(hex => {
       const b = document.createElement("button");
-      b.title = hex; b.style.cssText = `width:22px;height:22px;border:1px solid var(--line);border-radius:4px;background:${hex};cursor:pointer;padding:0`;
-      b.onclick = () => { $("#colorPicker").value = hex; searchColor(); };
+      b.title = "Add " + hex; b.style.cssText = `width:22px;height:22px;border:1px solid var(--line);border-radius:4px;background:${hex};cursor:pointer;padding:0`;
+      b.onclick = () => addColor(hex);                  // swatch ADDS (doesn't replace)
       ps.appendChild(b);
     });
     $("#colorScan").onclick = async () => { await fetch("/api/color/scan",{method:"POST"}); pollColorScan(); };
+    _renderColorSet();
   }
   let r; try{ r = await (await fetch("/api/color")).json(); }catch(e){ return; }
   const msg = $("#colormsg"), btn = $("#colorScan");
@@ -2566,11 +2786,18 @@ async function pollColorScan(){
   else { if(_colorPoll){ clearInterval(_colorPoll); _colorPoll=null; } }
 }
 async function searchColor(){
-  const hex = $("#colorPicker").value;
+  // Fall back to the picker if the set is empty (single-color = set of one).
+  const hexes = _colorSet.length ? _colorSet.slice() : [_normHex($("#colorPicker").value)];
+  if(!hexes.length || !hexes[0]) return;
   const url = new URL("/api/search-color", location.origin);
-  url.searchParams.set("hex", hex); url.searchParams.set("k", 60);
+  url.searchParams.set("hex", hexes.join(","));      // comma-joined multi-color
+  url.searchParams.set("mode", "all");               // images containing ALL of them
+  url.searchParams.set("k", 60);
   const j = await (await fetch(url)).json();
-  $("#colormsg").textContent = `${(j.results||[]).length} image(s) with ${hex}`;
+  const n = (j.results||[]).length;
+  $("#colormsg").textContent = hexes.length > 1
+    ? `${n} image(s) with all of ${hexes.join(", ")}`
+    : `${n} image(s) with ${hexes[0]}`;
   _renderFacet("#colorGrid", j);
 }
 

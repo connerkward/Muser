@@ -81,6 +81,19 @@ def cache_exists() -> bool:
     return _SIDE.exists()
 
 
+def _palette_score(pal, qlab) -> float:
+    """Single query-color score for one image's palette: ``Σ frac·sim`` where
+    ``sim`` decays with LAB ΔE (capped at 1.0). The shared scoring kernel reused
+    by both ``search`` and ``search_multi``."""
+    score = 0.0
+    for l, a, b, frac in pal:
+        de = float(np.sqrt((l - qlab[0]) ** 2 + (a - qlab[1]) ** 2 + (b - qlab[2]) ** 2))
+        sim = 1.0 - de / COLOR_TAU
+        if sim > 0:
+            score += frac * sim
+    return min(1.0, score)
+
+
 def search(rgb, k: int = 24, folder: str | None = None) -> list[tuple[str, float]]:
     """Rank indexed images by presence of the query RGB color. Returns [(path, score)]."""
     qlab = _rgb_to_lab(np.array([rgb], np.uint8))[0]
@@ -92,13 +105,48 @@ def search(rgb, k: int = 24, folder: str | None = None) -> list[tuple[str, float
         pal = e.get("palette") or []
         if not pal:
             continue
-        score = 0.0
-        for l, a, b, frac in pal:
-            de = float(np.sqrt((l - qlab[0]) ** 2 + (a - qlab[1]) ** 2 + (b - qlab[2]) ** 2))
-            sim = 1.0 - de / COLOR_TAU
-            if sim > 0:
-                score += frac * sim
+        score = _palette_score(pal, qlab)
         if score > 0:
-            scored.append((p, min(1.0, score)))
+            scored.append((p, score))
+    scored.sort(key=lambda x: -x[1])
+    return scored[:k]
+
+
+def search_multi(rgbs, k: int = 24, folder: str | None = None,
+                 mode: str = "all") -> list[tuple[str, float]]:
+    """Rank indexed images against MULTIPLE query colors. Returns [(path, score)].
+
+    For each image we compute its per-query-color palette score (the same
+    ``_palette_score`` kernel as single-color ``search``), then aggregate:
+      - ``mode="all"`` → the image must match EVERY query color (each per-color
+        score > 0); the combined score is their mean — rewards palettes that
+        contain all chosen colors.
+      - ``mode="any"`` → combined score is the MAX over the query colors (the
+        best single match), like an OR.
+
+    A single-element ``rgbs`` is identical to ``search`` (mean/max of one value
+    is that value, and the all-positive gate matches ``score > 0``)."""
+    qlabs = [_rgb_to_lab(np.array([rgb], np.uint8))[0] for rgb in rgbs]
+    if not qlabs:
+        return []
+    any_mode = mode == "any"
+    pre = os.path.join(folder, "") if folder else None
+    scored: list[tuple[str, float]] = []
+    for (p, _m, _s), e in _SIDE.entries().items():
+        if pre and not (p == folder or p.startswith(pre)):
+            continue
+        pal = e.get("palette") or []
+        if not pal:
+            continue
+        sims = [_palette_score(pal, q) for q in qlabs]
+        if any_mode:
+            score = max(sims)
+        else:
+            # "all": every color must be present, else the image is excluded.
+            if any(s <= 0 for s in sims):
+                continue
+            score = sum(sims) / len(sims)
+        if score > 0:
+            scored.append((p, score))
     scored.sort(key=lambda x: -x[1])
     return scored[:k]

@@ -16,6 +16,10 @@ import threading
 import time
 from pathlib import Path
 
+# Module-level so `from __future__ import annotations` can resolve the UploadFile
+# annotation on /api/search-upload (a function-scope import leaves it an
+# unresolved ForwardRef → pydantic "not fully defined").
+from fastapi import File, Form, UploadFile
 from pydantic import BaseModel
 
 from .index import MetaFilter, MuserIndex, uid_for
@@ -284,7 +288,7 @@ def _copy_image_to_clipboard(path: str) -> bool:
 
 
 def create_app(model: str = DEFAULT_MODEL):
-    from fastapi import FastAPI, HTTPException
+    from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
     from fastapi.responses import FileResponse, HTMLResponse, Response
 
     state = State(model)
@@ -848,6 +852,44 @@ def create_app(model: str = DEFAULT_MODEL):
                 "compose": {"img": img, "text": text, "alpha": alpha, "beta": beta},
                 "model": state.model_name, "results": results, "refinements": refinements}
 
+    @app.post("/api/search-upload")
+    async def search_upload(
+        file: UploadFile = File(...),
+        k: int = Form(default=60),
+        folder: str | None = Form(default=None),
+    ):
+        # Image-to-image search from an UPLOADED image (file picker in the search
+        # bar) rather than an indexed path. Multipart form-data only (`file`,
+        # optional `k`/`folder`) — FastAPI can't mix a JSON Body with File/Form in
+        # one route. Bytes go to a temp file, embedded with the same image path
+        # /api/search-image uses, then run through the identical _run_search
+        # post-processing so result dicts are byte-for-byte shaped like /api/search
+        # (the frontend card renderer works unchanged).
+        import tempfile as _tempfile
+
+        raw = await file.read()
+        if not raw:
+            raise HTTPException(400, "no image supplied — send multipart `file`")
+
+        tmp = _tempfile.NamedTemporaryFile(suffix=".img", delete=False)
+        try:
+            tmp.write(raw)
+            tmp.close()
+            state.wait_ready()
+            emb = state.warm()
+            try:
+                qv = emb.embed_images([tmp.name])[0]
+            except Exception:
+                raise HTTPException(400, "could not decode uploaded image")
+            results = _run_search(qv, k, dedup=True, method="embed", folder=folder)
+            return {"query": "image: (uploaded)", "model": state.model_name,
+                    "results": results, "refinements": []}
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+
     @app.get("/api/filter")
     def filter_(limit: int = 200, offset: int = 0, folder: str | None = None,
                 dedup: bool = True,
@@ -1398,17 +1440,33 @@ def create_app(model: str = DEFAULT_MODEL):
         return results
 
     @app.get("/api/search-color")
-    def search_color(hex: str, k: int = 24, folder: str | None = None):
-        # Rank indexed images by how much of `hex` (#rrggbb) they contain — LAB
-        # palette distance, no model. Over-fetch then drop dead files to fill k.
+    def search_color(hex: str, k: int = 24, folder: str | None = None, mode: str = "all"):
+        # Rank indexed images by how much of `hex` they contain — LAB palette
+        # distance, no model. `hex` accepts a COMMA-SEPARATED list of #rrggbb
+        # colors; with >1, `mode` aggregates them: "all" (default) requires every
+        # color be present (score = mean of per-color sims), "any" takes the best
+        # single match (max). A single color is identical to the old behavior.
+        # `#` may be URL-encoded or bare. Over-fetch then drop dead files to fill k.
         from . import color as _color
-        h = hex.lstrip("#")
-        if len(h) != 6:
-            raise HTTPException(400, "hex must be #rrggbb")
-        rgb = (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
-        pairs = _color.search(rgb, k=k * 2, folder=folder)
+        rgbs = []
+        hs = []
+        for tok in hex.split(","):
+            h = tok.strip().lstrip("#")
+            if len(h) != 6:
+                raise HTTPException(400, "hex must be one or more comma-separated #rrggbb")
+            try:
+                rgbs.append((int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)))
+            except ValueError:
+                raise HTTPException(400, "hex must be one or more comma-separated #rrggbb")
+            hs.append(h)
+        if not rgbs:
+            raise HTTPException(400, "hex must be one or more comma-separated #rrggbb")
+        if mode not in ("all", "any"):
+            raise HTTPException(400, "mode must be 'all' or 'any'")
+        pairs = _color.search_multi(rgbs, k=k * 2, folder=folder, mode=mode)
         results = _facet_results(pairs)[:k]
-        return {"query": f"#{h}", "model": state.model_name, "results": results, "refinements": []}
+        query = "+".join(f"#{h}" for h in hs)
+        return {"query": query, "model": state.model_name, "results": results, "refinements": []}
 
     @app.get("/api/color")
     def color_status():
