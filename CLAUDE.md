@@ -75,34 +75,13 @@ See `REQUIREMENTS.md` for scope/decisions.
   `~/.muser/color.json`. `search(rgb)` ranks by `Σ frac·sim(palette,query)` (LAB ΔE, decays
   at `COLOR_TAU`). `available()` always True. CLI `muser color [--query "#rrggbb"] [--in dir]`
   (no query → build), API `/api/search-color?hex=`, `/api/color[/scan]`, web **Color** tab
-  (picker + preset swatches). Fully local, $0, no model load.
-- `muser/skintone.py` — **skin-tone search** on the 10-point **Monk Skin Tone** scale, via a
-  **two-detector hybrid** so a *person*, not just a face, anchors the sample: (1) **face** —
-  OpenCV **YuNet** (bundled ONNX, MIT), the high-confidence source (face skin is the best tone
-  reference); (2) **person** — OpenCV **MobileNet-SSD** (bundled Caffe model, MIT, VOC `person`
-  class) as the fallback for face-less people (turned away / profile / distant / occluded), sampling
-  skin from *any* visible skin in the person box — but only for person boxes that don't already
-  contain a detected face (face-bearing people are sampled from the face, never double-counted).
-  **Face skin pixels come from a face-parsing SegFormer** (`jonathandinu/face-parsing`, via the
-  `transformers` dep — downloads/caches like the embedder, no git bloat) that labels skin/nose/ears
-  apart from eyes/brows/lips/hair — far cleaner than a colour box; falls back to a central-region
-  YCrCb heuristic when the parser finds no skin (preserves coverage on small/blurry faces). Bodies
-  use the YCrCb heuristic (no face to parse). **Illuminant normalization:** before mapping, the scene
-  illuminant is estimated with **Shades-of-Gray (p=6)** over the whole image and divided out (chroma
-  only, brightness preserved) so warm/cool light doesn't push a tone into the wrong bucket. Skin
-  pixels → 25–75th luminance trim → median LAB → nearest MST swatch. Per image: detections
-  (`src` "face"/"body", `mst` 1–10, `lab`, `frac`, `conf`) + a `mst` summary, in
-  `~/.muser/skintone.json`. `search(tone)` ranks by closeness × prominence × source-weight (faces
-  full, bodies `BODY_WEIGHT=0.6`). CLI `muser skintone [--tone N]`, API `/api/search-skintone?tone=`,
-  `/api/skintone[/scan]`, web **Skin tone** tab. `SCAN_VERSION` gates the incremental scan (bump →
-  recompute even unchanged files: v1 face-only → v2 +person → v3 central+trim → v4 face-parse+WB).
-  **Benchmarked** in `eval/skintone_bench.py` (label-free illuminant robustness — synthetic
-  warm/cool/green/dim/bright casts, measure MST drift): chroma drift dropped 2.7× (0.643 whole-box →
-  0.239 face-parse+WB). **Honest limits:** detection is the ceiling; a person with *no visible skin*
-  (fully clothed / coat) yields no tone; illuminant norm can't undo *exposure* (a genuinely
-  under-exposed face stays dark) — a positive signal, not a demographic classifier. Both facet scans
-  **auto-trigger** post-index (incremental, folder-scoped) alongside c2pa, and prime at service
-  startup. New core dep: `opencv-python-headless` (no GUI/Qt libs → clean on server + CI).
+  (picker + preset swatches). Fully local, $0, no model load. New core dep
+  `opencv-python-headless` (LAB conversion; no GUI/Qt libs → clean on server + CI).
+  The color scan **auto-triggers** post-index (incremental, folder-scoped) alongside c2pa,
+  and primes at service startup.
+- *(removed 2026-06-05)* **skin-tone search** (Monk-scale) was built then removed at the
+  user's request. Full implementation preserved at git tag `skintone-v4-archived`; design,
+  benchmark results, and revival steps in `reports/skintone-archive/`.
 - `eval/datasets.py` — standard benchmarks reduced to {image_paths, queries,
   qrels}. Flickr30k via HF's `refs/convert/parquet` branch (scripts unsupported).
 - `eval/harness.py` — embeds corpus → LanceDB → queries → **ranx** metrics
@@ -192,8 +171,9 @@ pass over the 17.9k uniques, so reserved for selective lookups, not wired in.
 Default model: **siglip2-b** (Apache, best quality/speed/license — see reports/).
 Embedded service + web search UI working (`muser serve` → http://127.0.0.1:7777).
 Core (embed/index/search), harness (Flickr30k/COCO/domain + ranx), CLI, and web UI are
-working and verified. Color + skin-tone (Monk-scale) facet search shipped (see
-`color.py`/`skintone.py`). Always-on daemon shipped as a macOS LaunchAgent
+working and verified. Color facet search shipped (`color.py`). Skin-tone search was
+built then removed (archived at tag `skintone-v4-archived`, see `reports/skintone-archive/`).
+Always-on daemon shipped as a macOS LaunchAgent
 (`~/Library/LaunchAgents/com.muser.serve.plist`, documented in central per-machine
 doc). Next: wire `jina-v4` run (7.5GB download), add Qwen3-VL, VLM-generated ground
 truth for the user's own folders.

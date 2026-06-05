@@ -448,7 +448,6 @@
   <button class="nav" id="navInteresting">Interesting</button>
   <button class="nav" id="navReview">Review</button>
   <button class="nav" id="navColor">Color</button>
-  <button class="nav" id="navSkin">Skin&nbsp;tone</button>
   <button class="nav" id="navAI">AI</button>
   <span class="mut" id="status">…</span>
   <span class="sp"></span>
@@ -660,18 +659,6 @@
   </div>
   <div style="font-size:11px;color:var(--mut);margin-bottom:14px">Ranks images by how much of the picked color they contain — a separate <b>LAB color-palette index</b>, not the semantic model. Fully local, $0.</div>
   <div class="grid" id="colorGrid"></div>
-</div>
-
-<div class="wrap" id="skinView" style="display:none">
-  <div class="row" style="margin-bottom:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-    <span class="mut">Monk&nbsp;Skin&nbsp;Tone:</span>
-    <span class="swatches" id="skinSwatches" style="display:flex;gap:4px"></span>
-    <span style="flex:1"></span>
-    <span class="mut" id="skinmsg">…</span>
-    <button id="skinScan" style="display:none">Scan library</button>
-  </div>
-  <div style="font-size:11px;color:var(--mut);margin-bottom:14px"><b>Faces</b> (YuNet) and, for people whose face isn’t visible, <b>bodies</b> (MobileNet-SSD) are detected; skin is sampled and mapped to the 10-point <b>Monk Skin Tone</b> scale. Detection is the ceiling — and a person with no visible skin (fully clothed / back turned) yields no tone. Strong color casts shift the sampled tone. A positive signal, not a demographic classifier.</div>
-  <div class="grid" id="skinGrid"></div>
 </div>
 
 <!-- Per-image detail view (#/image/<uid>). All sections are populated by
@@ -2068,9 +2055,9 @@ function openDetail(uid){ showView("image", {uid}); }
 // ---- view switching (Search / Explore / Interesting / Review / AI / Image) ----
 // `image` is a *detail* view (no nav button) — it's only reached from hash
 // routing (#/image/<uid>) or programmatically via openDetail(uid).
-const VIEWS={search:"searchView",explore:"exploreView",interesting:"interestingView",review:"reviewView",color:"colorView",skin:"skinView",ai:"aiView",image:"imageView"};
-const NAVS={search:"navSearch",explore:"navExplore",interesting:"navInteresting",review:"navReview",color:"navColor",skin:"navSkin",ai:"navAI"};
-const VIEW_TITLES={search:"Search",explore:"Explore",interesting:"Interesting",review:"Review",color:"Color",skin:"Skin tone",ai:"AI",image:"Image"};
+const VIEWS={search:"searchView",explore:"exploreView",interesting:"interestingView",review:"reviewView",color:"colorView",ai:"aiView",image:"imageView"};
+const NAVS={search:"navSearch",explore:"navExplore",interesting:"navInteresting",review:"navReview",color:"navColor",ai:"navAI"};
+const VIEW_TITLES={search:"Search",explore:"Explore",interesting:"Interesting",review:"Review",color:"Color",ai:"AI",image:"Image"};
 // Internal flag: when popstate or initial-route call showView, suppress the
 // pushState so back/forward don't double-stack history entries.
 let _suppressHistory=false;
@@ -2093,7 +2080,6 @@ function showView(v, opts){
   if(v==="interesting") loadScores("#scoreGrid","#imsg","#imetric");
   if(v==="review") loadScores("#reviewGrid","#rmsg","#rcat");
   if(v==="color") loadColor();
-  if(v==="skin") loadSkin();
   if(v==="ai") loadAI();
   if(v==="image" && opts.uid) loadImageDetail(opts.uid);
   // ---- URL + title sync ----
@@ -2239,7 +2225,7 @@ function _renderAICard(h){
   return c;
 }
 
-// ---- Color + Skin-tone tabs ----------------------------------------------
+// ---- Color tab -----------------------------------------------------------
 // Both are facet searches (separate LAB indexes, not the embedder). Each renders
 // a fixed top-k into its own grid via the shared _facetCard.
 function _facetCard(h){
@@ -2302,51 +2288,6 @@ async function searchColor(){
   const j = await (await fetch(url)).json();
   $("#colormsg").textContent = `${(j.results||[]).length} image(s) with ${hex}`;
   _renderFacet("#colorGrid", j);
-}
-
-let _skinWired = false;
-async function loadSkin(){
-  let r; try{ r = await (await fetch("/api/skintone")).json(); }catch(e){ return; }
-  const msg = $("#skinmsg"), btn = $("#skinScan");
-  if(!r.available){
-    msg.textContent = "Face detector unavailable (opencv + YuNet model).";
-    btn.style.display = "none"; $("#skinSwatches").innerHTML = ""; return;
-  }
-  if(!_skinWired){
-    _skinWired = true;
-    $("#skinScan").onclick = async () => { await fetch("/api/skintone/scan",{method:"POST"}); pollSkinScan(); };
-  }
-  // (Re)build the 10 Monk-scale swatch buttons with per-tone counts.
-  const sw = $("#skinSwatches"); sw.innerHTML = "";
-  (r.swatches||[]).forEach((hex,i) => {
-    const n = (r.histogram||[])[i]||0;
-    const b = document.createElement("button");
-    b.title = `Monk Skin Tone ${i+1} — ${n} image(s)`;
-    b.style.cssText = `width:30px;height:26px;border:1px solid var(--line);border-radius:4px;background:${hex};cursor:pointer;padding:0;font-size:9px;color:${i<5?'#333':'#eee'}`;
-    b.textContent = i+1;
-    b.onclick = () => searchSkin(i+1);
-    sw.appendChild(b);
-  });
-  btn.style.display = ""; btn.disabled = r.scanning; btn.textContent = r.built ? "Rescan" : "Scan library";
-  if(r.scanning){ pollSkinScan(); }
-  else { msg.textContent = r.built ? "Pick a tone to search." : "Not built yet — click Scan library."; }
-}
-let _skinPoll=null;
-async function pollSkinScan(){
-  const r = await (await fetch("/api/skintone")).json();
-  const pct = r.total ? Math.round(r.done/r.total*100) : 0;
-  const bar = "["+"#".repeat(pct/10|0)+"-".repeat(10-(pct/10|0))+"]";
-  $("#skinmsg").textContent = r.scanning ? `scanning faces ${bar} ${r.done.toLocaleString()}/${r.total.toLocaleString()} (${pct}%)` : "Done — pick a tone to search.";
-  $("#skinScan").disabled = r.scanning;
-  if(r.scanning){ if(!_skinPoll) _skinPoll=setInterval(pollSkinScan,800); }
-  else { if(_skinPoll){ clearInterval(_skinPoll); _skinPoll=null; } loadSkin(); }
-}
-async function searchSkin(tone){
-  const url = new URL("/api/search-skintone", location.origin);
-  url.searchParams.set("tone", tone); url.searchParams.set("k", 60);
-  const j = await (await fetch(url)).json();
-  $("#skinmsg").textContent = `${(j.results||[]).length} image(s) near Monk Skin Tone ${tone}`;
-  _renderFacet("#skinGrid", j);
 }
 
 // AI tab uses client-side chunking: /api/ai returns the full positive list

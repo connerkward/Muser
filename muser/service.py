@@ -88,10 +88,8 @@ class State:
         # C2PA library-scan progress for the "AI" tab. Separate from `task` so the
         # long scan doesn't trip the model/index busy overlay. Polled by /api/ai.
         self.c2pa = {"scanning": False, "done": 0, "total": 0, "found": 0}
-        # Same pattern for the color-palette and skin-tone facet scans (Color /
-        # Skin tone tabs), each polled by its own status endpoint.
+        # Color-palette facet scan progress (Color tab), polled by /api/color.
         self.color = {"scanning": False, "done": 0, "total": 0}
-        self.skintone = {"scanning": False, "done": 0, "total": 0}
 
     def warm(self):
         # Idempotent. Holds a lock so two concurrent first-callers don't both
@@ -296,13 +294,12 @@ def create_app(model: str = DEFAULT_MODEL):
         primed = _c2pa.prime_cache_from_sidecar()
         if primed:
             print(f"  primed c2pa cache: {primed} entries", flush=True)
-        # Same priming for the color + skin-tone facet caches so /api/search-color
-        # and /api/search-skintone rank in-RAM with no disk read per query.
-        from . import color as _color, skintone as _skin
+        # Same priming for the color facet cache so /api/search-color ranks
+        # in-RAM with no disk read per query.
+        from . import color as _color
         cprimed = _color.prime_cache_from_sidecar()
-        sprimed = _skin.prime_cache_from_sidecar()
-        if cprimed or sprimed:
-            print(f"  primed color: {cprimed} · skin-tone: {sprimed} entries", flush=True)
+        if cprimed:
+            print(f"  primed color cache: {cprimed} entries", flush=True)
         # Non-blocking: fire the warm in a thread so uvicorn starts accepting
         # connections in milliseconds. The page can load, see task=loading_model
         # in /api/status, and render its overlay while weights load.
@@ -406,7 +403,6 @@ def create_app(model: str = DEFAULT_MODEL):
             if ok:
                 _scan_c2pa(folder)
                 _scan_color(folder)
-                _scan_skintone(folder)
 
         threading.Thread(target=_bg, daemon=True, name="muser-index").start()
         return {"started": True, "folder": folder}
@@ -442,21 +438,6 @@ def create_app(model: str = DEFAULT_MODEL):
             _color.scan(paths, progress=lambda d, t: state.color.update(done=d, total=t))
         finally:
             state.color["scanning"] = False
-
-    def _scan_skintone(folder: str | None = None):
-        # Shared by the post-index hook and POST /api/skintone/scan. No-op without
-        # the face detector (opencv + bundled YuNet model).
-        from . import skintone as _skin
-        if not _skin.available() or state.skintone.get("scanning"):
-            return
-        paths = state.index.paths(state.model_name, under=folder)
-        if not paths:
-            return
-        state.skintone = {"scanning": True, "done": 0, "total": len(paths)}
-        try:
-            _skin.scan(paths, progress=lambda d, t: state.skintone.update(done=d, total=t))
-        finally:
-            state.skintone["scanning"] = False
 
     # ---- path → cluster-label map, used for the post-search refinement chips ----
     # Reads ~/.muser/clusters.json once and caches a path → cluster-label dict.
@@ -1229,7 +1210,7 @@ def create_app(model: str = DEFAULT_MODEL):
         from .c2pa import verdict
         return verdict(path)
 
-    # ---- Color + skin-tone facet search (separate indexes, not the embedder) ----
+    # ---- Color facet search (separate LAB index, not the embedder) ----
     def _facet_results(pairs):
         """Turn [(path, score)] from a facet search into enriched result dicts
         matching /api/search's shape (so the same card renderer works). Drops
@@ -1272,40 +1253,6 @@ def create_app(model: str = DEFAULT_MODEL):
             return {"started": False, "scanning": True}
         total = state.index.count(state.model_name)
         threading.Thread(target=_scan_color, daemon=True, name="muser-color-scan").start()
-        return {"started": True, "total": total}
-
-    @app.get("/api/search-skintone")
-    def search_skintone(tone: int, k: int = 24, folder: str | None = None):
-        # Rank indexed images whose detected faces are nearest Monk Skin Tone `tone` (1..10).
-        from . import skintone as _skin
-        if not _skin.available():
-            raise HTTPException(501, "face detector unavailable (opencv + YuNet model)")
-        if not 1 <= tone <= 10:
-            raise HTTPException(400, "tone must be 1..10")
-        pairs = _skin.search(tone, k=k * 2, folder=folder)
-        results = _facet_results(pairs)[:k]
-        return {"query": f"skin tone {tone}", "model": state.model_name, "results": results, "refinements": []}
-
-    @app.get("/api/skintone")
-    def skintone_status():
-        from . import skintone as _skin
-        avail = _skin.available()
-        return {
-            "available": avail, "built": _skin.cache_exists(),
-            "histogram": _skin.tone_histogram() if avail else [0] * 10,
-            "swatches": _skin.MST_HEX if avail else [],
-            **state.skintone,
-        }
-
-    @app.post("/api/skintone/scan")
-    def skintone_scan():
-        from . import skintone as _skin
-        if not _skin.available():
-            raise HTTPException(501, "face detector unavailable (opencv + YuNet model)")
-        if state.skintone["scanning"]:
-            return {"started": False, "scanning": True}
-        total = state.index.count(state.model_name)
-        threading.Thread(target=_scan_skintone, daemon=True, name="muser-skintone-scan").start()
         return {"started": True, "total": total}
 
     @app.post("/api/reveal")
