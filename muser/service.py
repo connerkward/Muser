@@ -676,11 +676,15 @@ def create_app(model: str = DEFAULT_MODEL):
                 _scores_cache["mtime"] = mt
         return _scores_cache
 
+    # Aesthetic metrics surfaced per search hit so the Search-tab "Sort blend"
+    # can re-rank client-side without re-fetching. Mirrors the non-combined
+    # options in the Interesting tab's dropdown (combined "interesting"/"novelty"
+    # are derived rankings, not raw aesthetic scores, so they're excluded).
+    _SORT_BLEND_METRICS = ("aesthetic_v2", "pickscore", "aesthetic_v25", "hps_v21", "aesthetic")
+
     def _attach_scores(results):
-        # Surface per-image aesthetic / pickscore from ~/.muser/scores.json on each
-        # search hit so the Search-tab "Sort blend" control can re-rank client-side
-        # (vec + aesthetic_v2 + pickscore) without re-fetching. Missing entries
-        # → key simply absent.
+        # Surface per-image aesthetic scores from ~/.muser/scores.json on each
+        # search hit. Missing entries → key simply absent.
         if not results:
             return
         m = _refresh_scores_cache()["map"]
@@ -688,10 +692,9 @@ def create_app(model: str = DEFAULT_MODEL):
             row = m.get(r["path"])
             if not row:
                 continue
-            if "aesthetic_v2" in row:
-                r["aesthetic_v2"] = round(float(row["aesthetic_v2"]), 4)
-            if "pickscore" in row:
-                r["pickscore"] = round(float(row["pickscore"]), 4)
+            for key in _SORT_BLEND_METRICS:
+                if key in row:
+                    r[key] = round(float(row[key]), 4)
 
     def _attach_c2pa(results):
         # Inline the C2PA verdict per result so the Search-tab UI doesn't fire

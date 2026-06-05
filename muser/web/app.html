@@ -560,11 +560,32 @@
         <span class="unit" id="sW_psV" style="font-style:normal;font-variant-numeric:tabular-nums">0.10</span>
       </span>
     </div>
+    <div class="filter-row" title="LAION Aesthetics V2.5 — refined successor to V2.">
+      <span class="lab">Aesthetic V2.5</span>
+      <span class="pair">
+        <input type="range" id="sW_aes25" min="0" max="2" step="0.05" value="0.00" />
+        <span class="unit" id="sW_aes25V" style="font-style:normal;font-variant-numeric:tabular-nums">0.00</span>
+      </span>
+    </div>
+    <div class="filter-row" title="HPS v2.1 — Human Preference Score, prompt-aware preference model.">
+      <span class="lab">HPS v2.1</span>
+      <span class="pair">
+        <input type="range" id="sW_hps" min="0" max="2" step="0.05" value="0.00" />
+        <span class="unit" id="sW_hpsV" style="font-style:normal;font-variant-numeric:tabular-nums">0.00</span>
+      </span>
+    </div>
+    <div class="filter-row" title="Zero-shot CLIP aesthetic prompt — fast but weak.">
+      <span class="lab">Aesthetic (zero-shot)</span>
+      <span class="pair">
+        <input type="range" id="sW_aes0" min="0" max="2" step="0.05" value="0.00" />
+        <span class="unit" id="sW_aes0V" style="font-style:normal;font-variant-numeric:tabular-nums">0.00</span>
+      </span>
+    </div>
     <div class="filter-actions">
       <button class="apply" id="sApply">Apply</button>
       <button class="reset" id="sReset">Reset</button>
       <span style="flex:1"></span>
-      <span class="filter-cov" id="sortCov"><i>final = w_vec·vec + w_aes·aesthetic_v2 + w_ps·pickscore</i></span>
+      <span class="filter-cov" id="sortCov"><i>final = Σ wᵢ·scoreᵢ (vec + aesthetic models)</i></span>
     </div>
   </div>
   <div id="results" class="grid"></div>
@@ -1295,14 +1316,17 @@ async function search(){
   $("#empty").style.display="none";
   const folder=$("#scope").value.trim();
   const neg=$("#neg").value.trim();
+  const negS = parseFloat($("#negStrength").value);
   const fParams = filterParamString();
-  const key=q+"|"+folder+"|"+neg+"|"+fParams;
+  // negS must be in the key: changing only the exclude strength fetches a new
+  // ranking, so the grid has to reset+re-render. Omitting it froze results
+  // (key unchanged → _rendered never reset → _renderHits appended nothing).
+  const key=q+"|"+folder+"|"+neg+"|"+(neg?negS:"")+"|"+fParams;
   if(key!==_lastKey){ _k=K_STEP; _lastKey=key; _rendered=0; _hasMore=true; showSkeletons(12); }  // new query → reset + show skeletons
   _mode="text"; _loading=true;
   if(_searchAbort) _searchAbort.abort();
   _searchAbort = new AbortController();
   let r;
-  const negS = parseFloat($("#negStrength").value);
   try { r = await (await fetch(`/api/search?q=${enc(q)}&k=${_k}${folder?`&folder=${enc(folder)}`:""}${neg?`&neg=${enc(neg)}&neg_strength=${negS}`:""}${fParams}`, {signal:_searchAbort.signal})).json(); }
   catch(e){ if(e.name==="AbortError") return; _loading=false; throw e; }   // abort: a newer search now owns _loading
   _renderHits(r);
@@ -1442,53 +1466,59 @@ updateFilterCoverage();
 // DOM cards by sorted final score. Per-user weights persist in localStorage so
 // a learned ranking survives reloads.
 const SORTBLEND_KEY = "muser-sortblend-v1";
-const SORT_DEFAULT = { vec: 1.00, aes: 0.30, ps: 0.10, open: false };
+// One row per weight slider. `field` is the per-hit score key shipped by
+// /api/search (_attach_scores). Mirrors the Interesting tab's non-combined
+// aesthetic options; new models default to 0 so the blend is unchanged until
+// the user dials one in.
+const SORT_METRICS = [
+  { id:"vec",   field:"score",         def:1.00 },
+  { id:"aes",   field:"aesthetic_v2",  def:0.30 },
+  { id:"ps",    field:"pickscore",     def:0.10 },
+  { id:"aes25", field:"aesthetic_v25", def:0.00 },
+  { id:"hps",   field:"hps_v21",       def:0.00 },
+  { id:"aes0",  field:"aesthetic",     def:0.00 },
+];
+const SORT_DEFAULT = Object.assign({ open: false },
+  Object.fromEntries(SORT_METRICS.map(m => [m.id, m.def])));
 function _loadSortBlend(){
   try { return Object.assign({}, SORT_DEFAULT, JSON.parse(localStorage.getItem(SORTBLEND_KEY) || "{}")); }
   catch { return Object.assign({}, SORT_DEFAULT); }
 }
 function _saveSortBlend(){
-  const s = {
-    vec: parseFloat($("#sW_vec").value), aes: parseFloat($("#sW_aes").value),
-    ps:  parseFloat($("#sW_ps").value),  open: $("#sortPanel").classList.contains("on"),
-  };
+  const s = { open: $("#sortPanel").classList.contains("on") };
+  SORT_METRICS.forEach(m => s[m.id] = parseFloat($("#sW_"+m.id).value));
   localStorage.setItem(SORTBLEND_KEY, JSON.stringify(s));
 }
 function _sortBlendActive(){
   // Default = no re-rank (matches the server's vec-only order).
-  return $("#sW_vec").value != SORT_DEFAULT.vec.toFixed(2) ||
-         $("#sW_aes").value != SORT_DEFAULT.aes.toFixed(2) ||
-         $("#sW_ps").value  != SORT_DEFAULT.ps.toFixed(2);
+  return SORT_METRICS.some(m => $("#sW_"+m.id).value != m.def.toFixed(2));
 }
-function _sortBlendKey(h, wv, wa, wp){
-  const vec = (h.score ?? 0);
-  const aes = (h.aesthetic_v2 ?? 0);
-  const ps  = (h.pickscore ?? 0);
-  return wv * vec + wa * aes + wp * ps;
+function _sortBlendKey(h, w){
+  return SORT_METRICS.reduce((sum, m) => sum + w[m.id] * (h[m.field] ?? 0), 0);
 }
 function applySortBlend(){
-  const wv = parseFloat($("#sW_vec").value);
-  const wa = parseFloat($("#sW_aes").value);
-  const wp = parseFloat($("#sW_ps").value);
-  // Build a uid → card lookup from the current DOM, then reorder by sorting
-  // the in-memory result list by final score and re-appending in that order.
-  // appendChild on an existing node moves it — no reflow of unaffected cards.
+  // Snapshot the weights once (don't re-read the DOM per comparison), then
+  // build a uid → card lookup and reorder by sorting the in-memory result list
+  // by final score and re-appending. appendChild moves an existing node — no
+  // reflow of unaffected cards.
+  const w = {};
+  SORT_METRICS.forEach(m => w[m.id] = parseFloat($("#sW_"+m.id).value));
   const g = $("#results");
   const byUid = new Map();
   Array.from(g.children).forEach(c => { if(c.dataset && c.dataset.uid) byUid.set(c.dataset.uid, c); });
-  const ranked = _currentResults.slice().sort((a, b) =>
-    _sortBlendKey(b, wv, wa, wp) - _sortBlendKey(a, wv, wa, wp)
-  );
+  const ranked = _currentResults.slice().sort((a, b) => _sortBlendKey(b, w) - _sortBlendKey(a, w));
   ranked.forEach(h => {
     const c = byUid.get(h.uid);
     if(c) g.appendChild(c);
   });
 }
+function _setSortWeight(id, v){
+  $("#sW_"+id).value = v.toFixed(2);
+  $("#sW_"+id+"V").textContent = v.toFixed(2);
+}
 function _wireSortBlendInputs(){
   const cfg = _loadSortBlend();
-  $("#sW_vec").value = cfg.vec.toFixed(2); $("#sW_vecV").textContent = cfg.vec.toFixed(2);
-  $("#sW_aes").value = cfg.aes.toFixed(2); $("#sW_aesV").textContent = cfg.aes.toFixed(2);
-  $("#sW_ps").value  = cfg.ps .toFixed(2); $("#sW_psV") .textContent = cfg.ps .toFixed(2);
+  SORT_METRICS.forEach(m => _setSortWeight(m.id, cfg[m.id]));
   if(cfg.open){
     $("#sortPanel").classList.add("on");
     $("#sortToggle").classList.add("open","on");
@@ -1500,18 +1530,16 @@ $("#sortToggle").addEventListener("click", () => {
   $("#sortToggle").classList.toggle("on", open);
   _saveSortBlend();
 });
-["sW_vec","sW_aes","sW_ps"].forEach(id => {
-  const inp = $("#"+id);
+SORT_METRICS.forEach(m => {
+  const inp = $("#sW_"+m.id);
   inp.addEventListener("input", () => {
-    $("#"+id+"V").textContent = parseFloat(inp.value).toFixed(2);
+    $("#sW_"+m.id+"V").textContent = parseFloat(inp.value).toFixed(2);
     _saveSortBlend();
   });
 });
 $("#sApply").addEventListener("click", () => { _saveSortBlend(); applySortBlend(); });
 $("#sReset").addEventListener("click", () => {
-  $("#sW_vec").value = SORT_DEFAULT.vec.toFixed(2); $("#sW_vecV").textContent = SORT_DEFAULT.vec.toFixed(2);
-  $("#sW_aes").value = SORT_DEFAULT.aes.toFixed(2); $("#sW_aesV").textContent = SORT_DEFAULT.aes.toFixed(2);
-  $("#sW_ps").value  = SORT_DEFAULT.ps.toFixed(2);  $("#sW_psV") .textContent = SORT_DEFAULT.ps .toFixed(2);
+  SORT_METRICS.forEach(m => _setSortWeight(m.id, m.def));
   _saveSortBlend(); applySortBlend();
 });
 _wireSortBlendInputs();
