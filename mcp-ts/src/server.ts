@@ -18,6 +18,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import {
+  contactSheet,
   ensureService,
   folders,
   fullDataUri,
@@ -145,27 +146,37 @@ async function buildLlmMeta(
   return "muser_search_meta (LLM-only, hidden from user):\n" + JSON.stringify(meta, null, 2);
 }
 
-/** How many top results to surface to the *model* as inline image blocks.
- *  The gallery (structuredContent) still shows ALL results; this only bounds
- *  the token cost of what the LLM actually sees. Small thumbs keep it cheap. */
-const LLM_PREVIEW_COUNT = 6;
+/** How many top results to pack into the LLM-facing contact sheet. A deliberate
+ *  buffer below what's legibly resolvable in one 256px-cell montage, so cells
+ *  stay readable and the token cost is a single image. The gallery
+ *  (structuredContent) still shows ALL results — this only bounds what the model
+ *  sees. */
+const LLM_SHEET_MAX = 36;
+/** How many top results to ALSO send as individual full-detail image blocks
+ *  (after the sheet) for close reasoning. */
+const LLM_DETAIL_COUNT = 3;
+/** Fallback when the contact-sheet call fails: top-K individual thumbs. */
+const LLM_FALLBACK_COUNT = 6;
 
 /** An MCP image content block the host renders into the model's context. */
 type ImageBlock = { type: "image"; data: string; mimeType: string };
 
-/** Turn the top-K hits' small thumbnails into MCP image content blocks the model
- *  can actually see. Reuses the already-attached base64 thumb (the small one),
- *  strips the `data:<mime>;base64,` prefix, and derives mimeType from it.
- *  Skips any hit whose thumb is missing/unparseable so one bad image can't
- *  break the result. Returns [] when there are no usable thumbs. */
-function llmPreviewImages(results: GalleryHit[]): ImageBlock[] {
+/** Turn a base64 image data URI into an MCP image block, deriving the mimeType.
+ *  Returns null if the URI is missing/unparseable. */
+function dataUriToImageBlock(uri: string | null | undefined): ImageBlock | null {
+  if (!uri) return null;
+  const m = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/.exec(uri);
+  if (!m || !m[1] || !m[2]) return null;
+  return { type: "image", data: m[2], mimeType: m[1] };
+}
+
+/** Turn the top-K hits' small thumbnails into MCP image content blocks (used as
+ *  the fallback path when the contact-sheet endpoint is unavailable). */
+function llmPreviewImages(results: GalleryHit[], count: number): ImageBlock[] {
   const blocks: ImageBlock[] = [];
-  for (const h of results.slice(0, LLM_PREVIEW_COUNT)) {
-    const uri = h.thumb;
-    if (!uri) continue;
-    const m = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/.exec(uri);
-    if (!m || !m[1] || !m[2]) continue;
-    blocks.push({ type: "image", data: m[2], mimeType: m[1] });
+  for (const h of results.slice(0, count)) {
+    const block = dataUriToImageBlock(h.thumb);
+    if (block) blocks.push(block);
   }
   return blocks;
 }
@@ -183,23 +194,51 @@ async function galleryResult(
     : "No matches found. Index some images first with index_folder.";
   const meta = await buildLlmMeta(mode, query, folder, results, refinements);
 
-  // Inline the top-K thumbnails so the *model* can reason about the matches
-  // visually (pick the best, notice query drift, suggest refinements). The user
-  // still sees every result in the gallery via structuredContent.
-  const images = llmPreviewImages(results);
-
   const content: Array<
     { type: "text"; text: string } | ImageBlock
   > = [{ type: "text", text: list }];
-  if (images.length) {
-    content.push({
-      type: "text",
-      text:
-        `Top ${images.length} result${images.length === 1 ? "" : "s"} shown below as ` +
-        `image${images.length === 1 ? "" : "s"} (for your visual reference; the user sees the full gallery).`,
-    });
-    content.push(...images);
+
+  // Give the *model* a visual of the matches so it can reason (pick the best,
+  // notice query drift, suggest refinements). The user still sees every result
+  // in the gallery via structuredContent.
+  //
+  // Primary: ONE numbered contact sheet of the top results — cells numbered
+  // 1..N matching the result-list order — plus the top few as full-detail
+  // thumbs for close reasoning. Costs one image + a handful, not one-per-result.
+  if (results.length) {
+    const sheetPaths = results.slice(0, LLM_SHEET_MAX).map((h) => h.path);
+    const sheet = await contactSheet(sheetPaths, { cols: 6, cell: 256, max: LLM_SHEET_MAX });
+
+    if (sheet) {
+      content.push({
+        type: "text",
+        text:
+          `Contact sheet of the top ${sheet.count} results below — cells are numbered ` +
+          `1..${sheet.count} matching the result list order (use the numbers to refer to ` +
+          `specific results).`,
+      });
+      content.push({ type: "image", data: sheet.base64, mimeType: "image/jpeg" });
+
+      const detail = llmPreviewImages(results, LLM_DETAIL_COUNT);
+      if (detail.length) {
+        content.push({ type: "text", text: `Top ${detail.length} in detail:` });
+        content.push(...detail);
+      }
+    } else {
+      // Contact-sheet endpoint unavailable → previous behavior: top-K thumbs.
+      const images = llmPreviewImages(results, LLM_FALLBACK_COUNT);
+      if (images.length) {
+        content.push({
+          type: "text",
+          text:
+            `Top ${images.length} result${images.length === 1 ? "" : "s"} shown below as ` +
+            `image${images.length === 1 ? "" : "s"} (for your visual reference; the user sees the full gallery).`,
+        });
+        content.push(...images);
+      }
+    }
   }
+
   // Hidden-from-user, LLM-facing context block — kept last.
   content.push({ type: "text", text: meta });
 

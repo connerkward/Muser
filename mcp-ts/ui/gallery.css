@@ -396,6 +396,27 @@ input[type="color"] {
   text-overflow: ellipsis;
 }
 
+/* ---- Expand drawer: show top-6, rest behind a toggle -------------------- */
+/* Default collapsed to the first 6 cards; the toggle reveals/hides the tail
+   without re-running the search. Matches the underline-tab idiom of the header
+   nav. */
+.expand-row {
+  margin: 18px 2px 0;
+  display: flex;
+  justify-content: center;
+}
+.expand-row[hidden] { display: none; }
+.expand-btn {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--mut);
+  font-size: 12px;
+  padding: 8px 18px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.expand-btn:hover { color: var(--fg); border-color: var(--fg); }
+
 /* ---- Click-into-duplicates modal --------------------------------------- */
 .modal {
   position: fixed;

@@ -202,6 +202,42 @@ export function fullDataUri(path: string, size = 1400): Promise<string | null> {
   return thumbDataUri(path, size);
 }
 
+/** POST /api/contact-sheet {paths, cols, cell, max} → one numbered JPEG montage.
+ *  Used to hand the *model* a single compact image of the top results (cells
+ *  numbered 1..N matching result order) instead of many individual thumbnails —
+ *  far fewer image tokens. Returns the raw base64 JPEG (no data: prefix), or
+ *  null on any failure so the caller can fall back to per-result thumbs. */
+export async function contactSheet(
+  paths: string[],
+  opts: { cols?: number; cell?: number; max?: number } = {},
+): Promise<{ base64: string; count: number } | null> {
+  if (!paths.length) return null;
+  try {
+    const r = await fetch(`${BASE}/api/contact-sheet`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        paths,
+        cols: opts.cols ?? 6,
+        cell: opts.cell ?? 256,
+        max: opts.max ?? 36,
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!r.ok) return null;
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (!buf.length) return null;
+    const header = r.headers.get("X-Sheet-Count");
+    const count = header ? parseInt(header, 10) : NaN;
+    return {
+      base64: buf.toString("base64"),
+      count: Number.isFinite(count) ? count : Math.min(paths.length, opts.max ?? 36),
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** POST /api/index {folder, recursive} */
 export async function indexFolder(folder: string, recursive: boolean): Promise<IndexResponse> {
   const r = await fetch(`${BASE}/api/index`, {

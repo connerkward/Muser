@@ -166,6 +166,31 @@ export function createGallery(handlers: GalleryHandlers): Gallery {
   const status = $<HTMLDivElement>("status");
   const scope = $<HTMLInputElement>("scope");
 
+  // ---- Expand drawer: show the first 6 cards, rest behind a toggle ---------
+  // Default collapsed. The button is created here (the host HTML doesn't carry
+  // it) and inserted right after the grid. `expanded` is reset to collapsed on
+  // every new render so a fresh search always starts compact.
+  const COLLAPSED_COUNT = 6;
+  let expanded = false;
+  const expandRow = document.createElement("div");
+  expandRow.className = "expand-row";
+  expandRow.hidden = true;
+  const expandBtn = Object.assign(document.createElement("button"), {
+    type: "button",
+    className: "expand-btn",
+  });
+  expandRow.append(expandBtn);
+  grid.insertAdjacentElement("afterend", expandRow);
+  expandBtn.addEventListener("click", () => {
+    expanded = !expanded;
+    // If a real host fullscreen is available, expanding also maximizes the app
+    // so the revealed grid has room to breathe; collapsing leaves the mode as-is.
+    if (expanded && handlers.onToggleFullscreen && !appIsFullscreen()) {
+      void toggleAppFullscreen();
+    }
+    renderCards(blendOrdered());
+  });
+
   // ---- Mode tabs -----------------------------------------------------------
   const tabButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".nav[data-mode]"));
   const panels = Array.from(document.querySelectorAll<HTMLElement>(".panel[data-panel]"));
@@ -675,8 +700,11 @@ export function createGallery(handlers: GalleryHandlers): Gallery {
     }
     if (typeof p.query === "string" && (p.mode ?? "text") === "text") input.value = p.query;
     lastResults = p.results ?? [];
+    // A fresh search always starts collapsed to the first 6.
+    expanded = false;
     if (!lastResults.length) {
       grid.replaceChildren();
+      expandRow.hidden = true;
       if (blendBox) blendBox.hidden = true;
       setStatus(`No matches${folder ? " in " + folder : ""}.`);
       return;
@@ -695,10 +723,21 @@ export function createGallery(handlers: GalleryHandlers): Gallery {
   }
 
   /** Build the result grid from an already-ordered hit list. Pure DOM work —
-   *  called by `render` (new results) and `rerank` (weights changed). */
+   *  called by `render` (new results) and `rerank` (weights changed). Renders
+   *  only the first `COLLAPSED_COUNT` cards unless `expanded`; the tail lives
+   *  behind the expand toggle. */
   function renderCards(hits: Hit[]): void {
     grid.replaceChildren();
-    for (const hit of hits) {
+    const total = hits.length;
+    const shown = expanded ? hits : hits.slice(0, COLLAPSED_COUNT);
+    // Toggle button: only meaningful when there's a tail to hide.
+    if (total > COLLAPSED_COUNT) {
+      expandRow.hidden = false;
+      expandBtn.textContent = expanded ? "Show less ▴" : `Show all ${total} results ▾`;
+    } else {
+      expandRow.hidden = true;
+    }
+    for (const hit of shown) {
       const name = hit.path.split("/").pop() ?? hit.path;
       const card = document.createElement("div");
       card.className = "card";
