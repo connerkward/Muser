@@ -2016,6 +2016,40 @@ def create_app(model: str = DEFAULT_MODEL):
             "members": [{"path": p, "name": os.path.basename(p), "uid": uid_for(p)} for p in page],
         }
 
+    # ---- Explore: 3D embedding projection (point-cloud viz) ----
+    # A 3D PCA of a sample of the indexed embeddings, colored by HDBSCAN cluster.
+    # Expensive (table scan + SVD), so cached by (n, folder, index-mtime,
+    # clusters-mtime) — repeat calls are an O(1) dict hit until a re-index or
+    # re-cluster bumps a file mtime. Degrades to an empty cloud when nothing is
+    # indexed or clusters.json is missing.
+    _projection_cache: dict = {"key": None, "payload": None}
+    _projection_lock = threading.Lock()
+
+    @app.get("/api/projection")
+    def projection(n: int = 2000, folder: str | None = None):
+        from . import projection as _proj
+
+        key = _proj.cache_key(n, folder, state.index.db_path, CLUSTERS)
+        with _projection_lock:
+            if _projection_cache["key"] == key and _projection_cache["payload"] is not None:
+                return _projection_cache["payload"]
+        # Compute outside the lock (SVD can take a few hundred ms) so a slow
+        # build doesn't serialize unrelated requests; last writer wins, which is
+        # fine since the key fully determines the payload.
+        payload = _proj.compute_projection(
+            index=state.index,
+            model=state.model_name,
+            clusters=_clusters(),
+            n=n,
+            folder=folder,
+            is_hidden=_hidden,
+            total_indexed=state.index.count(state.model_name),
+        )
+        with _projection_lock:
+            _projection_cache["key"] = key
+            _projection_cache["payload"] = payload
+        return payload
+
     # ---- per-image captions: GPT-4o-mini + user edits (~/.muser/captions.jsonl) ----
     # JSONL is append-only. Multiple rows per path are kept on disk for history;
     # in memory we collapse to latest-wins by `ts` (so a user-edited row written
