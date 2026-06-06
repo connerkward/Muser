@@ -19,11 +19,15 @@ import path from "node:path";
 import { z } from "zod";
 import {
   ensureService,
+  folders,
   getStatus,
   indexFolder,
   search,
+  searchColor,
+  searchUpload,
   thumbDataUri,
   type SearchHit,
+  type SearchResponse,
 } from "./service";
 
 const RESOURCE_URI = "ui://muser/search.html";
@@ -38,15 +42,14 @@ interface GalleryHit extends SearchHit {
   dupeThumbs?: Record<string, string | null>;
 }
 
-/** Run a search against the embedded service and attach thumbnails.
+/** Attach base64 thumbnails to a service response's hits.
  *
  *  The ext-app runs in a sandboxed iframe with no direct network access, so it
  *  cannot call /api/thumb itself. We therefore inline every thumbnail as a
  *  base64 data URI in structuredContent: the rep thumb for the card, plus a
  *  per-dupe-path thumb map for the duplicates modal. Because duplicates are
  *  byte-identical files, all dupe entries share the rep image (no extra fetches). */
-async function searchWithThumbs(query: string, k: number): Promise<GalleryHit[]> {
-  const { results } = await search(query, k);
+async function attachThumbs(results: SearchHit[]): Promise<GalleryHit[]> {
   return Promise.all(
     results.map(async (h) => {
       const thumb = await thumbDataUri(h.path);
@@ -58,6 +61,22 @@ async function searchWithThumbs(query: string, k: number): Promise<GalleryHit[]>
       return hit;
     }),
   );
+}
+
+/** Build the gallery tool result shared by every search mode (text/color/image). */
+function galleryResult(
+  mode: string,
+  query: string,
+  folder: string,
+  results: GalleryHit[],
+) {
+  const text = results.length
+    ? results.map((h, i) => `${i + 1}. ${h.path} (${((h.prob ?? h.score) * 100).toFixed(1)}%)`).join("\n")
+    : "No matches found. Index some images first with index_folder.";
+  return {
+    structuredContent: { mode, folder, query, results },
+    content: [{ type: "text" as const, text }],
+  };
 }
 
 export function createServer(): McpServer {
@@ -90,14 +109,78 @@ export function createServer(): McpServer {
         await indexFolder(folder, true).catch(() => undefined);
       }
       const count = k ?? 24;
-      const results = await searchWithThumbs(query, count);
-      const text = results.length
-        ? results.map((h, i) => `${i + 1}. ${h.path} (${((h.prob ?? h.score) * 100).toFixed(1)}%)`).join("\n")
-        : "No matches found. Index some images first with index_folder.";
-      return {
-        structuredContent: { folder: folder ?? "", query, results },
-        content: [{ type: "text", text }],
-      };
+      const { results } = await search(query, count, folder);
+      return galleryResult("text", query, folder ?? "", await attachThumbs(results));
+    },
+  );
+
+  // ---- App tool: color-palette search (no model) ----------------------------
+  registerAppTool(
+    server,
+    "search_by_color",
+    {
+      title: "Search by color",
+      description:
+        "Rank images by how much of one or more colors they contain (LAB color-palette " +
+        "index — separate from the semantic model, fully local). Opens the same gallery.",
+      inputSchema: {
+        hex: z
+          .string()
+          .describe("One or more comma-separated #rrggbb colors, e.g. '#c83c3c' or '#3a7bd5,#e8d44a'"),
+        mode: z
+          .enum(["all", "any"])
+          .optional()
+          .describe("With multiple colors: 'all' (default) requires every color present; 'any' best single match."),
+        folder: z.string().optional().describe("Optional folder path to scope results to."),
+        k: z.number().optional().describe("How many results to return (default 24)"),
+      },
+      _meta: { ui: { resourceUri: RESOURCE_URI } },
+    },
+    async ({ hex, mode, folder, k }) => {
+      await ensureService();
+      const { query, results } = await searchColor(hex, k ?? 24, folder, mode ?? "all");
+      return galleryResult("color", query, folder ?? "", await attachThumbs(results));
+    },
+  );
+
+  // ---- App tool: image-to-image "find similar" ------------------------------
+  registerAppTool(
+    server,
+    "search_similar",
+    {
+      title: "Find similar images",
+      description:
+        "Find images visually similar to an uploaded image (image-to-image search). " +
+        "The gallery's image picker supplies the bytes; opens the same gallery of matches.",
+      inputSchema: {
+        image_base64: z.string().describe("Base64-encoded image bytes (no data: prefix)."),
+        filename: z.string().optional().describe("Original filename (for logging only)."),
+        folder: z.string().optional().describe("Optional folder path to scope results to."),
+        k: z.number().optional().describe("How many results to return (default 24)"),
+      },
+      _meta: { ui: { resourceUri: RESOURCE_URI } },
+    },
+    async ({ image_base64, filename, folder, k }) => {
+      await ensureService();
+      const { results }: SearchResponse = await searchUpload(
+        image_base64,
+        filename ?? "upload.img",
+        k ?? 24,
+        folder,
+      );
+      return galleryResult("image", `image: ${filename ?? "(uploaded)"}`, folder ?? "", await attachThumbs(results));
+    },
+  );
+
+  // ---- Utility: list indexed folders (drives the gallery's scope picker) -----
+  server.tool(
+    "list_folders",
+    "List indexed folders (path + image count) — used to populate the gallery's folder-scope picker.",
+    {},
+    async () => {
+      await ensureService();
+      const items = await folders();
+      return { content: [{ type: "text", text: JSON.stringify({ folders: items }, null, 2) }] };
     },
   );
 

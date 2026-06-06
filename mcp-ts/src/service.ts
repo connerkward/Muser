@@ -38,6 +38,10 @@ export interface IndexResponse {
   removed: number;
   total: number;
 }
+export interface FolderItem {
+  folder: string;
+  count: number;
+}
 
 /** GET /api/status — short timeout; used both as a health check and for info. */
 export async function getStatus(timeoutMs = 3000): Promise<StatusResponse | null> {
@@ -85,12 +89,64 @@ export async function ensureService(maxWaitMs = 120_000): Promise<StatusResponse
   );
 }
 
-/** GET /api/search?q=&k= */
-export async function search(query: string, k: number): Promise<SearchResponse> {
-  const url = `${BASE}/api/search?q=${encodeURIComponent(query)}&k=${k}`;
+/** GET /api/search?q=&k=&folder= — text query, optional folder scope. */
+export async function search(query: string, k: number, folder?: string): Promise<SearchResponse> {
+  let url = `${BASE}/api/search?q=${encodeURIComponent(query)}&k=${k}`;
+  if (folder) url += `&folder=${encodeURIComponent(folder)}`;
   const r = await fetch(url, { signal: AbortSignal.timeout(60_000) });
   if (!r.ok) throw new Error(`/api/search ${r.status}: ${await r.text()}`);
   return (await r.json()) as SearchResponse;
+}
+
+/** GET /api/search-color?hex=&k=&folder=&mode= — color-palette search (no model).
+ *  `hex` is one or more comma-separated bare/`#`-prefixed RRGGBB colors; with >1,
+ *  mode="all" requires every color present, mode="any" takes the best single match. */
+export async function searchColor(
+  hex: string,
+  k: number,
+  folder?: string,
+  mode: "all" | "any" = "all",
+): Promise<SearchResponse> {
+  let url = `${BASE}/api/search-color?hex=${encodeURIComponent(hex)}&k=${k}&mode=${mode}`;
+  if (folder) url += `&folder=${encodeURIComponent(folder)}`;
+  const r = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+  if (!r.ok) throw new Error(`/api/search-color ${r.status}: ${await r.text()}`);
+  return (await r.json()) as SearchResponse;
+}
+
+/** POST /api/search-upload (multipart `file`) — image-to-image "find similar".
+ *  `data` is a base64 image payload (no data: prefix); the sandboxed gallery
+ *  reads a chosen file, base64-encodes it, and hands the bytes to the MCP tool. */
+export async function searchUpload(
+  base64: string,
+  filename: string,
+  k: number,
+  folder?: string,
+): Promise<SearchResponse> {
+  const bytes = Buffer.from(base64, "base64");
+  const form = new FormData();
+  form.append("file", new Blob([bytes]), filename || "upload.img");
+  form.append("k", String(k));
+  if (folder) form.append("folder", folder);
+  const r = await fetch(`${BASE}/api/search-upload`, {
+    method: "POST",
+    body: form,
+    signal: AbortSignal.timeout(120_000),
+  });
+  if (!r.ok) throw new Error(`/api/search-upload ${r.status}: ${await r.text()}`);
+  return (await r.json()) as SearchResponse;
+}
+
+/** GET /api/folders — indexed folders (path + image count) for the scope picker. */
+export async function folders(): Promise<FolderItem[]> {
+  try {
+    const r = await fetch(`${BASE}/api/folders`, { signal: AbortSignal.timeout(5000) });
+    if (!r.ok) return [];
+    const j = (await r.json()) as { folders?: FolderItem[] };
+    return j.folders ?? [];
+  } catch {
+    return [];
+  }
 }
 
 /** GET /api/thumb?path=&size= → JPEG bytes, returned as a data: URI for the sandboxed UI. */

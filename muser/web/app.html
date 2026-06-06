@@ -263,6 +263,97 @@
   .cart-note { font-size:12px; color:var(--mut); padding:10px 0 0; font-style:italic;
                font-family:var(--serif); }
 
+  /* Generate panel inside the cart modal: a disclosure that opens a config
+     block. Mirrors the .filter/.compose opt-in rhythm — thin borders, italic
+     serif labels — so it reads as a sibling of the existing checkout path,
+     not a competing primary action. */
+  .gen-panel { margin-top:20px; padding-top:18px; border-top:1px solid var(--line); }
+  .gen-toggle { background:transparent; border:0; padding:0; color:var(--mut);
+                font-size:12px; cursor:pointer; letter-spacing:.04em; }
+  .gen-toggle:hover { color:var(--fg); }
+  .gen-toggle .caret { display:inline-block; transition:transform .18s ease;
+                       margin-right:4px; }
+  .gen-toggle.open .caret { transform:rotate(90deg); }
+  .gen-body { margin-top:14px; animation:ckoutIn .22s cubic-bezier(0.22,1,0.36,1); }
+  .gen-row { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:12px; }
+  .gen-field { margin-bottom:12px; }
+  .gen-lab { font-family:Georgia,serif; font-style:italic; font-size:13px;
+             color:var(--fg); margin-right:2px; }
+  .gen-radio, .gen-chk { font-size:12px; color:var(--mut); cursor:pointer;
+                         display:inline-flex; align-items:center; gap:5px; }
+  .gen-radio:hover, .gen-chk:hover { color:var(--fg); }
+  .gen-radio input, .gen-chk input { cursor:pointer; }
+  .gen-loratype select, #genLoraType { font-size:12px; }
+  .gen-field textarea { width:100%; box-sizing:border-box; margin-top:5px;
+                        font:italic 400 12px/1.5 var(--serif); color:var(--fg);
+                        background:transparent; border:1px solid var(--line);
+                        border-radius:2px; padding:8px 10px; resize:vertical; outline:none; }
+  #genN { width:64px; font-size:13px; padding:5px 8px;
+          font-variant-numeric:tabular-nums; }
+  .gen-flex { flex:1; }
+  .gen-toggles { display:flex; flex-wrap:wrap; gap:8px 18px; margin-bottom:16px; }
+  .gen-actions { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  .gen-go { background:var(--fg); color:var(--bg); border:1px solid var(--fg);
+            padding:7px 16px; border-radius:2px; font-size:13px; cursor:pointer; }
+  .gen-go:hover { opacity:.85; }
+  .gen-go:disabled { opacity:.45; cursor:default; }
+  .gen-hint { font-size:11px; color:var(--mut); font-style:italic; font-family:var(--serif); }
+
+  /* Stage list in the checkout panel (Generate runs): each named pipeline
+     stage with a small state glyph + optional count. Reuses the .ckout chrome. */
+  .ckstages { margin:10px 0 2px; }
+  .ckstage { display:flex; align-items:center; gap:9px; padding:4px 0;
+             font-size:12px; color:var(--mut); font-variant-numeric:tabular-nums; }
+  .ckstage .ckst-glyph { width:14px; text-align:center; flex:0 0 auto; color:var(--mut); }
+  .ckstage.running .ckst-glyph { color:var(--fg);
+    display:inline-block; animation:spin .9s linear infinite; }
+  .ckstage.done .ckst-glyph { color:var(--fg); }
+  .ckstage.done .ckst-name, .ckstage.running .ckst-name { color:var(--fg); }
+  .ckstage .ckst-name { flex:1; text-transform:capitalize; }
+  .ckstage .ckst-n { color:var(--mut); }
+
+  /* Results tab: run cards (grid) + run detail. Reuses .grid/.card idioms. */
+  .runcard { cursor:pointer; background:transparent; border:0; padding:0;
+             text-align:left; display:flex; flex-direction:column; }
+  .runcard .rthumb { width:100%; aspect-ratio:1; object-fit:cover;
+                     background:var(--paper); }
+  .runcard .rthumb.empty { display:flex; align-items:center; justify-content:center;
+                           font:italic 400 13px/1 var(--serif); color:var(--mut); }
+  .runcard .rbrief { font-size:13px; color:var(--fg); padding:9px 0 0; line-height:1.4;
+                     display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+                     overflow:hidden; }
+  .runcard:hover .rbrief { text-decoration:underline; }
+  .runcard .rmeta { font:italic 400 12px/1.4 var(--serif); color:var(--mut); padding:3px 0 0; }
+  .runcard .rstatus { font-size:11px; padding:3px 0 0; color:var(--mut);
+                      font-variant-numeric:tabular-nums; }
+  .runcard .rstatus.running { color:#caa468; }
+  .runcard .rstatus.error { color:#c0392b; }
+  .runcard .rstatus.done { color:var(--fg); }
+  .run-detail .rd-config { font-size:12px; color:var(--mut); line-height:1.7;
+                           margin:6px 0 18px; font-family:var(--serif); font-style:italic; }
+  .run-detail .rd-sec { font-size:11px; color:var(--mut); letter-spacing:.08em;
+                        text-transform:uppercase; margin:20px 0 10px; }
+  .outcard { display:flex; flex-direction:column; }
+  .outcard img { width:100%; aspect-ratio:1; object-fit:cover; background:var(--paper);
+                 cursor:zoom-in; }
+  .outcard .okind { font-size:10px; color:var(--mut); letter-spacing:.06em;
+                    text-transform:uppercase; padding:6px 0 0; }
+  .outcard .oprompt { font:italic 400 11px/1.4 var(--serif); color:var(--fg);
+                      padding:3px 0 0; display:-webkit-box; -webkit-line-clamp:3;
+                      -webkit-box-orient:vertical; overflow:hidden; }
+  .outcard .orow { display:flex; gap:13px; padding:6px 0 0; align-items:center; flex-wrap:wrap; }
+  .outcard .orow button, .outcard .orow a { background:transparent; border:0; padding:0;
+                      color:var(--mut); font-size:11px; cursor:pointer; text-decoration:none;
+                      border-bottom:1px solid transparent; }
+  .outcard .orow button:hover, .outcard .orow a:hover { color:var(--fg); border-bottom-color:var(--fg); }
+  .outcard .orow a.glb { color:var(--fg); border-bottom:1px dotted var(--mut); }
+  .outcard .orow a.glb:hover { border-bottom-style:solid; }
+  .outcard .o3d { display:flex; align-items:center; gap:8px; padding:6px 0 0; }
+  .outcard .o3d img { width:40px; height:40px; aspect-ratio:auto; cursor:default; }
+  #runRefresh, #runBack { background:transparent; border:0; padding:0; color:var(--mut);
+                          font-size:12px; cursor:pointer; }
+  #runRefresh:hover, #runBack:hover { color:var(--fg); }
+
   body.has-query .chip::before { content:"+ "; color:var(--mut); }
   body.has-query .chip.refine::before { content:"→ "; }
 
@@ -347,23 +438,93 @@
   .filter-panel { display:none; border:1px solid var(--line); padding:14px 16px;
                   margin:6px 0 14px; font-size:12px; color:var(--mut); }
   .filter-panel.on { display:block; }
-  /* ---- single relevance↔aesthetic blend control ---- */
-  .blend-row .pair input[type=range] { min-width:160px; }
-  .blend-vis { margin:4px 0 12px; padding:0 0 0 108px; }
-  .blend-bar { position:relative; display:flex; height:8px; border-radius:4px;
-               overflow:hidden; border:1px solid var(--line); }
-  .blend-bar i { height:100%; transition:width 200ms ease; }
-  .blend-bar .seg-rel { background:#3a7bd5; }
-  .blend-bar .seg-aes { background:#d08a2a; }
-  .blend-marker { position:relative; height:0; }
-  .blend-marker::after { content:""; position:absolute; top:-13px; left:var(--mk,0%);
-                         width:2px; height:14px; background:var(--fg);
-                         transform:translateX(-1px); transition:left 200ms ease; }
-  .blend-ends { display:flex; justify-content:space-between; font:italic 400 11px/1 var(--serif);
-                color:var(--mut); margin-top:5px; }
-  .blend-adv { margin:2px 0 6px; }
-  #sortAdvBody { display:none; }
-  #sortAdvBody.on { display:block; }
+  /* ---- legacy blend controls: kept in DOM for the existing JS, never shown ---- */
+  .legacy-blend { display:none; }
+
+  /* ---- unified ranking "blend console" ---------------------------------------
+     One cohesive component: a labelled stack of knob-rows sharing a common
+     visual language. Each row = a coloured channel with a draggable handle over
+     a rail; the rail's fill width encodes that knob's share of the blend. */
+  .console { --con-h:30px;
+             padding:14px 16px 6px; margin:2px 0 12px;
+             border:1px solid var(--line); border-radius:8px;
+             background:
+               radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--fg) 5%, transparent), transparent 60%),
+               var(--paper);
+             box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 14%, transparent),
+                         0 1px 2px color-mix(in srgb, #000 18%, transparent); }
+  .console-head { display:flex; align-items:baseline; gap:10px; margin:0 0 10px;
+                  font:italic 400 13px/1 var(--serif); color:var(--mut); }
+  .console-head .ch-title { color:var(--fg); font-style:normal; letter-spacing:.02em;
+                            font-size:12px; text-transform:uppercase; }
+  .console-head .ch-hint { font-size:11px; }
+  .con-row { display:grid; grid-template-columns:130px 1fr 52px; align-items:center;
+             gap:12px; padding:5px 0; }
+  .con-row + .con-row { border-top:1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+  .con-lab { display:flex; align-items:center; gap:7px; font-size:12px; color:var(--mut);
+             white-space:nowrap; cursor:default; }
+  .con-lab .dot { width:9px; height:9px; border-radius:50%; flex:0 0 auto;
+                  box-shadow:0 0 0 1px color-mix(in srgb, #000 22%, transparent),
+                             0 0 7px var(--knob); background:var(--knob); }
+  .con-lab .nm { overflow:hidden; text-overflow:ellipsis; }
+  /* rail: a track the handle slides along; ::before is the unfilled groove,
+     the .fill child is the coloured portion from 0 → current value. */
+  .con-rail { position:relative; height:var(--con-h); display:flex; align-items:center;
+              cursor:pointer; touch-action:none; }
+  .con-rail::before { content:""; position:absolute; left:0; right:0; height:6px;
+                      border-radius:3px; background:color-mix(in srgb, var(--fg) 9%, var(--paper));
+                      box-shadow: inset 0 1px 2px color-mix(in srgb, #000 28%, transparent); }
+  .con-fill { position:absolute; left:0; height:6px; border-radius:3px; pointer-events:none;
+              width:var(--pct,0%);
+              background:linear-gradient(90deg,
+                        color-mix(in srgb, var(--knob) 55%, transparent),
+                        var(--knob));
+              box-shadow:0 0 8px color-mix(in srgb, var(--knob) 55%, transparent);
+              transition:width 90ms linear; }
+  .con-handle { position:absolute; top:50%; left:var(--pct,0%);
+                width:16px; height:16px; border-radius:50%;
+                transform:translate(-50%,-50%);
+                background:radial-gradient(circle at 35% 30%,
+                          color-mix(in srgb, #fff 70%, var(--knob)), var(--knob) 70%);
+                border:1px solid color-mix(in srgb, #000 35%, var(--knob));
+                box-shadow:0 1px 3px color-mix(in srgb, #000 45%, transparent),
+                           0 0 0 0 color-mix(in srgb, var(--knob) 60%, transparent);
+                cursor:grab; transition:left 90ms linear, box-shadow 140ms ease, transform 140ms ease;
+                z-index:2; }
+  .con-rail:hover .con-handle { box-shadow:0 1px 3px color-mix(in srgb, #000 45%, transparent),
+                                           0 0 0 5px color-mix(in srgb, var(--knob) 22%, transparent); }
+  .con-handle.drag { cursor:grabbing; transform:translate(-50%,-50%) scale(1.18);
+                     transition:box-shadow 140ms ease, transform 90ms ease;
+                     box-shadow:0 2px 6px color-mix(in srgb, #000 55%, transparent),
+                                0 0 0 7px color-mix(in srgb, var(--knob) 28%, transparent); }
+  /* value tooltip floating above the handle while dragging / on hover */
+  .con-tip { position:absolute; bottom:calc(50% + 13px); left:var(--pct,0%);
+             transform:translateX(-50%); padding:1px 6px; border-radius:4px;
+             font:600 11px/1.4 var(--sans); font-variant-numeric:tabular-nums;
+             color:var(--bg); background:var(--knob); white-space:nowrap;
+             opacity:0; pointer-events:none; transition:opacity 120ms ease, left 90ms linear; z-index:3; }
+  .con-tip::after { content:""; position:absolute; top:100%; left:50%; transform:translateX(-50%);
+                    border:4px solid transparent; border-top-color:var(--knob); }
+  .con-rail:hover .con-tip, .con-handle.drag ~ .con-tip { opacity:1; }
+  .con-val { font:600 12px/1 var(--sans); font-variant-numeric:tabular-nums;
+             color:var(--fg); text-align:right; }
+  .con-divider { height:1px; margin:8px 0 2px; border:0;
+                 background:color-mix(in srgb, var(--line) 80%, transparent); }
+  .con-section { font:italic 400 11px/1 var(--serif); color:var(--mut); margin:6px 0 2px; }
+
+  /* ---- curated high-aesthetic homepage showcase bar ---- */
+  .showcase-bar { display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+                  margin:2px 0 16px; padding:0 0 12px;
+                  border-bottom:1px solid var(--line); }
+  .showcase-bar .sc-title { font:italic 400 14px/1.3 var(--serif); color:var(--fg); }
+  .showcase-bar .sc-count { font-size:12px; }
+  .showcase-bar .sc-shuffle { background:transparent; border:1px solid var(--line);
+                  border-radius:14px; padding:4px 11px; font-size:12px; color:var(--fg);
+                  cursor:pointer; font-family:inherit;
+                  transition:border-color 140ms ease, background 140ms ease, transform 90ms ease; }
+  .showcase-bar .sc-shuffle:hover { border-color:var(--fg);
+                  background:color-mix(in srgb, var(--fg) 6%, transparent); }
+  .showcase-bar .sc-shuffle:active { transform:scale(.96); }
   /* ---- chosen-color set (multi-color picker) ---- */
   .colorset { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
   .colorset .cschip { display:inline-flex; align-items:center; gap:5px; padding:3px 7px 3px 5px;
@@ -524,6 +685,7 @@
     <!-- Review = NSFW-review tab; hidden in normal mode per user request (unhide on ask) -->
     <button class="nav" data-view="review" style="display:none">Review</button>
     <button class="nav" data-view="ai">AI</button>
+    <button class="nav" data-view="results">Results</button>
   </nav>
   <input id="qMini" placeholder="Search…" autocomplete="off" />
   <input id="negMini" placeholder="Exclude…" autocomplete="off" />
@@ -538,6 +700,7 @@
   <button class="nav" id="navReview" style="display:none">Review</button>
   <button class="nav" id="navColor">Color</button>
   <button class="nav" id="navAI">AI</button>
+  <button class="nav" id="navResults">Results</button>
   <span class="mut" id="status">…</span>
   <span class="sp"></span>
   <span class="spinner" id="spinner" style="display:none" title="Working…"></span>
@@ -635,73 +798,36 @@
     </div>
   </div>
   <div class="filter-panel" id="sortPanel">
-    <!-- Single "blend" control: one slider from pure relevance → aesthetic-heavy.
-         Maps onto the six SORT_METRICS weights below; the six stay in sync and
-         live behind the "Advanced" disclosure. -->
-    <div class="filter-row blend-row" title="One dial: left = pure vector/relevance match, right = aesthetic-heavy. Sets the detailed weights below.">
-      <span class="lab">Relevance ↔ Aesthetic</span>
-      <span class="pair" style="flex:1">
-        <input type="range" id="sBlend" min="0" max="1" step="0.01" value="0.00" style="flex:1" />
-        <span class="unit" id="sBlendV" style="font-style:normal;font-variant-numeric:tabular-nums">0.00</span>
-      </span>
+    <!-- ┌─ Unified "blend console" ─────────────────────────────────────────────┐
+         One cohesive control holding every ranking knob on a single track:
+         Relevance + each aesthetic model weight + the exclude strength. Each knob
+         is a draggable handle over a shared rail; the colored fill under the rail
+         visualises each knob's contribution to the current blend. The widget is
+         built by buildSortConsole() (JS below) into #sortConsole, and writes back
+         to the legacy hidden inputs (#sW_* and #negStrength) so all the existing
+         re-rank / re-search plumbing comes along unchanged. -->
+    <div class="console" id="sortConsole" aria-label="Ranking blend console"></div>
+    <!-- Legacy controls kept in the DOM (hidden) — applySortBlend() / search()
+         read these inputs directly; the console is just a nicer driver of them. -->
+    <div class="legacy-blend" aria-hidden="true">
+      <input type="range" id="sBlend" min="0" max="1" step="0.01" value="0.00" />
+      <span id="sBlendV">0.00</span>
+      <span id="sBlendRel"></span><span id="sBlendAes"></span>
+      <span id="sBlendMark"></span>
+      <input type="range" id="sW_vec"   min="0" max="2" step="0.05" value="1.00" /><span id="sW_vecV">1.00</span>
+      <input type="range" id="sW_aes"   min="0" max="2" step="0.05" value="0.30" /><span id="sW_aesV">0.30</span>
+      <input type="range" id="sW_ps"    min="0" max="2" step="0.05" value="0.10" /><span id="sW_psV">0.10</span>
+      <input type="range" id="sW_aes25" min="0" max="2" step="0.05" value="0.00" /><span id="sW_aes25V">0.00</span>
+      <input type="range" id="sW_hps"   min="0" max="2" step="0.05" value="0.00" /><span id="sW_hpsV">0.00</span>
+      <input type="range" id="sW_aes0"  min="0" max="2" step="0.05" value="0.00" /><span id="sW_aes0V">0.00</span>
+      <span id="sortAdvBody"></span>
+      <button type="button" id="sortAdvToggle"></button>
     </div>
-    <div class="blend-vis" id="sBlendVis" title="Left segment = relevance weight, right = aesthetic weight">
-      <div class="blend-bar"><i class="seg-rel" id="sBlendRel"></i><i class="seg-aes" id="sBlendAes"></i></div>
-      <div class="blend-marker" id="sBlendMark"></div>
-      <div class="blend-ends"><span>Relevance</span><span>Aesthetic</span></div>
-    </div>
-    <button class="filter-toggle blend-adv" id="sortAdvToggle" type="button"
-            title="Show the six per-model weight sliders">
-      <span class="caret">›</span> Advanced (per-model weights)</button>
-    <div id="sortAdvBody">
-    <div class="filter-row" title="Cosine similarity from the embedding model. The primary signal.">
-      <span class="lab">Vector match</span>
-      <span class="pair">
-        <input type="range" id="sW_vec" min="0" max="2" step="0.05" value="1.00" />
-        <span class="unit" id="sW_vecV" style="font-style:normal;font-variant-numeric:tabular-nums">1.00</span>
-      </span>
-    </div>
-    <div class="filter-row" title="LAION Aesthetics V2 — how 'pretty' the image is, per the LAION model.">
-      <span class="lab">Aesthetic V2</span>
-      <span class="pair">
-        <input type="range" id="sW_aes" min="0" max="2" step="0.05" value="0.30" />
-        <span class="unit" id="sW_aesV" style="font-style:normal;font-variant-numeric:tabular-nums">0.30</span>
-      </span>
-    </div>
-    <div class="filter-row" title="PickScore — human preference proxy from Pick-a-Pic.">
-      <span class="lab">PickScore</span>
-      <span class="pair">
-        <input type="range" id="sW_ps" min="0" max="2" step="0.05" value="0.10" />
-        <span class="unit" id="sW_psV" style="font-style:normal;font-variant-numeric:tabular-nums">0.10</span>
-      </span>
-    </div>
-    <div class="filter-row" title="LAION Aesthetics V2.5 — refined successor to V2.">
-      <span class="lab">Aesthetic V2.5</span>
-      <span class="pair">
-        <input type="range" id="sW_aes25" min="0" max="2" step="0.05" value="0.00" />
-        <span class="unit" id="sW_aes25V" style="font-style:normal;font-variant-numeric:tabular-nums">0.00</span>
-      </span>
-    </div>
-    <div class="filter-row" title="HPS v2.1 — Human Preference Score, prompt-aware preference model.">
-      <span class="lab">HPS v2.1</span>
-      <span class="pair">
-        <input type="range" id="sW_hps" min="0" max="2" step="0.05" value="0.00" />
-        <span class="unit" id="sW_hpsV" style="font-style:normal;font-variant-numeric:tabular-nums">0.00</span>
-      </span>
-    </div>
-    <div class="filter-row" title="Zero-shot CLIP aesthetic prompt — fast but weak.">
-      <span class="lab">Aesthetic (zero-shot)</span>
-      <span class="pair">
-        <input type="range" id="sW_aes0" min="0" max="2" step="0.05" value="0.00" />
-        <span class="unit" id="sW_aes0V" style="font-style:normal;font-variant-numeric:tabular-nums">0.00</span>
-      </span>
-    </div>
-    </div><!-- /sortAdvBody -->
     <div class="filter-actions">
       <button class="apply" id="sApply">Apply</button>
       <button class="reset" id="sReset">Reset</button>
       <span style="flex:1"></span>
-      <span class="filter-cov" id="sortCov"><i>final = Σ wᵢ·scoreᵢ (vec + aesthetic models)</i></span>
+      <span class="filter-cov" id="sortCov"><i>final = Σ wᵢ·scoreᵢ (vec + aesthetic models) · exclude pushes the query vector away</i></span>
     </div>
   </div>
   <div id="results" class="grid"></div>
@@ -804,6 +930,23 @@
   <div class="grid" id="colorGrid"></div>
 </div>
 
+<!-- Results tab: AI-generation pipeline runs (started from the cart's Generate
+     mode). List of run cards → click for a run detail with outputs. -->
+<div class="wrap" id="resultsView" style="display:none">
+  <div id="runList">
+    <div class="row" style="margin-bottom:14px;display:flex;align-items:center;gap:14px">
+      <span class="mut" id="runMsg">…</span>
+      <span style="flex:1"></span>
+      <button id="runRefresh" title="Reload runs">↻ Refresh</button>
+    </div>
+    <div class="grid" id="runGrid"></div>
+  </div>
+  <div id="runDetail" style="display:none">
+    <button id="runBack">← back to runs</button>
+    <div class="run-detail" id="runDetailBody"></div>
+  </div>
+</div>
+
 <!-- Per-image detail view (#/image/<uid>). All sections are populated by
      loadImageDetail; until that resolves we show a skeleton-y placeholder. -->
 <div class="wrap" id="imageView" style="display:none">
@@ -842,20 +985,68 @@
     <button id="cartClear">Clear</button>
   </div>
   <div class="cart-note" id="cartCapNote"></div>
+
+  <!-- Generate mode: turn the cart's images into references for an AI
+       generation pipeline. Collapsed by default behind a disclosure so the
+       plain zip-checkout path above stays the visual default. -->
+  <div class="gen-panel" id="genPanel">
+    <button class="gen-toggle" id="genToggle" title="Use these images as references to generate new images / a LoRA dataset">
+      <span class="caret">›</span> Generate from selection…</button>
+    <div class="gen-body" id="genBody" style="display:none">
+      <div class="gen-row">
+        <span class="gen-lab">Generator</span>
+        <label class="gen-radio"><input type="radio" name="genGenerator" value="nano_banana" checked> Nano Banana</label>
+        <label class="gen-radio"><input type="radio" name="genGenerator" value="lora"> LoRA</label>
+        <span class="gen-loratype" id="genLoraTypeWrap" style="display:none">
+          <select id="genLoraType">
+            <option value="style">Style</option>
+            <option value="subject">Subject</option>
+            <option value="concept">Concept</option>
+          </select>
+        </span>
+      </div>
+      <div class="gen-field">
+        <label class="gen-lab" for="genBrief">Brief</label>
+        <textarea id="genBrief" rows="2"
+          placeholder="what to generate, e.g. “a leaping greyhound, dynamic, isolated on white, small base”"></textarea>
+      </div>
+      <div class="gen-row">
+        <label class="gen-lab" for="genN">Outputs</label>
+        <input type="number" id="genN" min="1" max="64" step="1" value="4" />
+        <span class="gen-flex"></span>
+      </div>
+      <div class="gen-toggles">
+        <label class="gen-chk" title="Caption the reference images first (reuses the caption prompt above)"><input type="checkbox" id="genCaption"> Caption refs</label>
+        <label class="gen-chk" title="Isolate the subject (background removal) on references"><input type="checkbox" id="genCutout"> Cutout (isolate objects)</label>
+        <label class="gen-chk" title="4× upscale the flagged reference images before generating"><input type="checkbox" id="genUpscaleRefs"> Upscale flagged</label>
+        <label class="gen-chk" title="Let the model expand the brief into varied prompts"><input type="checkbox" id="genExpand" checked> Expand prompts</label>
+        <label class="gen-chk" title="Generate a 3D (.glb) model from each output"><input type="checkbox" id="genThreeD"> Generate 3D</label>
+      </div>
+      <div class="gen-actions">
+        <button id="genRun" class="gen-go">Generate</button>
+        <span class="gen-hint" id="genHint">Uses the cart images as references.</span>
+      </div>
+    </div>
+  </div>
 </div></div>
 
 <!-- Checkout progress — NON-blocking floating panel + minimized pill. -->
 <div class="ckout" id="ckout">
   <span class="x" id="ckoutHide" title="Hide (keeps running)">×</span>
   <h4 id="ckoutTitle">Checkout</h4>
-  <div class="pbrow">
-    <div class="pblab"><span>Captioning</span><span id="ckCapN">0 / 0</span></div>
-    <div class="pbar"><i id="ckCapBar"></i></div>
+  <!-- zip-mode bars: caption + upscale (hidden during a Generate run) -->
+  <div id="ckBars">
+    <div class="pbrow">
+      <div class="pblab"><span>Captioning</span><span id="ckCapN">0 / 0</span></div>
+      <div class="pbar"><i id="ckCapBar"></i></div>
+    </div>
+    <div class="pbrow">
+      <div class="pblab"><span>Upscaling</span><span id="ckUpN">0 / 0</span></div>
+      <div class="pbar"><i id="ckUpBar"></i></div>
+    </div>
   </div>
-  <div class="pbrow">
-    <div class="pblab"><span>Upscaling</span><span id="ckUpN">0 / 0</span></div>
-    <div class="pbar"><i id="ckUpBar"></i></div>
-  </div>
+  <!-- generate-mode: a vertical list of named pipeline stages -->
+  <div class="ckstages" id="ckStages" style="display:none"></div>
   <div class="cksum" id="ckSum" style="display:none"></div>
   <div class="ckerr-list" id="ckErrList" style="display:none"></div>
   <div class="ckfoot" id="ckFoot">
@@ -881,6 +1072,11 @@ const $ = s => document.querySelector(s);
 const DPR = Math.min(window.devicePixelRatio || 1, 3);
 const THUMB = Math.round(280 * DPR);
 const enc = encodeURIComponent;
+// HTML-escape for user/model text interpolated into innerHTML (briefs, prompts).
+// Briefs and prompts are free text and can contain <, &, " — escape to keep the
+// markup well-formed and avoid accidental injection from generated prompts.
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 let toastT;
 function toast(m){ const t=$("#toast"); t.textContent=m; t.classList.add("show");
   clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"),1800); }
@@ -1298,7 +1494,10 @@ const CAP_PROMPT_KEY = "muser-caption-prompt";
 // the existing panel rather than starting a duplicate.
 let _ckoutJob = null;       // active/last job id, or null
 let _ckoutTimer = null;     // poll setTimeout handle
+let _ckoutMode = "zip";     // "zip" | "generate" — drives panel rendering
+let _ckoutRunId = null;     // for generate runs: the pipeline run id (== job_id)
 const CKOUT_POLL_MS = 700;
+const CKOUT_GEN_POLL_MS = 800;  // generate runs poll a touch slower (politeness)
 
 function ckPct(s){
   const cd = (s.caption && s.caption.done) || 0;
@@ -1338,7 +1537,9 @@ async function startCheckout(){
   let j; try { j = await res.json(); } catch { j = {}; }
   if (!j.job_id) { toast("Checkout failed: no job id"); return; }
   _ckoutJob = j.job_id;
+  _ckoutMode = "zip"; _ckoutRunId = null;
   // Reset panel UI for a fresh run.
+  $("#ckBars").style.display = ""; $("#ckStages").style.display = "none";
   $("#ckoutTitle").textContent = "Checkout";
   $("#ckCapN").textContent = "0 / 0"; $("#ckUpN").textContent = "0 / 0";
   setBar($("#ckCapBar"), 0, 0); setBar($("#ckUpBar"), 0, 0);
@@ -1351,6 +1552,82 @@ async function startCheckout(){
   showCkout();
   pollCheckout();
 }
+
+// ---- Generate mode: POST /api/checkout with mode:"generate" and the pipeline
+// config, then drive the same non-blocking progress panel (stage list variant).
+const GEN_STAGE_ORDER = ["caption","cutout","upscale","prompts","generate","3d"];
+function genWireToggle(){
+  const t = $("#genToggle"), body = $("#genBody");
+  if(!t) return;
+  t.onclick = () => {
+    const open = body.style.display === "none";
+    body.style.display = open ? "" : "none";
+    t.classList.toggle("open", open);
+  };
+  // LoRA radio reveals the lora_type select.
+  document.querySelectorAll('input[name="genGenerator"]').forEach(r => {
+    r.onchange = () => {
+      const isLora = (document.querySelector('input[name="genGenerator"]:checked')||{}).value === "lora";
+      $("#genLoraTypeWrap").style.display = isLora ? "" : "none";
+    };
+  });
+}
+genWireToggle();
+
+async function startGenerate(){
+  if (_ckoutJob) { showCkout(); toast("A run is already in progress — finish or close it first."); return; }
+  if (!_cart.size) { toast("Cart is empty — add reference images first."); return; }
+  const brief = ($("#genBrief").value || "").trim();
+  if (!brief) { toast("Add a brief — what to generate."); $("#genBrief").focus(); return; }
+  const generator = (document.querySelector('input[name="genGenerator"]:checked')||{}).value || "nano_banana";
+  const items = [..._cart.entries()].map(([path, meta]) => ({path, upscale: !!(meta && meta.upscale)}));
+  const doCaption = $("#genCaption").checked;
+  const capPrompt = ($("#capPrompt").value || "").trim();
+  const body = {
+    mode: "generate",
+    items,
+    generator,
+    lora_type: $("#genLoraType").value,
+    caption: doCaption,
+    caption_prompt: doCaption ? (capPrompt || null) : null,
+    cutout: $("#genCutout").checked,
+    upscale_refs: $("#genUpscaleRefs").checked,
+    expand_prompts: $("#genExpand").checked,
+    brief,
+    gen_prompts: null,
+    n_outputs: Math.max(1, parseInt($("#genN").value, 10) || 4),
+    make_3d: $("#genThreeD").checked,
+  };
+  const runBtn = $("#genRun"); runBtn.disabled = true;
+  let res;
+  try {
+    res = await fetch("/api/checkout", {
+      method: "POST", headers: {"content-type": "application/json"},
+      body: JSON.stringify(body),
+    });
+  } catch { runBtn.disabled = false; toast("Generate failed — is the service running?"); return; }
+  runBtn.disabled = false;
+  if (!res.ok) {
+    let msg = ""; try { const j = await res.json(); msg = j.detail || ""; } catch {}
+    toast("Generate failed: " + (msg || res.status)); return;
+  }
+  let j; try { j = await res.json(); } catch { j = {}; }
+  if (!j.job_id) { toast("Generate failed: no job id"); return; }
+  _ckoutJob = j.job_id; _ckoutRunId = j.job_id; _ckoutMode = "generate";
+  // Reset panel for a stage-list run.
+  $("#ckBars").style.display = "none"; $("#ckStages").style.display = "";
+  $("#ckStages").innerHTML = `<div class="ckstage running"><span class="ckst-glyph">⟳</span><span class="ckst-name">starting…</span></div>`;
+  $("#ckoutTitle").textContent = "Generating";
+  $("#ckSum").style.display = "none"; $("#ckSum").innerHTML = "";
+  $("#ckErrList").style.display = "none"; $("#ckErrList").innerHTML = "";
+  $("#ckFoot").innerHTML = `<button id="ckoutHideBtn">Hide</button>`;
+  $("#ckoutHideBtn").onclick = hideCkout;
+  $("#ckpillSpin").style.display = "";
+  $("#cartModal").classList.remove("show");
+  showCkout();
+  pollCheckout();
+}
+$("#genRun").onclick = startGenerate;
 
 async function pollCheckout(){
   if (!_ckoutJob) return;
@@ -1366,13 +1643,37 @@ async function pollCheckout(){
   }
   renderCheckout(s);
   if (s.status === "running") {
-    _ckoutTimer = setTimeout(pollCheckout, CKOUT_POLL_MS);
+    const ms = _ckoutMode === "generate" ? CKOUT_GEN_POLL_MS : CKOUT_POLL_MS;
+    _ckoutTimer = setTimeout(pollCheckout, ms);
   } else {
     if (_ckoutTimer) { clearTimeout(_ckoutTimer); _ckoutTimer = null; }
   }
 }
 
+// Stage glyphs: running ⟳ / done ✓ / pending ·. Renders stages[] from
+// /api/checkout/status as a vertical list (caption · cutout · upscale · prompts
+// · generate · 3d). Orders by GEN_STAGE_ORDER but tolerates unknown names.
+function renderCkStages(stages){
+  const wrap = $("#ckStages");
+  if(!stages || !stages.length){ return; }
+  const ordered = [...stages].sort((a,b) => {
+    const ia = GEN_STAGE_ORDER.indexOf((a.name||"").toLowerCase());
+    const ib = GEN_STAGE_ORDER.indexOf((b.name||"").toLowerCase());
+    return (ia<0?99:ia) - (ib<0?99:ib);
+  });
+  wrap.innerHTML = ordered.map(st => {
+    const status = st.status || "pending";
+    const glyph = status === "done" ? "✓" : status === "running" ? "⟳"
+                : status === "error" ? "✕" : "·";
+    const total = st.total || 0, done = st.done || 0;
+    const cnt = total ? `<span class="ckst-n">${done} / ${total}</span>` : "";
+    return `<div class="ckstage ${status}"><span class="ckst-glyph">${glyph}</span>`
+         + `<span class="ckst-name">${st.name || "?"}</span>${cnt}</div>`;
+  }).join("");
+}
+
 function renderCheckout(s){
+  if (_ckoutMode === "generate") { renderGenerate(s); return; }
   const cap = s.caption || {done:0,total:0};
   const up = s.upscale || {done:0,total:0};
   $("#ckCapN").textContent = `${cap.done||0} / ${cap.total||0}`;
@@ -1435,13 +1736,49 @@ function renderCkErrors(errs){
     `<div>${(e.stage||"?")}: ${e.path||""} — ${e.error||""}</div>`).join("");
 }
 
+// Generate-run variant of renderCheckout: stage list + terminal states. Drives
+// the same pill. On done, offers "View results →" → opens the Results tab to
+// this run's detail.
+function renderGenerate(s){
+  const stages = s.stages || [];
+  renderCkStages(stages);
+  const dn = stages.filter(x => x.status === "done").length;
+  const pct = stages.length ? Math.round(dn / stages.length * 100) : (s.status === "done" ? 100 : 0);
+  const pillTxt = $("#ckpillTxt"), pillSpin = $("#ckpillSpin");
+
+  if (s.status === "running") {
+    const cur = stages.find(x => x.status === "running");
+    pillTxt.textContent = `Generating ⟳ ${cur ? cur.name : pct + "%"}`;
+    pillSpin.style.display = "";
+    return;
+  }
+  if (s.status === "error") {
+    $("#ckoutTitle").textContent = "Generate failed";
+    pillTxt.textContent = "✕ Generate failed"; pillSpin.style.display = "none";
+    const sum = $("#ckSum");
+    sum.style.display = ""; sum.innerHTML = `<span class="ckerr">${s.error || "Unknown error."}</span>`;
+    $("#ckFoot").innerHTML = `<button id="ckoutCloseBtn" class="primary-x">Close</button>`;
+    $("#ckoutCloseBtn").onclick = closeCheckout;
+    return;
+  }
+  // done
+  $("#ckoutTitle").textContent = "Generation ready";
+  pillTxt.textContent = "✓ Generation ready"; pillSpin.style.display = "none";
+  const sum = $("#ckSum");
+  sum.style.display = ""; sum.innerHTML = `✓ ${stages.length} stage${stages.length===1?"":"s"} complete`;
+  const runId = _ckoutRunId;
+  $("#ckFoot").innerHTML = `<button id="ckoutViewBtn" class="primary-x">View results →</button><button id="ckoutCloseBtn">Close</button>`;
+  $("#ckoutViewBtn").onclick = () => { const id = runId; closeCheckout(); showView("results", {runId: id}); };
+  $("#ckoutCloseBtn").onclick = closeCheckout;
+}
+
 // Close: dismiss the panel AND drop the job reference (so a later checkout
 // starts fresh). Only offered on terminal states; Hide is the non-terminal exit.
 function closeCheckout(){
   $("#ckout").classList.remove("show");
   $("#ckpill").classList.remove("show");
   if (_ckoutTimer) { clearTimeout(_ckoutTimer); _ckoutTimer = null; }
-  _ckoutJob = null;
+  _ckoutJob = null; _ckoutMode = "zip"; _ckoutRunId = null;
 }
 
 $("#cartCheckout").onclick = startCheckout;
@@ -1641,8 +1978,13 @@ async function search(){
   // Lets the Filter panel act as "browse by metadata" with no text query.
   if(q.length < 2){
     if (filterActive()) { return runFilter(); }
-    $("#results").innerHTML=""; $("#empty").style.display="none"; _lastKey=""; _rendered=0; return;
+    // Empty query → curated random high-aesthetic showcase instead of a bare
+    // "Index a folder…" message. Falls back to the old empty text if /api/score
+    // isn't available yet (scoring not run).
+    _lastKey=""; _rendered=0;
+    return showShowcase();
   }
+  _showcaseActive = false;
   $("#empty").style.display="none";
   const folder=$("#scope").value.trim();
   const neg=$("#neg").value.trim();
@@ -1663,6 +2005,75 @@ async function search(){
   _loading=false;
   maybeLoadMore();                                 // short page / tall window: keep filling until the buffer is satisfied
 }
+
+// ============================================================================
+// Random high-aesthetic homepage (the empty-query state).
+// Pool the top-ranked items across several aesthetic metrics, randomly sample
+// ~30 distinct paths, and render them with the normal card renderer. A "✨
+// shuffle" affordance re-rolls. Falls back to the old empty message if
+// /api/score isn't built yet (no scoring run / endpoint missing).
+// ============================================================================
+let _showcaseActive = false;
+let _showcasePool = null;            // cached union of score items, keyed by path
+const SHOWCASE_METRICS = ["aesthetic_v2", "pickscore", "hps_v21", "aesthetic_v25"];
+const SHOWCASE_N = 30;
+function _shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.random()*(i+1)|0; [a[i],a[j]]=[a[j],a[i]]; } return a; }
+async function _loadShowcasePool(){
+  if(_showcasePool) return _showcasePool;
+  const byPath = new Map();
+  let anyOk = false;
+  // Pull top items per metric in parallel; dedupe by path (keep the first seen).
+  const reqs = SHOWCASE_METRICS.map(async (m) => {
+    try{
+      const r = await (await fetch(`/api/score?metric=${enc(m)}&order=desc&limit=120`)).json();
+      if(r && Array.isArray(r.items)){
+        anyOk = true;
+        for(const it of r.items){ if(it && it.path && !byPath.has(it.path)) byPath.set(it.path, it); }
+      }
+    }catch(e){ /* metric may not exist — ignore, others may still work */ }
+  });
+  await Promise.all(reqs);
+  if(!anyOk) return null;             // /api/score unavailable entirely → caller falls back
+  _showcasePool = Array.from(byPath.values());
+  return _showcasePool;
+}
+async function showShowcase(){
+  _showcaseActive = true;
+  _mode = "showcase"; _hasMore = false; _rendered = 0;
+  if(_searchAbort){ _searchAbort.abort(); _searchAbort = null; }
+  showSkeletons(12);
+  let pool;
+  try{ pool = await _loadShowcasePool(); }catch(e){ pool = null; }
+  if(!_showcaseActive) return;        // user typed a query while we were loading
+  if(!pool || !pool.length){
+    // Fallback: bare empty state (scoring not run / endpoint missing).
+    $("#results").innerHTML = "";
+    $("#empty").style.display = "block";
+    $("#empty").textContent = "Index a folder, then search it.";
+    return;
+  }
+  const sample = _shuffle(pool.slice()).slice(0, SHOWCASE_N);
+  $("#empty").style.display = "none";
+  _renderHits({ results: sample, refinements: [] });
+  // Drop a small "✨ shuffle" affordance above the grid so the showcase re-rolls.
+  _mountShowcaseBar(pool.length);
+}
+function _mountShowcaseBar(total){
+  let bar = $("#showcaseBar");
+  if(!bar){
+    bar = document.createElement("div");
+    bar.id = "showcaseBar"; bar.className = "showcase-bar";
+    bar.innerHTML =
+      `<span class="sc-title">✨ A curated mix of your most aesthetic images</span>
+       <button id="showcaseShuffle" class="sc-shuffle" title="Re-roll the selection">✨ shuffle</button>
+       <span class="sc-count mut"></span>`;
+    $("#results").before(bar);
+    bar.querySelector("#showcaseShuffle").onclick = () => { if(_showcaseActive) showShowcase(); };
+  }
+  bar.querySelector(".sc-count").textContent = `· from ${total.toLocaleString()} ranked`;
+  bar.style.display = "";
+}
+function _hideShowcaseBar(){ const b = $("#showcaseBar"); if(b) b.style.display = "none"; }
 
 // ---- Filter panel: resolution / aspect / file-size constraints, with
 //      presets. When a query is active the params ride on /api/search; with
@@ -1873,6 +2284,13 @@ $("#sReset").addEventListener("click", () => {
   SORT_METRICS.forEach(m => _setSortWeight(m.id, m.def));
   _setBlend(0); _saveBlend(0);
   _saveSortBlend(); applySortBlend();
+  // Also reset the exclude-strength knob to its default and repaint the console.
+  const negDef = (CONSOLE_KNOBS.find(k => k.kind === "neg") || {}).def ?? 0.5;
+  $("#negStrength").value = negDef.toFixed(2);
+  $("#negStrengthVal").textContent = negDef.toFixed(2);
+  if(typeof _saveConsole === "function") _saveConsole();
+  if(typeof syncConsole === "function") syncConsole();
+  if($("#q").value.trim().length >= 2 && $("#neg").value.trim()) liveSearch();
 });
 
 // ---- Single "Relevance ↔ Aesthetic" blend (t ∈ [0,1]) ----------------------
@@ -1931,10 +2349,183 @@ _wireSortBlendInputs();
 { const tv = _loadBlend();
   if(tv != null) _setBlend(tv); else _refreshBlendVisFromWeights(); }
 
+// ============================================================================
+// Unified ranking "blend console" — one polished multi-knob widget that drives
+// every ranking parameter from a single component. Each knob is a pointer-drag
+// handle over a coloured rail; on change it writes back to the SAME hidden
+// state the rest of the app already reads:
+//   · the 6 SORT_METRICS weights  → #sW_<id>  (re-rank via applySortBlend)
+//   · the exclude strength        → #negStrength (re-query like the old handler)
+// so re-ranking and exclude behaviour are untouched — the console is just a
+// nicer driver. Values persist in localStorage and restore on load.
+// ============================================================================
+const CONSOLE_KEY = "muser-console-v1";
+// One spec per knob. `kind` decides what the value means + where it writes.
+//   kind:"weight" → a SORT_METRICS weight (target = sW_<id>, 0..2).
+//   kind:"neg"    → exclude strength (target = #negStrength, 0..1.5).
+const CONSOLE_KNOBS = [
+  { id:"vec",   kind:"weight", label:"Relevance",     color:"#3a7bd5", min:0, max:2,   def:1.00, hint:"Vector / embedding match — the primary signal." },
+  { id:"aes",   kind:"weight", label:"Aesthetic V2",  color:"#d08a2a", min:0, max:2,   def:0.30, hint:"LAION Aesthetics V2 — how ‘pretty’ the image is." },
+  { id:"ps",    kind:"weight", label:"PickScore",     color:"#c75b8a", min:0, max:2,   def:0.10, hint:"PickScore — human-preference proxy (Pick-a-Pic)." },
+  { id:"aes25", kind:"weight", label:"Aesthetic V2.5",color:"#5aa469", min:0, max:2,   def:0.00, hint:"LAION Aesthetics V2.5 — refined successor to V2." },
+  { id:"hps",   kind:"weight", label:"HPS v2.1",      color:"#8a6fd0", min:0, max:2,   def:0.00, hint:"Human Preference Score — prompt-aware preference." },
+  { id:"aes0",  kind:"weight", label:"Zero-shot",     color:"#4bb3b8", min:0, max:2,   def:0.00, hint:"Zero-shot CLIP aesthetic prompt — fast but weak." },
+  { id:"neg",   kind:"neg",    label:"Exclude force", color:"#cf4f3a", min:0, max:1.5, def:0.50, hint:"How hard the Exclude term is pushed out of the query vector." },
+];
+// Map a knob → its current numeric value, read straight from live state so the
+// console always reflects whatever the rest of the app set (e.g. _applyBlend,
+// the negStrength handler, or a Reset).
+function _consoleVal(k){
+  if(k.kind === "neg") return parseFloat($("#negStrength").value);
+  return parseFloat($("#sW_"+k.id).value);
+}
+// Commit a knob's value back into the underlying state + trigger its effect.
+function _consoleCommit(k, v, persist){
+  v = Math.max(k.min, Math.min(k.max, v));
+  if(k.kind === "neg"){
+    // Exclude strength: mirror into the legacy slider + its label, then re-run
+    // search exactly like #negStrength's own input handler does.
+    $("#negStrength").value = v.toFixed(2);
+    $("#negStrengthVal").textContent = v.toFixed(2);
+    if($("#q").value.trim().length >= 2 && $("#neg").value.trim()) liveSearch();
+  } else {
+    // A SORT_METRICS weight: reuse _setSortWeight (writes #sW_<id> + its label),
+    // keep the legacy single-blend bar in sync, persist the six, re-rank.
+    _setSortWeight(k.id, v);
+    _refreshBlendVisFromWeights();
+    _saveSortBlend();
+    applySortBlend();
+  }
+  if(persist) _saveConsole();
+}
+function _saveConsole(){
+  try{
+    const s = {};
+    CONSOLE_KNOBS.forEach(k => s[k.id] = _consoleVal(k));
+    localStorage.setItem(CONSOLE_KEY, JSON.stringify(s));
+  }catch{}
+}
+function _loadConsole(){
+  try{ return JSON.parse(localStorage.getItem(CONSOLE_KEY) || "{}"); }catch{ return {}; }
+}
+// Repaint a single knob row (fill width, handle position, tip + value text).
+function _paintKnob(k){
+  const row = k._row; if(!row) return;
+  const v = _consoleVal(k);
+  const pct = ((v - k.min) / (k.max - k.min)) * 100;
+  row.style.setProperty("--pct", pct.toFixed(2) + "%");
+  k._tip.textContent = v.toFixed(2);
+  k._val.textContent = v.toFixed(2);
+}
+function repaintConsole(){ CONSOLE_KNOBS.forEach(_paintKnob); }
+function buildSortConsole(){
+  const host = $("#sortConsole");
+  if(!host) return;
+  host.innerHTML =
+    `<div class="console-head">
+       <span class="ch-title">Blend</span>
+       <span class="ch-hint">drag the knobs — relevance, each aesthetic model, and exclude strength on one console</span>
+     </div>`;
+  CONSOLE_KNOBS.forEach((k, i) => {
+    if(k.kind === "neg"){
+      const hr = document.createElement("hr"); hr.className = "con-divider"; host.appendChild(hr);
+      const sec = document.createElement("div"); sec.className = "con-section";
+      sec.textContent = "Negative prompt"; host.appendChild(sec);
+    }
+    const row = document.createElement("div");
+    row.className = "con-row"; row.style.setProperty("--knob", k.color);
+    row.title = k.hint;
+    row.innerHTML =
+      `<span class="con-lab"><span class="dot"></span><span class="nm">${k.label}</span></span>
+       <span class="con-rail">
+         <span class="con-fill"></span>
+         <span class="con-handle" tabindex="0" role="slider"
+               aria-label="${k.label}" aria-valuemin="${k.min}" aria-valuemax="${k.max}"></span>
+         <span class="con-tip"></span>
+       </span>
+       <span class="con-val">0.00</span>`;
+    host.appendChild(row);
+    k._row = row;
+    k._rail = row.querySelector(".con-rail");
+    k._handle = row.querySelector(".con-handle");
+    k._tip = row.querySelector(".con-tip");
+    k._val = row.querySelector(".con-val");
+    _wireKnob(k);
+  });
+  repaintConsole();
+}
+// Pointer drag + click-to-position + keyboard arrows for one knob.
+function _wireKnob(k){
+  const rail = k._rail, handle = k._handle;
+  const step = k.kind === "neg" ? 0.05 : 0.05;
+  const fromClientX = (clientX) => {
+    const r = rail.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (clientX - r.left) / (r.width || 1)));
+    let v = k.min + frac * (k.max - k.min);
+    v = Math.round(v / step) * step;            // snap to step
+    return Math.max(k.min, Math.min(k.max, v));
+  };
+  let dragging = false;
+  const onMove = (e) => {
+    if(!dragging) return;
+    e.preventDefault();
+    _consoleCommit(k, fromClientX(e.clientX), true);
+    _paintKnob(k);
+  };
+  const onUp = () => {
+    if(!dragging) return;
+    dragging = false; handle.classList.remove("drag");
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+  };
+  const onDown = (e) => {
+    e.preventDefault();
+    dragging = true; handle.classList.add("drag");
+    handle.focus({preventScroll:true});
+    _consoleCommit(k, fromClientX(e.clientX), true);   // jump to the press point
+    _paintKnob(k);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+  rail.addEventListener("pointerdown", onDown);
+  handle.addEventListener("keydown", (e) => {
+    let d = 0;
+    if(e.key === "ArrowLeft" || e.key === "ArrowDown") d = -step;
+    else if(e.key === "ArrowRight" || e.key === "ArrowUp") d = +step;
+    else if(e.key === "Home") return _consoleCommit(k, k.min, true), _paintKnob(k), e.preventDefault();
+    else if(e.key === "End")  return _consoleCommit(k, k.max, true), _paintKnob(k), e.preventDefault();
+    else return;
+    e.preventDefault();
+    _consoleCommit(k, _consoleVal(k) + d, true);
+    _paintKnob(k);
+  });
+}
+// Restore persisted knob values into underlying state (without re-searching on
+// load), build the widget, then paint. Weights flow through _setSortWeight so
+// the legacy machinery stays consistent; exclude strength just sets the slider.
+(function _initConsole(){
+  const saved = _loadConsole();
+  CONSOLE_KNOBS.forEach(k => {
+    const v = (saved[k.id] != null) ? saved[k.id] : _consoleVal(k);
+    if(k.kind === "neg"){
+      $("#negStrength").value = v.toFixed(2);
+      $("#negStrengthVal").textContent = v.toFixed(2);
+    } else {
+      _setSortWeight(k.id, v);
+    }
+  });
+  _refreshBlendVisFromWeights();
+  buildSortConsole();
+})();
+// Keep the console in sync if state changes elsewhere (Reset button, the legacy
+// negStrength handler firing, etc.). Cheap idempotent repaint.
+function syncConsole(){ if($("#sortConsole")) repaintConsole(); }
+
 let _currentResults = [];                                // last /api/search payload — used by the Search-tab sort blend
 
 function _renderHits(r){
   const g=$("#results");
+  if(_mode !== "showcase") _hideShowcaseBar();   // any real result set replaces the showcase
   _currentResults = r.results || [];
   if(!r.results.length){
     g.innerHTML="";
@@ -2207,6 +2798,8 @@ $("#neg").addEventListener("input", () => {
 });
 $("#negStrength").addEventListener("input", () => {
   $("#negStrengthVal").textContent = parseFloat($("#negStrength").value).toFixed(2);
+  if(typeof _saveConsole === "function") _saveConsole();
+  if(typeof syncConsole === "function") syncConsole();
   if ($("#q").value.trim().length >= 2 && $("#neg").value.trim()) liveSearch();
 });
 $("#q").addEventListener("keydown", e => {
@@ -2517,9 +3110,9 @@ function openDetail(uid){ showView("image", {uid}); }
 // ---- view switching (Search / Explore / Interesting / Review / AI / Image) ----
 // `image` is a *detail* view (no nav button) — it's only reached from hash
 // routing (#/image/<uid>) or programmatically via openDetail(uid).
-const VIEWS={search:"searchView",explore:"exploreView",interesting:"interestingView",review:"reviewView",color:"colorView",ai:"aiView",image:"imageView"};
-const NAVS={search:"navSearch",explore:"navExplore",interesting:"navInteresting",review:"navReview",color:"navColor",ai:"navAI"};
-const VIEW_TITLES={search:"Search",explore:"Explore",interesting:"Interesting",review:"Review",color:"Color",ai:"AI",image:"Image"};
+const VIEWS={search:"searchView",explore:"exploreView",interesting:"interestingView",review:"reviewView",color:"colorView",ai:"aiView",results:"resultsView",image:"imageView"};
+const NAVS={search:"navSearch",explore:"navExplore",interesting:"navInteresting",review:"navReview",color:"navColor",ai:"navAI",results:"navResults"};
+const VIEW_TITLES={search:"Search",explore:"Explore",interesting:"Interesting",review:"Review",color:"Color",ai:"AI",results:"Results",image:"Image"};
 // Internal flag: when popstate or initial-route call showView, suppress the
 // pushState so back/forward don't double-stack history entries.
 let _suppressHistory=false;
@@ -2543,7 +3136,12 @@ function showView(v, opts){
   if(v==="review") loadScores("#reviewGrid","#rmsg","#rcat");
   if(v==="color") loadColor();
   if(v==="ai") loadAI();
+  if(v==="results") openResults(opts.runId);
   if(v==="image" && opts.uid) loadImageDetail(opts.uid);
+  // Returning to Search with no query + no filter and an empty grid → showcase.
+  if(v==="search" && typeof showShowcase==="function"
+     && $("#q").value.trim().length < 2 && !filterActive()
+     && !$("#results").children.length) showShowcase();
   // ---- URL + title sync ----
   // One push per user-initiated tab switch; popstate/initial routing pass
   // through _suppressHistory so back/forward don't stack duplicates.
@@ -2622,6 +3220,155 @@ async function startAIScan(){
   try{ await fetch("/api/ai/scan",{method:"POST"}); }catch(e){ toast("scan failed"); }
   loadAI();
 }
+
+// ---- Results tab: AI-generation pipeline runs --------------------------------
+// Two sub-views inside #resultsView: a run list (grid of cards) and a run
+// detail (config + outputs). openResults(runId) opens the detail directly when
+// a runId is passed (from the checkout "View results →" button), else the list.
+function relTime(ts){
+  // ts may be epoch seconds, ms, or an ISO string. Normalize to a Date.
+  let d;
+  if (typeof ts === "number") d = new Date(ts < 1e12 ? ts * 1000 : ts);
+  else if (ts) d = new Date(ts);
+  if (!d || isNaN(d.getTime())) return "";
+  const sec = Math.max(0, (Date.now() - d.getTime()) / 1000);
+  if (sec < 60) return "just now";
+  const m = sec/60; if (m < 60) return `${Math.floor(m)}m ago`;
+  const h = m/60;   if (h < 24) return `${Math.floor(h)}h ago`;
+  const day = h/24; if (day < 30) return `${Math.floor(day)}d ago`;
+  return d.toLocaleDateString();
+}
+async function openResults(runId){
+  if (runId) { openRunDetail(runId); return; }
+  $("#runDetail").style.display = "none";
+  $("#runList").style.display = "";
+  loadRuns();
+}
+async function loadRuns(){
+  const msg = $("#runMsg"), grid = $("#runGrid");
+  msg.textContent = "Loading runs…";
+  let r;
+  try { r = await (await fetch("/api/pipelines")).json(); }
+  catch { msg.textContent = "Failed to load runs — is the service running?"; return; }
+  const runs = (r && r.runs) || [];
+  grid.innerHTML = "";
+  if (!runs.length) {
+    msg.textContent = "No generation runs yet.";
+    grid.innerHTML = `<div class="empty" style="grid-column:1/-1">No runs yet — open the cart, expand “Generate from selection…”, and run one.</div>`;
+    return;
+  }
+  msg.textContent = `${runs.length} run${runs.length===1?"":"s"}`;
+  runs.forEach(run => grid.appendChild(renderRunCard(run)));
+}
+function renderRunCard(run){
+  const c = document.createElement("button"); c.className = "runcard"; c.type = "button";
+  const thumb = run.thumb
+    ? `<img class="rthumb" loading="lazy" src="/api/pipeline/${enc(run.id)}/file/${run.thumb.split("/").map(enc).join("/")}" alt="">`
+    : `<div class="rthumb empty">no preview</div>`;
+  const brief = run.brief ? esc(run.brief) : "(no brief)";
+  const status = run.status || "";
+  c.innerHTML = thumb
+    + `<div class="rbrief" title="${esc(run.brief||"")}">${brief}</div>`
+    + `<div class="rmeta">${esc(run.generator||"")} · ${run.n_outputs!=null?run.n_outputs+" out":""}</div>`
+    + `<div class="rstatus ${status}">${status}${run.created?" · "+relTime(run.created):""}</div>`;
+  c.onclick = () => showView("results", {runId: run.id});
+  return c;
+}
+async function openRunDetail(runId){
+  $("#runList").style.display = "none";
+  $("#runDetail").style.display = "";
+  const body = $("#runDetailBody");
+  body.innerHTML = `<div class="empty">Loading run…</div>`;
+  let d;
+  try { d = await (await fetch(`/api/pipeline/${enc(runId)}`)).json(); }
+  catch { body.innerHTML = `<div class="empty">Failed to load this run.</div>`; return; }
+  renderRunDetail(d);
+}
+function renderRunDetail(d){
+  const body = $("#runDetailBody");
+  const cfg = d.config || {};
+  const cfgBits = [];
+  if (cfg.generator) cfgBits.push(`generator: ${esc(cfg.generator)}`);
+  if (cfg.generator === "lora" && cfg.lora_type) cfgBits.push(`LoRA: ${esc(cfg.lora_type)}`);
+  if (cfg.n_outputs != null) cfgBits.push(`${cfg.n_outputs} outputs`);
+  const flags = ["caption","cutout","upscale_refs","expand_prompts","make_3d"]
+    .filter(k => cfg[k]).map(k => k.replace(/_/g," "));
+  if (flags.length) cfgBits.push(flags.join(" · "));
+  const refs = (d.refs || []).length;
+  if (refs) cfgBits.push(`${refs} reference${refs===1?"":"s"}`);
+  const brief = cfg.brief || d.brief || "";
+
+  let html = "";
+  if (brief) html += `<h3 style="margin:6px 0 4px">${esc(brief)}</h3>`;
+  html += `<div class="rd-config">${cfgBits.map(esc).join(" &nbsp;·&nbsp; ")}`;
+  if (d.status) html += `${cfgBits.length?" &nbsp;·&nbsp; ":""}status: ${esc(d.status)}`;
+  html += `</div>`;
+  if (d.status === "error" && d.error) html += `<div class="rd-config" style="color:#c0392b">${esc(d.error)}</div>`;
+
+  const outs = d.outputs || [];
+  html += `<div class="rd-sec">Outputs (${outs.length})</div>`;
+  if (!outs.length) {
+    html += `<div class="empty" style="padding:30px 0">No outputs.</div>`;
+  } else {
+    html += `<div class="files" id="runOutGrid"></div>`;
+  }
+  body.innerHTML = html;
+
+  const grid = $("#runOutGrid");
+  if (grid) outs.forEach((o, i) => grid.appendChild(renderOutput(d.id, o, i)));
+}
+function renderOutput(runId, o, idx){
+  const c = document.createElement("div"); c.className = "outcard";
+  const kind = o.kind || "image";
+  if (kind === "3d") {
+    // Already-built 3D output: glb download + thumbnail.
+    const thumb = o.thumb_url ? `<img src="${o.thumb_url}" alt="">` : "";
+    c.innerHTML = `${thumb}<div class="okind">3D model</div>`
+      + `<div class="orow"><a class="glb" href="${o.glb_url||"#"}" download>⬇ Download .glb</a></div>`;
+    return c;
+  }
+  // image or cutout
+  const img = o.url ? `<img loading="lazy" src="${o.url}" alt="">` : "";
+  const prompt = o.prompt ? `<div class="oprompt" title="${esc(o.prompt)}">${esc(o.prompt)}</div>` : "";
+  c.innerHTML = img
+    + `<div class="okind">${kind}</div>`
+    + prompt
+    + `<div class="orow"></div>`
+    + `<div class="o3d" data-3d style="display:none"></div>`;
+  if (o.url) c.querySelector("img").onclick = () => window.open(o.url, "_blank");
+  const row = c.querySelector(".orow");
+  if (kind === "image") {
+    const mk = document.createElement("button"); mk.textContent = "Make 3D";
+    mk.title = "Generate a 3D (.glb) model from this image";
+    mk.onclick = () => makeThreeD(runId, idx, c, mk);
+    row.appendChild(mk);
+  }
+  return c;
+}
+async function makeThreeD(runId, outputIndex, card, btn){
+  btn.disabled = true; const old = btn.textContent; btn.textContent = "Making 3D…";
+  let r;
+  try {
+    r = await fetch(`/api/pipeline/${enc(runId)}/threed`, {
+      method: "POST", headers: {"content-type": "application/json"},
+      body: JSON.stringify({output_index: outputIndex}),
+    });
+  } catch { btn.disabled = false; btn.textContent = old; toast("3D failed — is the service running?"); return; }
+  if (!r.ok) {
+    let msg = ""; try { const j = await r.json(); msg = j.detail || ""; } catch {}
+    btn.disabled = false; btn.textContent = old; toast("3D failed: " + (msg || r.status)); return;
+  }
+  let j; try { j = await r.json(); } catch { j = {}; }
+  if (!j.glb_url) { btn.disabled = false; btn.textContent = old; toast("3D failed: no model returned"); return; }
+  btn.textContent = "✓ 3D ready"; btn.disabled = true;
+  const box = card.querySelector(".o3d");
+  box.style.display = "";
+  box.innerHTML = (j.thumb_url ? `<img src="${j.thumb_url}" alt="">` : "")
+    + `<a class="glb" href="${j.glb_url}" download style="border-bottom:1px dotted var(--mut)">⬇ Download .glb</a>`;
+  toast("3D model ready");
+}
+$("#runRefresh").onclick = loadRuns;
+$("#runBack").onclick = () => showView("results");
 
 // ---- infinite scroll on Interesting / Review / AI ----
 // Each tab keeps its own paging state so they don't race; a single shared
@@ -3111,6 +3858,8 @@ pollStatus(); loadFolders(); loadClusterChips();
   try { showView(r.view, {uid: r.uid}); } finally { _suppressHistory = false; }
   const url = r.view==="image" && r.uid ? `#/image/${r.uid}` : "#/" + r.view;
   history.replaceState({view: r.view, uid: r.uid||null}, "", url);
+  // Landing on the Search tab with no query → show the curated showcase homepage.
+  if(r.view === "search" && $("#q").value.trim().length < 2 && !filterActive()) showShowcase();
 }
 </script>
 </body>

@@ -7,15 +7,48 @@
   </head>
   <body>
     <header>
-      <form id="form" class="bar">
-        <h1>Muser</h1>
-        <input id="q" type="search" placeholder="Describe the image you're looking for…" autocomplete="off" />
-        <button id="go" type="submit">Search</button>
-      </form>
-      <div class="preview-note">UI preview — mock data, no MCP host. Edit <code>ui/gallery.css</code> / <code>ui/gallery.ts</code> and it hot-reloads.</div>
-      <div id="status"></div>
+      <h1>muser</h1>
+      <nav class="tabs">
+        <button class="nav on" data-mode="text" type="button">Search</button>
+        <button class="nav" data-mode="color" type="button">Color</button>
+        <button class="nav" data-mode="image" type="button">Similar</button>
+      </nav>
+      <span class="sp"></span>
+      <input id="scope" class="scope" type="search" list="folders" placeholder="all folders" autocomplete="off" />
+      <datalist id="folders"></datalist>
     </header>
+
+    <form id="form" class="panel bar" data-panel="text">
+      <input id="q" type="search" placeholder="Describe the image you're looking for…" autocomplete="off" />
+      <button id="go" class="primary" type="submit">Search</button>
+    </form>
+
+    <div class="panel bar" data-panel="color" hidden>
+      <input id="colorPicker" type="color" value="#c83c3c" title="Pick a color to add" />
+      <span class="swatches" id="colorPresets"></span>
+      <button id="colorAdd" type="button">Add</button>
+      <button id="colorGo" class="primary" type="button">Search by color</button>
+      <button id="colorClear" type="button" class="ghost">Clear</button>
+    </div>
+    <div class="csset" id="colorSet" hidden></div>
+
+    <div class="panel bar" data-panel="image" hidden>
+      <input id="imgFile" type="file" accept="image/*" />
+      <span class="mut" id="imgName">Pick an image to find visually similar matches.</span>
+    </div>
+
+    <div class="preview-note">UI preview — mock data, no MCP host. Edit <code>ui/gallery.css</code> / <code>ui/gallery.ts</code> and it hot-reloads.</div>
+    <div id="status"></div>
     <div id="grid"></div>
+
+    <div class="modal" id="dupes">
+      <div class="box">
+        <span class="x" id="dupesClose">✕</span>
+        <h3 id="dupesTitle"></h3>
+        <div class="sub" id="dupesSub"></div>
+        <div class="files" id="dupesFiles"></div>
+      </div>
+    </div>
     <script type="module" src="./preview.ts"></script>
   </body>
 </html>

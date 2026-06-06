@@ -27,6 +27,31 @@ from .registry import DEFAULT_MODEL, load_model, model_names
 
 WEB = Path(__file__).resolve().parent / "web" / "app.html"
 
+# ---- Result-hiding policy (applied to EVERY result-producing endpoint) -------
+# Three orthogonal filters funnel through one `_hidden(path)` predicate so a
+# path that is dead / NSFW / in a hidden cluster never reaches the UI from any
+# tab (search, color, upload, score/Interesting, filter, ai, cluster members).
+#
+# NSFW: `nsfw_consensus` (fallback `nsfw`) from ~/.muser/scores.json above this
+# threshold is hidden by default in every tab. NOTE: in the current scores.json
+# these metrics are RANK-NORMALIZED (uniform 0..1 percentiles — median is exactly
+# 0.5), so 0.5 hides the top ~50% of the library. The spec pinned 0.5 as the
+# default; tune this constant up (e.g. 0.9 = hide top decile) if that's too
+# aggressive. Exposed as a module constant precisely so it's a one-line change.
+# nsfw_consensus is a rank-normalized percentile (median 0.5), NOT a raw probability,
+# so 0.5 would hide the top HALF of the library. 0.9 = top ~10% most-NSFW-scored.
+NSFW_HIDE_THRESHOLD = 0.9
+
+# HDBSCAN clusters to hide everywhere, matched case-insensitively as substrings
+# against each cluster's representative caption / label in ~/.muser/clusters.json.
+# Seeded with the "conceptual demo" people-hiding set; append to extend, empty
+# the list to disable cluster-hiding entirely.
+HIDDEN_CLUSTER_MATCHERS = [
+    "a man that is sitting down with a remote in his hand",
+    "smiling woman holding a cell phone up to her ear",
+    "arafed photo of a woman taking a selfie with her phone",
+]
+
 
 class IndexReq(BaseModel):
     folder: str
@@ -60,6 +85,13 @@ class CartReq(BaseModel):
     items: list[CartItem] | None = None
 
 
+class ThreeDReq(BaseModel):
+    # Module-level (not nested in create_app) so `from __future__ import
+    # annotations` can resolve it as a request body — a function-scope model
+    # degrades to a query param (FastAPI can't resolve the ForwardRef) → 422.
+    output_index: int
+
+
 class CheckoutReq(BaseModel):
     # Non-blocking cart checkout: caption (network) + upscale (local) run
     # concurrently in the background, then a zip is assembled. `force_caption`
@@ -69,6 +101,21 @@ class CheckoutReq(BaseModel):
     items: list[CartItem] = []
     caption_prompt: str | None = None
     force_caption: bool = False
+    # ---- generate mode -------------------------------------------------------
+    # mode="zip" (default) is the existing LoRA-zip checkout, unchanged.
+    # mode="generate" runs the cart through fal.ai (muser/pipeline.py) to produce
+    # new images / 3D. These fields are ignored in zip mode.
+    mode: str = "zip"  # "zip" | "generate"
+    generator: str = "nano_banana"  # "nano_banana" | "lora"
+    lora_type: str = "concept"
+    caption: bool = False
+    cutout: bool = False
+    upscale_refs: bool = False
+    expand_prompts: bool = True
+    brief: str = ""
+    gen_prompts: list[str] | None = None
+    n_outputs: int = 4
+    make_3d: bool = False
 
 
 class CaptionWriteReq(BaseModel):
@@ -315,6 +362,17 @@ def create_app(model: str = DEFAULT_MODEL):
         cprimed = _color.prime_cache_from_sidecar()
         if cprimed:
             print(f"  primed color cache: {cprimed} entries", flush=True)
+        # Prime the result-hiding sets (NSFW from scores.json, hidden-cluster
+        # paths from clusters.json) so the first request's _hidden() lookups are
+        # O(1) RAM hits, not a cold disk parse. Both are mtime-cached and refresh
+        # lazily on the next request after either file changes.
+        try:
+            nset = _refresh_scores_cache()["nsfw"]
+            hset = _hidden_cluster_paths()
+            print(f"  primed hide sets: nsfw={len(nset)} hidden_cluster={len(hset)} "
+                  f"(nsfw_threshold={NSFW_HIDE_THRESHOLD})", flush=True)
+        except Exception as e:
+            print(f"  hide-set prime skipped: {e}", flush=True)
         # Non-blocking: fire the warm in a thread so uvicorn starts accepting
         # connections in milliseconds. The page can load, see task=loading_model
         # in /api/status, and render its overlay while weights load.
@@ -620,6 +678,7 @@ def create_app(model: str = DEFAULT_MODEL):
         # member to promote — the common case (everything alive) stays a
         # cheap stat-per-dupe.
         kept = []
+        dead_leads = []  # leads dropped here (whole group dead) → purge below
         for r in results:
             d = r.get("dupes") or [r["path"]]
             lead_alive = os.path.exists(r["path"])
@@ -640,11 +699,17 @@ def create_app(model: str = DEFAULT_MODEL):
                     r["path"] = live[0]
                     r["name"] = os.path.basename(live[0])
             if not live:
+                dead_leads.append(r["path"])
                 continue
             r["dupes"] = live
             r["dupe_count"] = len(live)
             kept.append(r)
         results = kept
+        if dead_leads:
+            _purge_dead(dead_leads)  # remove fully-dead groups from the index
+        # Centralized hide policy: drop NSFW / hidden-cluster / dead paths (and
+        # background-purge the dead survivors from the index).
+        results = _filter_results(results)
         for r in results:
             r["uid"] = uid_for(r["path"])
         _add_prob(results)
@@ -658,7 +723,10 @@ def create_app(model: str = DEFAULT_MODEL):
     # carries an inverse `rep_of` map (path → canonical representative) built
     # from scores.json's `dupes` so search can collapse near-duplicates via
     # an O(1) hashmap lookup instead of a 288-row LanceDB+cosine walk.
-    _scores_cache: dict = {"mtime": -1.0, "map": {}, "rep_of": {}, "groups": {}}
+    # `nsfw` carries the NSFW hidden-path set (built in the same parse pass —
+    # one disk read, not a second sidecar). A path is in `nsfw` when its
+    # nsfw_consensus (fallback nsfw) exceeds NSFW_HIDE_THRESHOLD.
+    _scores_cache: dict = {"mtime": -1.0, "map": {}, "rep_of": {}, "groups": {}, "nsfw": set()}
     _scores_lock = threading.Lock()
 
     def _refresh_scores_cache():
@@ -680,16 +748,120 @@ def create_app(model: str = DEFAULT_MODEL):
                     rep_of[canon] = canon
                     for m in members:
                         rep_of[m] = canon
-                _scores_cache["map"] = s.get("scores", {})
+                smap = s.get("scores", {})
+                nsfw: set[str] = {
+                    p for p, row in smap.items()
+                    if float(row.get("nsfw_consensus", row.get("nsfw", 0.0)) or 0.0) > NSFW_HIDE_THRESHOLD
+                }
+                _scores_cache["map"] = smap
                 _scores_cache["rep_of"] = rep_of
                 _scores_cache["groups"] = groups
+                _scores_cache["nsfw"] = nsfw
                 _scores_cache["mtime"] = mt
             except Exception:
                 _scores_cache["map"] = {}
                 _scores_cache["rep_of"] = {}
                 _scores_cache["groups"] = {}
+                _scores_cache["nsfw"] = set()
                 _scores_cache["mtime"] = mt
         return _scores_cache
+
+    # ---- Hidden-cluster set (people-hiding "conceptual demo") ----------------
+    # Resolve HIDDEN_CLUSTER_MATCHERS to a union of member paths of every
+    # HDBSCAN cluster whose representative caption/label matches (case-insensitive
+    # substring). Cached by clusters.json mtime so it's a single parse per
+    # clusters.json update, then O(1) set membership per result.
+    _hidden_clusters: dict = {"mtime": -1.0, "paths": set()}
+    _hidden_clusters_lock = threading.Lock()
+
+    def _hidden_cluster_paths() -> set[str]:
+        clusters_path = Path.home() / ".muser" / "clusters.json"
+        if not HIDDEN_CLUSTER_MATCHERS:
+            return set()
+        try:
+            mt = clusters_path.stat().st_mtime
+        except OSError:
+            return _hidden_clusters["paths"]
+        with _hidden_clusters_lock:
+            if mt == _hidden_clusters["mtime"]:
+                return _hidden_clusters["paths"]
+            paths: set[str] = set()
+            try:
+                c = json.loads(clusters_path.read_text())
+                methods = c.get("methods", {})
+                m_name = "hdbscan" if "hdbscan" in methods else (next(iter(methods)) if methods else None)
+                if m_name:
+                    m = methods[m_name]
+                    matchers = [s.lower() for s in HIDDEN_CLUSTER_MATCHERS]
+                    for cl in m.get("clusters", []):
+                        if cl.get("id") == -1:
+                            continue
+                        # Match against representative caption(s) AND the label.
+                        hay = " ".join(
+                            str(x).lower() for x in (
+                                cl.get("label") or "", cl.get("sublabel") or "",
+                                *(cl.get("reps") or []),
+                            )
+                        )
+                        if any(mt_s in hay for mt_s in matchers):
+                            for p in m.get("members", {}).get(str(cl["id"]), []):
+                                paths.add(p)
+            except Exception:
+                paths = set()
+            _hidden_clusters["paths"] = paths
+            _hidden_clusters["mtime"] = mt
+            return paths
+
+    # ---- Unified hide predicate + dead-file purge ----------------------------
+    def _purge_dead(paths: list[str]) -> set[str]:
+        """Stat each path; collect the ones gone from disk, fire a best-effort
+        background DELETE of those rows from the LanceDB table (so they never
+        resurface), and return the dead set. Never raises — a failed delete must
+        not 500 a search. Empty/all-alive → no thread spawned."""
+        dead = {p for p in paths if not os.path.exists(p)}
+        if dead:
+            def _bg(victims: list[str]):
+                try:
+                    state.index.delete_paths(state.model_name, victims)
+                except Exception:
+                    pass
+            threading.Thread(
+                target=_bg, args=(list(dead),), daemon=True, name="muser-purge-dead",
+            ).start()
+        return dead
+
+    def _hidden(path: str) -> bool:
+        """True iff `path` should be hidden from ALL result endpoints: file gone
+        from disk, NSFW above threshold, or a member of a hidden cluster. Pure
+        set/dict lookups (plus one stat for the dead check) — O(1) per result."""
+        if not os.path.exists(path):
+            return True
+        if path in _refresh_scores_cache()["nsfw"]:
+            return True
+        if path in _hidden_cluster_paths():
+            return True
+        return False
+
+    def _filter_results(results: list[dict]) -> list[dict]:
+        """Drop every result whose `path` is hidden (dead / NSFW / hidden-cluster),
+        and purge any dead paths from the index in the background. Routed through
+        by every result-producing endpoint so the policy is centralized. Result
+        shapes are untouched; only the list shrinks."""
+        if not results:
+            return results
+        _purge_dead([r["path"] for r in results])
+        out = []
+        for r in results:
+            if _hidden(r["path"]):
+                continue
+            # Prune hidden entries from each result's dupes[] list too, so a
+            # "show all copies" flow can't surface a hidden sibling.
+            d = [p for p in (r.get("dupes") or [r["path"]]) if not _hidden(p)]
+            if d:
+                r["dupes"] = d
+                r["dupe_count"] = len(d)
+            out.append(r)
+        return out
 
     # Aesthetic metrics surfaced per search hit so the Search-tab "Sort blend"
     # can re-rank client-side without re-fetching. Mirrors the non-combined
@@ -960,6 +1132,12 @@ def create_app(model: str = DEFAULT_MODEL):
         else:
             rows = all_rows
 
+        # Centralized hide policy: drop NSFW / hidden-cluster / dead rows BEFORE
+        # pagination so the page count is honest and hidden items don't leave
+        # gaps. Dead rows get background-purged from the index.
+        dead = _purge_dead([r["path"] for r in rows])
+        rows = [r for r in rows if r["path"] not in dead and not _hidden(r["path"])]
+
         total = len(rows)
         page = rows[offset : offset + limit]
         results = []
@@ -1174,6 +1352,43 @@ def create_app(model: str = DEFAULT_MODEL):
         if not in_items:
             raise HTTPException(400, "no valid files in cart")
 
+        # ---- generate mode: spawn the fal.ai pipeline, return a run/job id ---
+        if req.mode == "generate":
+            from . import pipeline as _pipeline
+            from .caption import caption_paths as _caption_paths
+            from .upscale import upscale_4x as _upscale_4x
+
+            run_id = REGISTRY.create("pipeline", caption_total=0, upscale_total=0)
+            config = {
+                "generator": req.generator,
+                "lora_type": req.lora_type,
+                "caption": bool(req.caption),
+                "caption_prompt": req.caption_prompt,
+                "cutout": bool(req.cutout),
+                "upscale_refs": bool(req.upscale_refs),
+                "expand_prompts": bool(req.expand_prompts),
+                "brief": req.brief or "",
+                "gen_prompts": req.gen_prompts,
+                "n_outputs": int(req.n_outputs),
+                "make_3d": bool(req.make_3d),
+                "items": [{"path": p, "upscale": u} for p, u in in_items],
+            }
+            services = {
+                "caption_paths": _caption_paths,
+                "upscale_4x": _upscale_4x,
+                "load_captions": _load_captions,
+                "build_cart_zip": _build_cart_zip,
+                "uid_for": uid_for,
+                "state": state,
+            }
+            threading.Thread(
+                target=_pipeline.run_pipeline,
+                args=(run_id, config, REGISTRY, services),
+                daemon=True,
+                name=f"muser-pipeline-{run_id}",
+            ).start()
+            return {"job_id": run_id}
+
         have = _load_captions()
         caption_todo = [
             p for p, _ in in_items
@@ -1257,11 +1472,32 @@ def create_app(model: str = DEFAULT_MODEL):
     @app.get("/api/checkout/status")
     def checkout_status(id: str):
         from .jobs import REGISTRY, public
+        from . import pipeline as _pipeline
 
         job = REGISTRY.get(id)
-        if job is None:
-            raise HTTPException(404, "no such checkout job")
-        return public(job)
+        if job is not None:
+            view = public(job)
+            # For a pipeline job, prefer run.json's authoritative status/stages —
+            # the in-RAM job mirrors them but run.json survives eviction.
+            if job.get("kind") == "pipeline":
+                run = _pipeline.read_run(id)
+                if run is not None:
+                    view["status"] = run.get("status", view["status"])
+                    view["stages"] = run.get("stages", view.get("stages"))
+                    view["error"] = run.get("error")
+                    view["outputs"] = run.get("outputs", [])
+            return view
+        # Evicted from the registry but persisted on disk (pipeline runs only).
+        run = _pipeline.read_run(id)
+        if run is not None:
+            return {
+                "id": id,
+                "status": run.get("status"),
+                "stages": run.get("stages", []),
+                "error": run.get("error"),
+                "outputs": run.get("outputs", []),
+            }
+        raise HTTPException(404, "no such checkout job")
 
     @app.get("/api/checkout/zip")
     def checkout_zip(id: str):
@@ -1279,6 +1515,120 @@ def create_app(model: str = DEFAULT_MODEL):
             media_type="application/zip",
             headers={"Content-Disposition": 'attachment; filename="muser-cart.zip"'},
         )
+
+    # ---- generate-mode pipeline browsing ------------------------------------
+    def _pipeline_file_url(run_id: str, relpath: str) -> str:
+        return f"/api/pipeline/{run_id}/file/{relpath}"
+
+    def _public_run(run: dict) -> dict:
+        """Return a run.json view with each output's ``url`` rewritten to a
+        servable ``/api/pipeline/<id>/file/<relpath>`` link."""
+        run_id = run["id"]
+        outputs = []
+        for o in run.get("outputs", []):
+            o2 = dict(o)
+            if o2.get("file"):
+                o2["url"] = _pipeline_file_url(run_id, o2["file"])
+            if o2.get("glb_file"):
+                o2["glb_url"] = _pipeline_file_url(run_id, o2["glb_file"])
+            if o2.get("thumb_file"):
+                o2["thumb_url"] = _pipeline_file_url(run_id, o2["thumb_file"])
+            outputs.append(o2)
+        view = dict(run)
+        view["outputs"] = outputs
+        return view
+
+    @app.get("/api/pipelines")
+    def pipelines_list():
+        from . import pipeline as _pipeline
+
+        return {"runs": _pipeline.list_runs()}
+
+    @app.get("/api/pipeline/{run_id}")
+    def pipeline_get(run_id: str):
+        from . import pipeline as _pipeline
+
+        run = _pipeline.read_run(run_id)
+        if run is None:
+            raise HTTPException(404, "no such pipeline run")
+        return _public_run(run)
+
+    @app.get("/api/pipeline/{run_id}/file/{path:path}")
+    def pipeline_file(run_id: str, path: str):
+        from fastapi.responses import FileResponse
+        from . import pipeline as _pipeline
+
+        base = _pipeline.run_dir(run_id).resolve()
+        target = (base / path).resolve()
+        # Path-traversal guard: target must stay under the run dir.
+        if base != target and base not in target.parents:
+            raise HTTPException(403, "path escapes run dir")
+        if not target.is_file():
+            raise HTTPException(404, "not found")
+        ext = target.suffix.lower()
+        media = {
+            ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".webp": "image/webp", ".glb": "model/gltf-binary",
+            ".json": "application/json",
+        }.get(ext, "application/octet-stream")
+        return FileResponse(str(target), media_type=media)
+
+    @app.post("/api/pipeline/{run_id}/threed")
+    def pipeline_threed(run_id: str, req: ThreeDReq):
+        from . import pipeline as _pipeline
+        from . import generators as _gen
+
+        run = _pipeline.read_run(run_id)
+        if run is None:
+            raise HTTPException(404, "no such pipeline run")
+        outputs = run.get("outputs", [])
+        idx = req.output_index
+        if idx < 0 or idx >= len(outputs) or outputs[idx].get("kind") != "image":
+            raise HTTPException(400, "output_index is not an image output")
+
+        d = _pipeline.run_dir(run_id)
+        out_dir = d / "outputs"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        img_path = d / outputs[idx]["file"]
+        if not img_path.is_file():
+            raise HTTPException(404, "source image missing")
+
+        try:
+            img_url = _gen.fal_upload_path(str(img_path))
+            res = _gen.image_to_3d(img_url)
+            glb = _gen.download(res["glb"])
+        except Exception as e:
+            raise HTTPException(502, f"image_to_3d failed: {type(e).__name__}: {e}")
+
+        n3d = sum(1 for o in outputs if o.get("kind") == "3d")
+        glb_rel = f"model_post_{n3d:03d}.glb"
+        (out_dir / glb_rel).write_bytes(glb)
+        o3d = {
+            "kind": "3d",
+            "file": f"outputs/{glb_rel}",
+            "glb_file": f"outputs/{glb_rel}",
+            "src_image_index": idx,
+        }
+        thumb_url = None
+        if res.get("thumbnail"):
+            try:
+                th = _gen.download(res["thumbnail"])
+                th_rel = f"model_post_{n3d:03d}_thumb.png"
+                (out_dir / th_rel).write_bytes(th)
+                o3d["thumb_file"] = f"outputs/{th_rel}"
+                thumb_url = _pipeline_file_url(run_id, o3d["thumb_file"])
+            except Exception:
+                pass
+
+        # Append to run.json (re-read to avoid clobbering concurrent writes).
+        fresh = _pipeline.read_run(run_id) or run
+        fresh.setdefault("outputs", []).append(o3d)
+        _pipeline._write_run(run_id, fresh)
+
+        return {
+            "glb_url": _pipeline_file_url(run_id, o3d["glb_file"]),
+            "thumb_url": thumb_url,
+        }
 
     @app.post("/api/pick-folder")
     def pick_folder(kind: str = "scope"):
@@ -1389,6 +1739,8 @@ def create_app(model: str = DEFAULT_MODEL):
         # uid injected so each item can deep-link to the detail page (#/image/<uid>)
         # without the UI needing its own blake2b implementation.
         items = c2.ai_images() if avail else []
+        # Centralized hide policy: drop dead / NSFW / hidden-cluster items.
+        items = [it for it in items if not _hidden(it["path"])]
         for it in items:
             it["uid"] = uid_for(it["path"])
         return {
@@ -1434,6 +1786,8 @@ def create_app(model: str = DEFAULT_MODEL):
                 "path": p, "name": os.path.basename(p), "score": round(float(sc), 4),
                 "dupes": [p], "dupe_count": 1, "uid": uid_for(p),
             })
+        # Centralized hide policy (NSFW / hidden-cluster / dead-file purge).
+        results = _filter_results(results)
         _attach_dims(results, [r["path"] for r in results])
         _attach_scores(results)
         _attach_c2pa(results)
@@ -1516,6 +1870,20 @@ def create_app(model: str = DEFAULT_MODEL):
     def _clusters():
         return json.loads(CLUSTERS.read_text()) if CLUSTERS.exists() else None
 
+    def _cluster_is_hidden(cl: dict) -> bool:
+        # A whole cluster is hidden when its representative caption / label
+        # matches a HIDDEN_CLUSTER_MATCHERS substring (same rule that builds the
+        # hidden-path set). Keeps these clusters out of the Explore grid too, not
+        # just their members out of search.
+        if not HIDDEN_CLUSTER_MATCHERS:
+            return False
+        hay = " ".join(
+            str(x).lower() for x in (
+                cl.get("label") or "", cl.get("sublabel") or "", *(cl.get("reps") or []),
+            )
+        )
+        return any(mt.lower() in hay for mt in HIDDEN_CLUSTER_MATCHERS)
+
     @app.get("/api/clusters")
     def clusters(method: str = "hdbscan"):
         c = _clusters()
@@ -1529,10 +1897,14 @@ def create_app(model: str = DEFAULT_MODEL):
                     "id": cl["id"], "label": cl["label"], "sublabel": cl["sublabel"],
                     "size": cl["size"],
                     # reps is a list of path strings; promote to {path, uid} objects
-                    # so the UI can use uid as a stable React-style key.
-                    "reps": [{"path": p, "uid": uid_for(p)} for p in cl["reps"]],
+                    # so the UI can use uid as a stable React-style key. Hidden
+                    # (dead / NSFW) reps are dropped so a hidden image can't
+                    # surface as a cluster thumbnail.
+                    "reps": [{"path": p, "uid": uid_for(p)} for p in cl["reps"] if not _hidden(p)],
                 }
+                # Centralized hide policy: omit whole hidden clusters from Explore.
                 for cl in m["clusters"]
+                if not _cluster_is_hidden(cl)
             ],
         }
 
@@ -1542,6 +1914,9 @@ def create_app(model: str = DEFAULT_MODEL):
         if not c or method not in c["methods"]:
             return {"total": 0, "members": []}
         members = c["methods"][method]["members"].get(str(id), [])
+        # Centralized hide policy: drop dead / NSFW / hidden-cluster members
+        # before pagination (no gaps, honest total).
+        members = [p for p in members if not _hidden(p)]
         page = members[offset : offset + limit]
         return {
             "total": len(members),
@@ -1785,10 +2160,13 @@ def create_app(model: str = DEFAULT_MODEL):
         skipped = 0
         for p in ranked[offset:]:
             i += 1
-            if not os.path.exists(p):
+            # Centralized hide policy: skip dead / NSFW / hidden-cluster reps.
+            # (Dead-file purge runs lazily via the search/filter endpoints; here
+            # we just skip so the Interesting page stays clean.)
+            if _hidden(p):
                 skipped += 1
                 continue
-            d = [dp for dp in dupes.get(p, [p]) if os.path.exists(dp)] or [p]
+            d = [dp for dp in dupes.get(p, [p]) if not _hidden(dp)] or [p]
             items.append({
                 "path": p, "uid": uid_for(p), "name": os.path.basename(p),
                 "score": s["scores"][p].get(metric, 0),

@@ -162,6 +162,24 @@ class MuserIndex:
         items.sort(key=lambda x: (-x["count"], x["folder"]))
         return items[:limit]
 
+    def delete_paths(self, model: str, paths: Sequence[str]) -> int:
+        """Hard-delete the given rows from the model's table by exact path match.
+
+        Used to purge dead files (no longer on disk) discovered at query time —
+        the index is append-by-mtime, so deleted files otherwise linger until a
+        full re-index and keep resurfacing as filtered-out hits. Best-effort:
+        a no-op on an empty list or a missing table, and quotes are SQL-escaped
+        for the ``path IN (...)`` predicate. Returns the number of paths
+        requested (LanceDB's ``delete`` doesn't report a deleted-row count)."""
+        if not paths:
+            return 0
+        t = self._open(model)
+        if t is None:
+            return 0
+        quoted = ",".join("'" + p.replace("'", "''") + "'" for p in paths)
+        t.delete(f"path IN ({quoted})")
+        return len(paths)
+
     def add_images(
         self,
         model: str,

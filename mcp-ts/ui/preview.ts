@@ -46,12 +46,21 @@ function mockSearch(query: string): Hit[] {
 }
 
 const gallery = createGallery({
-  onSearch: (query) => {
+  onSearchText: (query) => {
     gallery.setStatus("Searching… (mock)");
-    setTimeout(() => gallery.render({ folder: FOLDER, query, results: mockSearch(query) }), 150);
+    setTimeout(() => gallery.render({ mode: "text", folder: FOLDER, query, results: mockSearch(query) }), 150);
   },
+  onSearchColor: ({ hex }) => {
+    gallery.setStatus(`(preview) color ${hex}`);
+    setTimeout(() => gallery.render({ mode: "color", folder: FOLDER, query: hex, results: SAMPLE }), 150);
+  },
+  onSearchImage: ({ filename }) => {
+    gallery.setStatus(`(preview) similar to ${filename}`);
+    setTimeout(() => gallery.render({ mode: "image", folder: FOLDER, query: filename, results: SAMPLE }), 150);
+  },
+  onLoadFolders: async () => [FOLDER, `${FOLDER}/backup`, `${FOLDER}/archive/2024`],
   onSelect: (hit) => gallery.setStatus(`(preview) selected ${hit.path}`),
   onReveal: (path) => gallery.setStatus(`(preview) reveal ${path}`),
 });
 
-gallery.render({ folder: FOLDER, query: "a red circle", results: SAMPLE });
+gallery.render({ mode: "text", folder: FOLDER, query: "a red circle", results: SAMPLE });

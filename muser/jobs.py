@@ -30,10 +30,15 @@ class JobRegistry:
         {
           id, kind, status: "running"|"done"|"error", created: <epoch>,
           caption: {done, total}, upscale: {done, total},
+          stages: [{name, status, done, total}, ...],
           errors: [{path, stage, error}, ...],
           captioned: int, upscaled: int, captions_missing: int,
           zip: <bytes|None>, zip_ready: bool, error: <str|None>,
         }
+
+    ``stages`` is a generic, ordered progress list used by multi-stage jobs (the
+    generate-mode checkout pipeline). ``caption``/``upscale``/``zip`` stay for the
+    legacy zip-mode checkout; new jobs drive ``stages`` via :meth:`set_stage`.
 
     The raw ``zip`` bytes are never serialized — :func:`public` strips them.
     """
@@ -64,6 +69,7 @@ class JobRegistry:
             "created": time.time(),
             "caption": {"done": 0, "total": int(caption_total)},
             "upscale": {"done": 0, "total": int(upscale_total)},
+            "stages": [],
             "errors": [],
             "captioned": 0,
             "upscaled": 0,
@@ -94,6 +100,37 @@ class JobRegistry:
             if j is not None and stage in ("caption", "upscale"):
                 j[stage]["done"] = int(done)
 
+    def set_stage(
+        self,
+        jid: str,
+        name: str,
+        status: str | None = None,
+        done: int | None = None,
+        total: int | None = None,
+    ) -> None:
+        """Upsert a generic ``stages`` entry by ``name``.
+
+        Creates the stage on first reference; subsequent calls patch only the
+        supplied fields (``status`` / ``done`` / ``total``). Used by the
+        generate-mode pipeline to publish ordered, named progress without
+        touching the legacy ``caption``/``upscale`` slots.
+        """
+        with self._lock:
+            j = self._jobs.get(jid)
+            if j is None:
+                return
+            stages = j.setdefault("stages", [])
+            entry = next((s for s in stages if s.get("name") == name), None)
+            if entry is None:
+                entry = {"name": name, "status": "running", "done": 0, "total": 0}
+                stages.append(entry)
+            if status is not None:
+                entry["status"] = status
+            if done is not None:
+                entry["done"] = int(done)
+            if total is not None:
+                entry["total"] = int(total)
+
     def add_error(self, jid: str, path: str, stage: str, msg: str) -> None:
         with self._lock:
             j = self._jobs.get(jid)
@@ -123,6 +160,7 @@ def public(job: dict) -> dict:
         "status": job["status"],
         "caption": dict(job["caption"]),
         "upscale": dict(job["upscale"]),
+        "stages": [dict(s) for s in job.get("stages", [])],
         "errors": list(job["errors"]),
         "captioned": job["captioned"],
         "upscaled": job["upscaled"],
