@@ -232,15 +232,18 @@ export function createServer(): McpServer {
     },
   );
 
-  // ---- App tool: image-to-image "find similar" ------------------------------
+  // ---- App tool: reverse image search (image-to-image "find similar") -------
   registerAppTool(
     server,
     "search_similar",
     {
-      title: "Find similar images",
+      title: "Reverse image search",
       description:
-        "Find images visually similar to an uploaded image (image-to-image search). " +
-        "The gallery's image picker supplies the bytes; opens the same gallery of matches.",
+        "Reverse image search: given a query image, find the visually similar images in the " +
+        "user's indexed library (image-to-image embedding kNN — NOT a web search; it looks " +
+        "only inside the local Muser index). Pass the image bytes as base64; results open in " +
+        "the gallery ranked by visual similarity. In the gallery UI this is the 'Reverse image' " +
+        "tab, where the user can also drag-and-drop or pick an image directly.",
       inputSchema: {
         image_base64: z.string().describe("Base64-encoded image bytes (no data: prefix)."),
         filename: z.string().optional().describe("Original filename (for logging only)."),

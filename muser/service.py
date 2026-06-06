@@ -1769,6 +1769,59 @@ def create_app(model: str = DEFAULT_MODEL):
             raise HTTPException(404, "not found")
         return FileResponse(path)
 
+    @app.get("/api/upscale")
+    def upscale(path: str):
+        # On-demand 4× UltraSharp upscale for the photo-detail before/after view.
+        # Slow (~10-20s cold, model load + tiled inference on MPS) — the frontend
+        # shows a spinner. upscale_4x() caches to ~/.muser/upscale_cache; we ALSO
+        # mirror the JPEG to a transient /tmp path so repeat calls reuse it and the
+        # OS can reclaim it. Lazy import keeps spandrel/torch out of the warm path.
+        if not os.path.isfile(path):
+            raise HTTPException(404, "not found")
+        import time as _time
+
+        tmp_dir = "/tmp/muser-upscale"
+        os.makedirs(tmp_dir, exist_ok=True)
+        # Best-effort sweep: drop /tmp upscales older than ~1h. Never fail the request.
+        try:
+            cutoff = _time.time() - 3600
+            for name in os.listdir(tmp_dir):
+                fp = os.path.join(tmp_dir, name)
+                try:
+                    if os.path.isfile(fp) and os.path.getmtime(fp) < cutoff:
+                        os.remove(fp)
+                except OSError:
+                    pass
+        except OSError:
+            pass
+
+        tmp_path = os.path.join(tmp_dir, f"{uid_for(path)}.jpg")
+        try:
+            if os.path.isfile(tmp_path):
+                data = open(tmp_path, "rb").read()
+            else:
+                from .upscale import upscale_4x
+
+                data = upscale_4x(path)
+                tmp = tmp_path + ".tmp"
+                with open(tmp, "wb") as f:
+                    f.write(data)
+                os.replace(tmp, tmp_path)  # atomic so partial writes never serve
+        except Exception as e:  # noqa: BLE001 — log internally, never leak to client
+            print(f"[upscale] failed for {path}: {e}")
+            raise HTTPException(500, "upscale failed")
+
+        headers = {}
+        try:
+            from PIL import Image
+            import io as _io
+
+            with Image.open(_io.BytesIO(data)) as im:
+                headers["X-Upscaled-Size"] = f"{im.width}x{im.height}"
+        except Exception:
+            pass
+        return Response(content=data, media_type="image/jpeg", headers=headers)
+
     @app.get("/api/ai")
     def ai_list():
         # The "AI" tab. Returns AI-flagged images from the persisted C2PA scan plus

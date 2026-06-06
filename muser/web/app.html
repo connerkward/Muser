@@ -17,6 +17,20 @@
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.55 var(--sans);
          -webkit-font-smoothing:antialiased; }
+  /* Subtle film-grain / paper-noise overlay — a fixed, full-viewport inline-SVG
+     feTurbulence tile at very low opacity, pinned BEHIND all content (z-index:-1)
+     and inert to the pointer. Gives the paper theme a faint hand-made texture
+     without affecting any interaction or layout. */
+  body::before {
+    content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
+    opacity:.04; mix-blend-mode:multiply;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-size:160px 160px;
+  }
+  @media (prefers-color-scheme: dark) {
+    /* on the dark paper, multiply would vanish the noise — screen it faintly instead */
+    body::before { mix-blend-mode:screen; opacity:.05; }
+  }
 
   header { display:flex; align-items:center; gap:22px; padding:10px 28px 9px;
            border-bottom:1px solid var(--line);
@@ -52,11 +66,10 @@
      small consistent gutter (Cosmos/Pinterest-style edge-to-edge grid). The
      search/header controls stay readable via a centered `.lede` cap inside
      the otherwise full-width wrap; the GRID goes wide. */
-  .wrap { max-width:none; margin:0; padding:14px 20px 80px; }
-  /* Readable-width cap for the search bar + tool rows on the Search tab so the
-     query input doesn't stretch across a 2560px monitor while the grid does.
-     Everything in #searchView is capped EXCEPT the results grid + its empty
-     state, which fill the full viewport width. */
+  .wrap { max-width:1400px; margin:0 auto; padding:14px 28px 80px; }
+  /* Readable-width cap for the search bar + tool rows on the Search tab. The
+     wrap itself is now centered with side padding (~1400px), so the grid and
+     the controls share the same comfortable column. */
   .lede { max-width:1180px; margin:0 auto; }
   #searchView > :not(#results):not(#empty) { max-width:1180px; margin-left:auto; margin-right:auto; }
 
@@ -108,8 +121,8 @@
 
   /* Full-width responsive grid: more, denser columns that fill the viewport.
      min track 168px → many columns on wide monitors, still ≥2 on a phone. */
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(168px,1fr));
-          gap:26px 14px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr));
+          gap:26px 16px; }
   .card { background:transparent; border:0; display:flex; flex-direction:column;
           animation:card-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both; }
   @keyframes card-in {
@@ -561,102 +574,74 @@
      draggable thumb. Each thumb sits at x = (value-min)/(max-min) · railWidth.
      A legend maps colour → name; a floating tip shows name + live value while
      hovering/dragging. Replaces the old stacked one-row-per-knob console. */
-  .console { padding:18px 20px 16px; margin:2px 0 12px;
-             border:1px solid var(--line); border-radius:8px;
-             background:
-               radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--fg) 5%, transparent), transparent 60%),
-               var(--paper);
-             box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 14%, transparent),
-                         0 1px 2px color-mix(in srgb, #000 18%, transparent); }
-  .console-head { display:flex; align-items:baseline; gap:10px; margin:0 0 18px;
-                  font:italic 400 13px/1 var(--serif); color:var(--mut); }
-  .console-head .ch-title { color:var(--fg); font-style:normal; letter-spacing:.02em;
-                            font-size:12px; text-transform:uppercase; }
+  .console { padding:11px 13px 12px; margin:2px 0 10px;
+             border:1px solid var(--line); border-radius:4px;
+             background:var(--paper); }
+  .console-head { display:flex; align-items:baseline; gap:9px; margin:0 0 9px;
+                  font:italic 400 12px/1 var(--serif); color:var(--mut); }
+  .console-head .ch-title { color:var(--fg); font-style:normal; letter-spacing:.04em;
+                            font-size:11px; text-transform:uppercase; }
   .console-head .ch-hint { font-size:11px; }
 
-  /* ── Chunky segmented allocation bar ────────────────────────────────────
-     One thick rounded rail partitioned into one colored segment per metric;
-     segment WIDTH = its share of 100 %. Dividers between segments drag to
-     reallocate share between neighbours. Widths animate via a CSS transition
-     so toggles / resets ease into place. */
-  .allocbar { position:relative; height:46px; margin:6px 2px 14px;
-              border-radius:23px; overflow:hidden; touch-action:none;
+  /* ── Minimal segmented allocation bar ───────────────────────────────────
+     One flat rail partitioned into one solid muted segment per metric;
+     segment WIDTH = its share of 100 %. Thin clean dividers between segments
+     drag to reallocate share between neighbours. No gradients / no gloss —
+     flat fills from the app palette so it sits quietly in the paper theme.
+     Widths animate via a CSS transition so toggles / resets ease into place. */
+  .allocbar { position:relative; height:26px; margin:4px 0 10px;
+              border-radius:3px; overflow:hidden; touch-action:none;
               display:flex; user-select:none;
-              background:color-mix(in srgb, var(--fg) 8%, var(--paper));
-              box-shadow: inset 0 1px 2px color-mix(in srgb, #000 34%, transparent),
-                          inset 0 -1px 0 color-mix(in srgb, #fff 9%, transparent),
-                          0 1px 3px color-mix(in srgb, #000 26%, transparent); }
-  .allocbar.animating .ab-seg { transition:flex-basis 360ms cubic-bezier(0.22,1,0.36,1),
-                                          background 220ms ease; }
+              border:1px solid var(--line);
+              background:color-mix(in srgb, var(--fg) 5%, var(--paper)); }
+  .allocbar.animating .ab-seg { transition:flex-basis 320ms cubic-bezier(0.22,1,0.36,1),
+                                          background 180ms ease; }
   .ab-seg { position:relative; flex:0 0 auto; height:100%;
             display:flex; align-items:center; justify-content:center;
             overflow:hidden; min-width:0; will-change:flex-basis;
-            background:linear-gradient(180deg,
-                      color-mix(in srgb, #fff 16%, var(--seg)),
-                      var(--seg) 58%,
-                      color-mix(in srgb, #000 16%, var(--seg)));
-            box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 22%, transparent),
-                        inset 0 -2px 6px color-mix(in srgb, #000 24%, transparent); }
-  .ab-seg + .ab-seg { box-shadow: inset 1px 0 0 color-mix(in srgb, #000 30%, transparent),
-                        inset 0 1px 0 color-mix(in srgb, #fff 22%, transparent),
-                        inset 0 -2px 6px color-mix(in srgb, #000 24%, transparent); }
-  .ab-seg .ab-lab { display:flex; flex-direction:column; align-items:center; gap:1px;
-            padding:0 6px; pointer-events:none; line-height:1.05; text-align:center;
-            color:#fff; text-shadow:0 1px 2px color-mix(in srgb, #000 60%, transparent);
-            white-space:nowrap; overflow:hidden; }
-  .ab-seg .ab-nm { font:600 10.5px/1 var(--sans); letter-spacing:.01em;
+            background:var(--seg); }
+  .ab-seg .ab-lab { display:flex; align-items:baseline; gap:4px;
+            padding:0 6px; pointer-events:none; line-height:1; text-align:center;
+            color:#fff; white-space:nowrap; overflow:hidden; }
+  .ab-seg .ab-nm { font:500 10px/1 var(--sans); letter-spacing:.01em;
             max-width:100%; overflow:hidden; text-overflow:ellipsis; }
-  .ab-seg .ab-pc { font:700 13px/1 var(--sans); font-variant-numeric:tabular-nums; }
+  .ab-seg .ab-pc { font:600 11px/1 var(--sans); font-variant-numeric:tabular-nums; }
   .ab-seg.narrow .ab-nm { display:none; }
   .ab-seg.tiny .ab-lab { opacity:0; }
   /* hover always surfaces the full label even when too narrow to show it */
   .ab-seg:hover .ab-lab { opacity:1; }
-  .ab-seg:hover .ab-nm { display:block; position:absolute; bottom:calc(100% + 6px);
-            left:50%; transform:translateX(-50%); padding:2px 7px; border-radius:4px;
-            background:var(--seg); color:#fff; z-index:9;
-            box-shadow:0 2px 6px color-mix(in srgb,#000 50%,transparent); }
-  /* dividers: a grab strip straddling each seam */
-  .ab-div { position:absolute; top:0; bottom:0; width:16px;
+  .ab-seg:hover .ab-nm { display:block; position:absolute; bottom:calc(100% + 5px);
+            left:50%; transform:translateX(-50%); padding:2px 7px; border-radius:3px;
+            background:var(--seg); color:#fff; z-index:9; font-weight:500;
+            box-shadow:0 1px 3px color-mix(in srgb,#000 28%,transparent); }
+  /* dividers: a thin clean grab strip straddling each seam */
+  .ab-div { position:absolute; top:0; bottom:0; width:14px;
             transform:translateX(-50%); z-index:5; cursor:ew-resize;
             display:flex; align-items:center; justify-content:center;
             touch-action:none; }
-  .ab-div::before { content:""; width:3px; height:60%; border-radius:2px;
-            background:color-mix(in srgb,#fff 78%,transparent);
-            box-shadow:0 0 0 1px color-mix(in srgb,#000 34%,transparent),
-                       0 1px 3px color-mix(in srgb,#000 46%,transparent);
-            transition:height 130ms ease, background 130ms ease, width 130ms ease; }
-  .ab-div:hover::before, .ab-div.drag::before { height:80%; width:4px;
-            background:#fff; }
+  .ab-div::before { content:""; width:1px; height:100%;
+            background:color-mix(in srgb, var(--paper) 70%, transparent);
+            transition:width 120ms ease, background 120ms ease; }
+  .ab-div:hover::before, .ab-div.drag::before { width:2px;
+            background:var(--paper); }
   .ab-div.drag { z-index:8; }
 
   /* legend: swatch + clickable name + live % per metric, wraps below */
-  .ab-legend { display:flex; flex-wrap:wrap; gap:7px 16px; margin-top:2px; }
-  .ab-leg { display:inline-flex; align-items:center; gap:7px; cursor:pointer;
-            font-size:11.5px; color:var(--mut); white-space:nowrap;
+  .ab-legend { display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:0; }
+  .ab-leg { display:inline-flex; align-items:center; gap:6px; cursor:pointer;
+            font-size:11px; color:var(--mut); white-space:nowrap;
             transition:color 120ms ease, opacity 160ms ease; }
   .ab-leg:hover, .ab-leg.lit { color:var(--fg); }
-  .ab-leg .dot { width:10px; height:10px; border-radius:3px; flex:0 0 auto;
+  .ab-leg .dot { width:9px; height:9px; border-radius:2px; flex:0 0 auto;
                  background:var(--seg);
-                 box-shadow:0 0 0 1px color-mix(in srgb, #000 22%, transparent),
-                            0 0 6px color-mix(in srgb, var(--seg) 70%, transparent);
-                 transition:background 160ms ease, box-shadow 160ms ease; }
+                 transition:background 160ms ease; }
   .ab-leg .nm { transition:opacity 160ms ease; }
   .ab-leg .lv { color:var(--fg); font-weight:600;
                 font-variant-numeric:tabular-nums; }
   .ab-leg.off { opacity:.5; }
   .ab-leg.off .nm { text-decoration:line-through; }
-  .ab-leg.off .dot { background:var(--mut); box-shadow:0 0 0 1px color-mix(in srgb,#000 22%,transparent); }
+  .ab-leg.off .dot { background:var(--mut); }
   .ab-leg.off .lv { color:var(--mut); }
-
-  /* exclude strength — a SEPARATE slim slider, visually distinct from the bar */
-  .ab-neg { display:flex; align-items:center; gap:10px; margin:14px 2px 2px;
-            padding-top:12px; border-top:1px dashed var(--line); }
-  .ab-neg .ab-neg-lab { font-size:11px; color:var(--mut); letter-spacing:.04em;
-            text-transform:uppercase; white-space:nowrap; }
-  .ab-neg input[type=range] { flex:1; accent-color:#cf4f3a; min-width:120px;
-            border:0; padding:0; background:transparent; cursor:pointer; }
-  .ab-neg .ab-neg-val { font:600 12px/1 var(--sans); color:var(--fg);
-            font-variant-numeric:tabular-nums; min-width:30px; text-align:right; }
 
   /* ---- curated high-aesthetic homepage showcase bar ---- */
   .showcase-bar { display:flex; align-items:center; gap:12px; flex-wrap:wrap;
@@ -2516,13 +2501,15 @@ const CONSOLE_KEY = "muser-alloc-v1";
 // `id` matches a SORT_METRICS weight (target = #sW_<id>); the segment SHARE
 // (0..1, all enabled shares sum to 1) is written straight onto that weight —
 // applySortBlend() is a linear blend, so share-as-weight is exactly right.
+// Flat, muted, earthy segment colors — restrained tones that belong in the
+// paper theme rather than a neon dashboard. Each is a single solid fill.
 const ALLOC_METRICS = [
-  { id:"vec",   label:"Relevance",      color:"#3a7bd5", hint:"Vector / embedding match — the primary signal." },
-  { id:"aes",   label:"Aesthetic V2",   color:"#d08a2a", hint:"LAION Aesthetics V2 — how ‘pretty’ the image is." },
-  { id:"ps",    label:"PickScore",      color:"#c75b8a", hint:"PickScore — human-preference proxy (Pick-a-Pic)." },
-  { id:"aes25", label:"Aesthetic V2.5", color:"#5aa469", hint:"LAION Aesthetics V2.5 — refined successor to V2." },
-  { id:"hps",   label:"HPS v2.1",       color:"#8a6fd0", hint:"Human Preference Score — prompt-aware preference." },
-  { id:"aes0",  label:"Zero-shot",      color:"#4bb3b8", hint:"Zero-shot CLIP aesthetic prompt — fast but weak." },
+  { id:"vec",   label:"Relevance",      color:"#5b6b86", hint:"Vector / embedding match — the primary signal." },
+  { id:"aes",   label:"Aesthetic V2",   color:"#a9823f", hint:"LAION Aesthetics V2 — how ‘pretty’ the image is." },
+  { id:"ps",    label:"PickScore",      color:"#9c5f74", hint:"PickScore — human-preference proxy (Pick-a-Pic)." },
+  { id:"aes25", label:"Aesthetic V2.5", color:"#5f7d5e", hint:"LAION Aesthetics V2.5 — refined successor to V2." },
+  { id:"hps",   label:"HPS v2.1",       color:"#736a8c", hint:"Human Preference Score — prompt-aware preference." },
+  { id:"aes0",  label:"Zero-shot",      color:"#5a8487", hint:"Zero-shot CLIP aesthetic prompt — fast but weak." },
 ];
 const ABNEG = { min:0, max:1.5, def:0.50 };   // exclude strength range (separate control)
 // Default shares: seed from the legacy per-metric defaults, normalized to 1
@@ -2565,14 +2552,19 @@ function _loadAlloc(){
 }
 // Push the current shares onto the six legacy weights (#sW_<id>) — disabled → 0 —
 // then persist + re-rank. This is the single bridge into the existing machinery.
-function _commitAlloc(persist){
+// `reRank` (default true) runs the expensive grid re-sort + persistence; during a
+// live drag we pass false so each pointer frame only updates the weights (cheap),
+// and the actual re-rank fires once on pointer release — avoiding grid thrash.
+function _commitAlloc(persist, reRank=true){
   ALLOC_METRICS.forEach(m => {
     const w = _alloc.enabled[m.id] ? (_alloc.shares[m.id] || 0) : 0;
     _setSortWeight(m.id, w);
   });
   _refreshBlendVisFromWeights();   // keep the legacy single-blend bar estimate alive
-  _saveSortBlend();
-  applySortBlend();
+  if(reRank){
+    _saveSortBlend();
+    applySortBlend();
+  }
   if(persist) _saveAlloc();
 }
 // Read the current value of the separate exclude-strength control.
@@ -2581,9 +2573,6 @@ function _setNeg(v, persist){
   v = Math.max(ABNEG.min, Math.min(ABNEG.max, v));
   $("#negStrength").value = v.toFixed(2);
   $("#negStrengthVal").textContent = v.toFixed(2);
-  const slider = $("#abNeg"), val = $("#abNegVal");
-  if(slider) slider.value = v.toFixed(2);
-  if(val) val.textContent = v.toFixed(2);
   if($("#q").value.trim().length >= 2 && $("#neg").value.trim()) liveSearch();
   if(persist) _saveAlloc();
 }
@@ -2592,12 +2581,31 @@ function _setNeg(v, persist){
 // class for one frame so width changes ease (toggles / reset), then removes it.
 const _MIN_SEG = 0.04;     // never let an enabled segment collapse fully while dragging
 function repaintConsole(){ _paintAlloc(false); }
-function _paintAlloc(animate){
+// Reposition the existing divider elements in place (no teardown/rebuild) at the
+// cumulative-share boundaries. Used on every drag frame so the DOM is *mutated*,
+// not rebuilt — this is what kills the flicker (rebuilding would destroy the very
+// divider the pointer-capture is attached to). Falls back to a rebuild when the
+// number of seams changed (only happens on toggle, not on drag).
+function _repositionDividers(bar, on){
+  const divs = bar.querySelectorAll(".ab-div");
+  if(divs.length !== Math.max(0, on.length - 1)) return false;   // structure changed → caller must rebuild
+  let cum = 0;
+  for(let i = 0; i < on.length - 1; i++){
+    cum += _alloc.shares[on[i].id] || 0;
+    divs[i].style.left = (cum * 100) + "%";
+  }
+  return true;
+}
+// `animate` adds a transition class for one frame so width changes ease (toggles /
+// reset). `rebuildDivs` (default true) tears down + recreates dividers; pass false
+// during an active drag so we mutate widths/divider-positions in place — no DOM
+// teardown, no layout thrash, no flash.
+function _paintAlloc(animate, rebuildDivs=true){
   const bar = $("#allocBar"), legend = $("#allocLegend");
   if(!bar || !legend) return;
   const on = ALLOC_METRICS.filter(m => _alloc.enabled[m.id]);
   if(animate) bar.classList.add("animating");
-  // segments
+  // segments — mutate styles/text on the persistent elements (never rebuilt)
   ALLOC_METRICS.forEach(m => {
     const seg = m._seg; if(!seg) return;
     const enabled = _alloc.enabled[m.id];
@@ -2614,17 +2622,22 @@ function _paintAlloc(animate){
     if(m._leg) m._leg.classList.toggle("off", !enabled);
   });
   // dividers: one between each pair of *adjacent enabled* segments, positioned at
-  // the cumulative share boundary. Rebuild from scratch (cheap, ≤5 dividers).
-  bar.querySelectorAll(".ab-div").forEach(d => d.remove());
-  let cum = 0;
-  for(let i = 0; i < on.length - 1; i++){
-    cum += _alloc.shares[on[i].id] || 0;
-    const div = document.createElement("div");
-    div.className = "ab-div";
-    div.style.left = (cum * 100) + "%";
-    div.dataset.left = on[i].id; div.dataset.right = on[i+1].id;
-    bar.appendChild(div);
-    _wireDivider(div, on[i].id, on[i+1].id);
+  // the cumulative share boundary. During a drag we only move the existing ones;
+  // otherwise (toggle / reset / build) rebuild from scratch (cheap, ≤5 dividers).
+  if(!rebuildDivs && _repositionDividers(bar, on)){
+    // positions updated in place — nothing else to do
+  } else {
+    bar.querySelectorAll(".ab-div").forEach(d => d.remove());
+    let cum = 0;
+    for(let i = 0; i < on.length - 1; i++){
+      cum += _alloc.shares[on[i].id] || 0;
+      const div = document.createElement("div");
+      div.className = "ab-div";
+      div.style.left = (cum * 100) + "%";
+      div.dataset.left = on[i].id; div.dataset.right = on[i+1].id;
+      bar.appendChild(div);
+      _wireDivider(div, on[i].id, on[i+1].id);
+    }
   }
   if(animate){
     setTimeout(() => bar.classList.remove("animating"), 380);
@@ -2640,12 +2653,7 @@ function buildSortConsole(){
        <span class="ch-hint">budget bar — drag the dividers to reallocate; click a name to toggle a metric</span>
      </div>
      <div class="allocbar" id="allocBar"></div>
-     <div class="ab-legend" id="allocLegend"></div>
-     <div class="ab-neg">
-       <span class="ab-neg-lab">Exclude strength</span>
-       <input type="range" id="abNeg" min="${ABNEG.min}" max="${ABNEG.max}" step="0.05" value="${_negVal().toFixed(2)}">
-       <span class="ab-neg-val" id="abNegVal">${_negVal().toFixed(2)}</span>
-     </div>`;
+     <div class="ab-legend" id="allocLegend"></div>`;
   const bar = host.querySelector("#allocBar");
   const legend = host.querySelector("#allocLegend");
   ALLOC_METRICS.forEach(m => {
@@ -2664,9 +2672,8 @@ function buildSortConsole(){
     leg.querySelector(".nm").addEventListener("click", () => _toggleMetric(m.id));
     leg.querySelector(".dot").addEventListener("click", () => _toggleMetric(m.id));
   });
-  // separate exclude-strength slider
-  const neg = host.querySelector("#abNeg");
-  neg.addEventListener("input", () => _setNeg(parseFloat(neg.value), true));
+  // Exclude strength is driven by the original #negStrength slider in the tools
+  // row — there is no duplicate slider inside the console.
   _paintAlloc(false);
 }
 // Enable / disable a metric. Disabling: its share is redistributed proportionally
@@ -2704,7 +2711,21 @@ function _wireDivider(div, leftId, rightId){
     const on = ALLOC_METRICS.filter(m => _alloc.enabled[m.id]).map(m => m.id);
     let s = 0; for(const x of on){ if(x === leftId) break; s += _alloc.shares[x]||0; } return s;
   };
-  let dragging = false;
+  let dragging = false, rafPending = false, dirty = false;
+  // Paint at most once per animation frame (coalesce rapid pointermove events) so
+  // we never run more than one layout/paint per displayed frame — smooth, no flash.
+  const flush = () => {
+    rafPending = false;
+    if(!dirty) return;
+    dirty = false;
+    // Lite commit: write the six weights from the new shares but DON'T re-rank the
+    // grid (reRank=false) — re-sorting the result set on every frame is the heavy
+    // thrash. Bar follows the pointer 1:1; the grid re-ranks once on release.
+    _commitAlloc(true, false);
+    // No transition + no divider rebuild while dragging: mutate segment widths and
+    // reposition the existing dividers in place — zero DOM teardown.
+    _paintAlloc(false, false);
+  };
   const onMove = (e) => {
     if(!dragging) return;
     e.preventDefault();
@@ -2716,8 +2737,8 @@ function _wireDivider(div, leftId, rightId){
     left = Math.max(_MIN_SEG, Math.min(pair - _MIN_SEG, left));
     _alloc.shares[leftId]  = left;
     _alloc.shares[rightId] = pair - left;
-    _commitAlloc(true);
-    _paintAlloc(false);     // no transition while actively dragging (follows pointer 1:1)
+    dirty = true;
+    if(!rafPending){ rafPending = true; requestAnimationFrame(flush); }
   };
   const onUp = (e) => {
     if(!dragging) return;
@@ -2725,6 +2746,9 @@ function _wireDivider(div, leftId, rightId){
     try { div.releasePointerCapture(e.pointerId); } catch {}
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
+    // Final paint + the deferred grid re-rank now that the drag has settled.
+    if(dirty){ dirty = false; _commitAlloc(true, false); _paintAlloc(false, false); }
+    _commitAlloc(true, true);
   };
   div.addEventListener("pointerdown", (e) => {
     e.preventDefault(); e.stopPropagation();
@@ -2759,10 +2783,6 @@ function syncConsole(){
   ALLOC_METRICS.forEach(m => { if(weights[m.id] > 1e-9) _alloc.enabled[m.id] = true; });
   _alloc.shares = _normShares(weights, _alloc.enabled);
   _saveAlloc();
-  // reflect exclude into the slim slider
-  const neg = $("#abNeg"), nv = $("#abNegVal");
-  if(neg) neg.value = _negVal().toFixed(2);
-  if(nv) nv.textContent = _negVal().toFixed(2);
   _paintAlloc(true);
 }
 
@@ -3043,10 +3063,6 @@ $("#neg").addEventListener("input", () => {
 });
 $("#negStrength").addEventListener("input", () => {
   $("#negStrengthVal").textContent = parseFloat($("#negStrength").value).toFixed(2);
-  // keep the blend console's slim exclude slider in sync
-  const neg = $("#abNeg"), nv = $("#abNegVal");
-  if(neg) neg.value = parseFloat($("#negStrength").value).toFixed(2);
-  if(nv) nv.textContent = parseFloat($("#negStrength").value).toFixed(2);
   if(typeof _saveAlloc === "function" && typeof _alloc !== "undefined" && _alloc) _saveAlloc();
   if ($("#q").value.trim().length >= 2 && $("#neg").value.trim()) liveSearch();
 });

@@ -11,7 +11,7 @@
       <nav class="tabs">
         <button class="nav on" data-mode="text" type="button">Search</button>
         <button class="nav" data-mode="color" type="button">Color</button>
-        <button class="nav" data-mode="image" type="button">Similar</button>
+        <button class="nav" data-mode="image" type="button" title="Drop or pick an image to find visually similar images in your library">Reverse image</button>
       </nav>
       <span class="sp"></span>
       <input id="scope" class="scope" type="search" list="folders" placeholder="all folders" autocomplete="off"
@@ -38,13 +38,21 @@
     </div>
     <div class="csset" id="colorSet" hidden></div>
 
-    <!-- Image-similarity panel -->
+    <!-- Reverse-image panel: pick or drag-drop an image → visually similar library results -->
     <div class="panel bar" data-panel="image" hidden>
+      <label class="filebtn" for="imgFile">Choose image…</label>
       <input id="imgFile" type="file" accept="image/*" />
-      <span class="mut" id="imgName">Pick an image to find visually similar matches.</span>
+      <span class="mut" id="imgName">Reverse image search — drag an image onto the gallery, or pick one, to find visually similar images in your library.</span>
     </div>
 
     <div id="status">Connecting…</div>
+
+    <!-- Drag-and-drop reverse-image search target: dropping an image file anywhere
+         over the gallery runs a reverse-image search on it. -->
+    <div id="dropzone" class="dropzone">
+      <div class="dz-inner">Drop image to reverse-search your library</div>
+    </div>
+
     <div id="grid"></div>
 
     <div class="modal" id="dupes">

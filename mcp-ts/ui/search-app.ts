@@ -2,7 +2,7 @@
 //
 // The host opens this app when one of the search tools is called and delivers
 // the tool's result via `onToolResult`. The gallery's tabs (text / color /
-// image-similarity) and folder-scope box re-run the corresponding MCP tool in
+// reverse-image) and folder-scope box re-run the corresponding MCP tool in
 // place via `callTool`. Host bridge + frame-fitting live in `mcp-frame.ts`.
 
 import { connectMcpFrame, resultJson, type McpFrame } from "./mcp-frame";
@@ -39,7 +39,7 @@ const gallery = createGallery({
     runTool(
       "search_similar",
       folder ? { image_base64: base64, filename, folder } : { image_base64: base64, filename },
-      "Finding similar images…",
+      "Reverse image search…",
     ),
   onLoadFolders: async () => {
     if (!frame) return [];

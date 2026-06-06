@@ -11,7 +11,7 @@
       <nav class="tabs">
         <button class="nav on" data-mode="text" type="button">Search</button>
         <button class="nav" data-mode="color" type="button">Color</button>
-        <button class="nav" data-mode="image" type="button">Similar</button>
+        <button class="nav" data-mode="image" type="button" title="Drop or pick an image to find visually similar images in your library">Reverse image</button>
       </nav>
       <span class="sp"></span>
       <input id="scope" class="scope" type="search" list="folders" placeholder="all folders" autocomplete="off" />
@@ -36,12 +36,18 @@
     <div class="csset" id="colorSet" hidden></div>
 
     <div class="panel bar" data-panel="image" hidden>
+      <label class="filebtn" for="imgFile">Choose image…</label>
       <input id="imgFile" type="file" accept="image/*" />
-      <span class="mut" id="imgName">Pick an image to find visually similar matches.</span>
+      <span class="mut" id="imgName">Reverse image search — drag an image onto the gallery, or pick one, to find visually similar images in your library.</span>
     </div>
 
     <div class="preview-note">UI preview — mock data, no MCP host. Edit <code>ui/gallery.css</code> / <code>ui/gallery.ts</code> and it hot-reloads.</div>
     <div id="status"></div>
+
+    <div id="dropzone" class="dropzone">
+      <div class="dz-inner">Drop image to reverse-search your library</div>
+    </div>
+
     <div id="grid"></div>
 
     <div class="modal" id="dupes">

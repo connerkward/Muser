@@ -1,5 +1,5 @@
 // Shared Muser gallery: renders search hits into the card grid and wires the
-// three search modes (text / color / image-similarity), the folder-scope box,
+// three search modes (text / color / reverse-image), the folder-scope box,
 // and the duplicates modal. Knows nothing about MCP — callers provide handlers.
 // Used by both `search-app.ts` (live MCP host) and `preview.ts` (mock preview).
 
@@ -175,13 +175,20 @@ export function createGallery(handlers: GalleryHandlers): Gallery {
     setStatus("Pick a color or a swatch to search.");
   });
 
-  // ---- Image-similarity search ---------------------------------------------
+  // ---- Reverse-image search (drop or pick an image → similar library hits) --
+  // Underlying call is POST /api/search-upload (embedding kNN over the index):
+  // "find images in MY library that look like this one." Two entry points share
+  // one helper — the file picker in the panel, and drag-and-drop onto the gallery.
   const imgFile = $<HTMLInputElement>("imgFile");
   const imgName = $<HTMLSpanElement>("imgName");
-  imgFile.addEventListener("change", () => {
-    const file = imgFile.files?.[0];
-    if (!file || !handlers.onSearchImage) return;
-    imgName.textContent = `Searching for images similar to ${file.name}…`;
+
+  /** Read an image File, base64-encode it, and run the reverse-image search. */
+  function reverseSearchFile(file: File): void {
+    if (!handlers.onSearchImage) return;
+    // A drop can land while another tab is active — make the result legible by
+    // switching to the reverse-image tab first.
+    setMode("image");
+    imgName.textContent = `Finding images similar to ${file.name}…`;
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result as string;
@@ -189,7 +196,50 @@ export function createGallery(handlers: GalleryHandlers): Gallery {
       void handlers.onSearchImage!({ base64, filename: file.name, folder: folderOrUndef() });
     };
     reader.readAsDataURL(file);
+  }
+
+  imgFile.addEventListener("change", () => {
+    const file = imgFile.files?.[0];
+    if (file) reverseSearchFile(file);
   });
+
+  // ---- Drag-and-drop reverse-image search ----------------------------------
+  // Dropping an image file anywhere on the gallery triggers a reverse-image
+  // search — no need to be on the tab first. A full-window overlay highlights
+  // the drop target while a file is dragged over.
+  const dropzone = $<HTMLDivElement>("dropzone");
+  let dragDepth = 0; // dragenter/leave fire per child; count to avoid flicker.
+
+  const hasImage = (dt: DataTransfer | null): boolean =>
+    !!dt && (Array.from(dt.items).some((i) => i.kind === "file" && i.type.startsWith("image/"))
+      || Array.from(dt.types).includes("Files"));
+
+  if (handlers.onSearchImage) {
+    window.addEventListener("dragenter", (e) => {
+      if (!hasImage(e.dataTransfer)) return;
+      e.preventDefault();
+      dragDepth++;
+      dropzone?.classList.add("over");
+    });
+    window.addEventListener("dragover", (e) => {
+      if (!hasImage(e.dataTransfer)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    });
+    window.addEventListener("dragleave", (e) => {
+      if (!hasImage(e.dataTransfer)) return;
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) dropzone?.classList.remove("over");
+    });
+    window.addEventListener("drop", (e) => {
+      dragDepth = 0;
+      dropzone?.classList.remove("over");
+      const file = Array.from(e.dataTransfer?.files ?? []).find((f) => f.type.startsWith("image/"));
+      if (!file) return;
+      e.preventDefault();
+      reverseSearchFile(file);
+    });
+  }
 
   // ---- Folder scope datalist (live app) ------------------------------------
   if (handlers.onLoadFolders) {
