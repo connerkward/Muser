@@ -145,6 +145,31 @@ async function buildLlmMeta(
   return "muser_search_meta (LLM-only, hidden from user):\n" + JSON.stringify(meta, null, 2);
 }
 
+/** How many top results to surface to the *model* as inline image blocks.
+ *  The gallery (structuredContent) still shows ALL results; this only bounds
+ *  the token cost of what the LLM actually sees. Small thumbs keep it cheap. */
+const LLM_PREVIEW_COUNT = 6;
+
+/** An MCP image content block the host renders into the model's context. */
+type ImageBlock = { type: "image"; data: string; mimeType: string };
+
+/** Turn the top-K hits' small thumbnails into MCP image content blocks the model
+ *  can actually see. Reuses the already-attached base64 thumb (the small one),
+ *  strips the `data:<mime>;base64,` prefix, and derives mimeType from it.
+ *  Skips any hit whose thumb is missing/unparseable so one bad image can't
+ *  break the result. Returns [] when there are no usable thumbs. */
+function llmPreviewImages(results: GalleryHit[]): ImageBlock[] {
+  const blocks: ImageBlock[] = [];
+  for (const h of results.slice(0, LLM_PREVIEW_COUNT)) {
+    const uri = h.thumb;
+    if (!uri) continue;
+    const m = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/.exec(uri);
+    if (!m || !m[1] || !m[2]) continue;
+    blocks.push({ type: "image", data: m[2], mimeType: m[1] });
+  }
+  return blocks;
+}
+
 /** Build the gallery tool result shared by every search mode (text/color/image). */
 async function galleryResult(
   mode: string,
@@ -157,14 +182,31 @@ async function galleryResult(
     ? results.map((h, i) => `${i + 1}. ${h.path} (${((h.prob ?? h.score) * 100).toFixed(1)}%)`).join("\n")
     : "No matches found. Index some images first with index_folder.";
   const meta = await buildLlmMeta(mode, query, folder, results, refinements);
+
+  // Inline the top-K thumbnails so the *model* can reason about the matches
+  // visually (pick the best, notice query drift, suggest refinements). The user
+  // still sees every result in the gallery via structuredContent.
+  const images = llmPreviewImages(results);
+
+  const content: Array<
+    { type: "text"; text: string } | ImageBlock
+  > = [{ type: "text", text: list }];
+  if (images.length) {
+    content.push({
+      type: "text",
+      text:
+        `Top ${images.length} result${images.length === 1 ? "" : "s"} shown below as ` +
+        `image${images.length === 1 ? "" : "s"} (for your visual reference; the user sees the full gallery).`,
+    });
+    content.push(...images);
+  }
+  // Hidden-from-user, LLM-facing context block — kept last.
+  content.push({ type: "text", text: meta });
+
   return {
     // structuredContent drives the gallery UI — no _meta here, so it never renders.
     structuredContent: { mode, folder, query, results },
-    content: [
-      { type: "text" as const, text: list },
-      // Hidden-from-user, LLM-facing context block.
-      { type: "text" as const, text: meta },
-    ],
+    content,
   };
 }
 
