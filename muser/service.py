@@ -90,6 +90,8 @@ class ThreeDReq(BaseModel):
     # annotations` can resolve it as a request body — a function-scope model
     # degrades to a query param (FastAPI can't resolve the ForwardRef) → 422.
     output_index: int
+    # When true, synthesize left/back/right views and use the multi-view 3D path.
+    multi_angle: bool = False
 
 
 class CheckoutReq(BaseModel):
@@ -106,7 +108,7 @@ class CheckoutReq(BaseModel):
     # mode="generate" runs the cart through fal.ai (muser/pipeline.py) to produce
     # new images / 3D. These fields are ignored in zip mode.
     mode: str = "zip"  # "zip" | "generate"
-    generator: str = "nano_banana"  # "nano_banana" | "lora"
+    generator: str = "nano_banana"  # "nano_banana" | "chatgpt" | "both" | "lora"
     lora_type: str = "concept"
     caption: bool = False
     cutout: bool = False
@@ -116,6 +118,8 @@ class CheckoutReq(BaseModel):
     gen_prompts: list[str] | None = None
     n_outputs: int = 4
     make_3d: bool = False
+    # Synthesize left/back/right views and reconstruct 3D from all of them.
+    multi_angle: bool = False
 
 
 class CaptionWriteReq(BaseModel):
@@ -1375,6 +1379,7 @@ def create_app(model: str = DEFAULT_MODEL):
                 "gen_prompts": req.gen_prompts,
                 "n_outputs": int(req.n_outputs),
                 "make_3d": bool(req.make_3d),
+                "multi_angle": bool(req.multi_angle),
                 "items": [{"path": p, "upscale": u} for p, u in in_items],
             }
             services = {
@@ -1597,14 +1602,44 @@ def create_app(model: str = DEFAULT_MODEL):
         if not img_path.is_file():
             raise HTTPException(404, "source image missing")
 
+        n3d = sum(1 for o in outputs if o.get("kind") == "3d")
+        view_outputs: list[dict] = []
         try:
             img_url = _gen.fal_upload_path(str(img_path))
-            res = _gen.image_to_3d(img_url)
+            if req.multi_angle:
+                # Synthesize L/B/R views, persist whatever succeeded, then feed
+                # them into the multi-view reconstruction.
+                brief = (run.get("config", {}) or {}).get("brief") or ""
+                views = _gen.generate_views(img_url, prompt_hint=brief)
+                for label in ("left", "back", "right"):
+                    vurl = (views or {}).get(label)
+                    if not vurl:
+                        continue
+                    try:
+                        vpng = _gen.download(vurl)
+                        v_rel = f"view_post_{n3d:03d}_{label}.png"
+                        (out_dir / v_rel).write_bytes(vpng)
+                        view_outputs.append({
+                            "kind": "image",
+                            "file": f"outputs/{v_rel}",
+                            "view": label,
+                            "generator": "nano_banana",
+                            "src_image_index": idx,
+                        })
+                    except Exception:
+                        pass
+                res = _gen.image_to_3d_multiview(
+                    img_url,
+                    (views or {}).get("left"),
+                    (views or {}).get("back"),
+                    (views or {}).get("right"),
+                )
+            else:
+                res = _gen.image_to_3d(img_url)
             glb = _gen.download(res["glb"])
         except Exception as e:
             raise HTTPException(502, f"image_to_3d failed: {type(e).__name__}: {e}")
 
-        n3d = sum(1 for o in outputs if o.get("kind") == "3d")
         glb_rel = f"model_post_{n3d:03d}.glb"
         (out_dir / glb_rel).write_bytes(glb)
         o3d = {
@@ -1626,7 +1661,8 @@ def create_app(model: str = DEFAULT_MODEL):
 
         # Append to run.json (re-read to avoid clobbering concurrent writes).
         fresh = _pipeline.read_run(run_id) or run
-        fresh.setdefault("outputs", []).append(o3d)
+        fresh.setdefault("outputs", []).extend(view_outputs)
+        fresh["outputs"].append(o3d)
         _pipeline._write_run(run_id, fresh)
 
         return {

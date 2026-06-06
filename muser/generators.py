@@ -23,11 +23,13 @@ PUT) for turning local bytes/files into public URLs that downstream calls accept
 
 from __future__ import annotations
 
+import concurrent.futures as cf
 import json
 import os
 import time
 import urllib.error
 import urllib.request
+import uuid
 
 # ---- endpoint ids (single source of truth) ----------------------------------
 EP_NANO_BANANA = "fal-ai/gemini-3.1-flash-image-preview/edit"
@@ -39,6 +41,11 @@ EP_LORA_GEN = "fal-ai/flux-lora"
 
 _FAL_RUN = "https://fal.run/"
 _FAL_STORAGE_INITIATE = "https://rest.alpha.fal.ai/storage/upload/initiate"
+
+# OpenAI image-edits endpoint (gpt-image-1) — the ChatGPT image generator route.
+_OPENAI_IMAGE_EDITS = "https://api.openai.com/v1/images/edits"
+# Cap on reference images fed to the edits endpoint (keeps payload / cost sane).
+GPT_IMAGE_MAX_REFS = 8
 
 # Nano Banana hard-caps at 14 reference image_urls (15+ → HTTP 422).
 NANO_MAX_REFS = 14
@@ -83,6 +90,19 @@ def fal_key() -> str:
     if not key:
         raise RuntimeError(
             "FAL_KEY not set. Add it to /Users/conner/dev/central/.env and retry."
+        )
+    return key
+
+
+def openai_key() -> str:
+    """Return ``OPENAI_API_KEY`` from env (loaded from central/.env at import).
+
+    Raises a generic RuntimeError if missing — never echoes the value.
+    """
+    key = os.environ.get("OPENAI_API_KEY")
+    if not key:
+        raise RuntimeError(
+            "OPENAI_API_KEY not set. Add it to /Users/conner/dev/central/.env and retry."
         )
     return key
 
@@ -309,6 +329,80 @@ def nano_banana(
     return [im["url"] for im in resp.get("images", []) if im.get("url")]
 
 
+def gpt_image(
+    ref_paths: list[str], prompt: str, n: int = 1, size: str = "1024x1024"
+) -> list[bytes]:
+    """ChatGPT image generator (gpt-image-1) via OpenAI's **image edits** endpoint.
+
+    Sends the cart reference images as multipart ``image[]`` files (capped at
+    :data:`GPT_IMAGE_MAX_REFS`) so the model edits/composes from them, alongside
+    the text ``prompt``. Returns one raw PNG ``bytes`` blob per generated image
+    (decoded from each ``data[i].b64_json``). Stdlib ``urllib`` only — no
+    ``openai`` SDK dep — mirroring ``caption.py``. The key is never logged.
+
+    Retries on 429/5xx (3 attempts, 1s/2s/4s backoff) via :func:`_retry`.
+    """
+    import base64
+    import mimetypes
+
+    key = openai_key()
+    refs = [p for p in (ref_paths or []) if p and os.path.isfile(p)][:GPT_IMAGE_MAX_REFS]
+
+    # Build a multipart/form-data body by hand (stdlib has no helper).
+    boundary = f"----muser{uuid.uuid4().hex}"
+    crlf = b"\r\n"
+    parts: list[bytes] = []
+
+    def _field(name: str, value: str) -> None:
+        parts.append(b"--" + boundary.encode() + crlf)
+        parts.append(
+            f'Content-Disposition: form-data; name="{name}"'.encode() + crlf + crlf
+        )
+        parts.append(value.encode("utf-8") + crlf)
+
+    _field("model", "gpt-image-1")
+    _field("prompt", prompt)
+    _field("n", str(int(n)))
+    _field("size", size)
+    for p in refs:
+        ctype = mimetypes.guess_type(p)[0] or "image/png"
+        with open(p, "rb") as f:
+            data = f.read()
+        parts.append(b"--" + boundary.encode() + crlf)
+        parts.append(
+            (
+                f'Content-Disposition: form-data; name="image[]"; '
+                f'filename="{os.path.basename(p)}"'
+            ).encode()
+            + crlf
+        )
+        parts.append(f"Content-Type: {ctype}".encode() + crlf + crlf)
+        parts.append(data + crlf)
+    parts.append(b"--" + boundary.encode() + b"--" + crlf)
+    body = b"".join(parts)
+
+    def _call():
+        req = urllib.request.Request(
+            _OPENAI_IMAGE_EDITS,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            },
+        )
+        return _request_json(req, timeout=300)
+
+    resp = _retry(_call, label="openai:images/edits")
+    out: list[bytes] = []
+    for item in resp.get("data", []) or []:
+        b64 = item.get("b64_json")
+        if b64:
+            out.append(base64.b64decode(b64))
+    if not out:
+        raise RuntimeError(f"gpt_image: no image data in response: {resp!r}")
+    return out
+
+
 def image_to_3d(image_url: str) -> dict:
     """Hunyuan3D v3 image→3D. Returns ``{"glb": <url>, "thumbnail": <url|None>}``."""
     resp = fal_run(
@@ -324,6 +418,78 @@ def image_to_3d(image_url: str) -> dict:
     if not glb:
         raise RuntimeError(f"image_to_3d: no model_glb in response: {resp!r}")
     return {"glb": glb, "thumbnail": thumb}
+
+
+def image_to_3d_multiview(
+    front_url: str,
+    left_url: str | None = None,
+    back_url: str | None = None,
+    right_url: str | None = None,
+) -> dict:
+    """Hunyuan3D v3 **multi-view** image→3D.
+
+    Same endpoint as :func:`image_to_3d` but feeds the optional
+    ``left_image_url`` / ``back_image_url`` / ``right_image_url`` extra views for a
+    more faithful reconstruction. Missing views are simply omitted (the endpoint
+    treats them as optional). Returns ``{"glb": <url>, "thumbnail": <url|None>}``.
+    """
+    body: dict = {
+        "input_image_url": front_url,
+        "generate_type": "Normal",
+        "face_count": 500000,
+    }
+    if left_url:
+        body["left_image_url"] = left_url
+    if back_url:
+        body["back_image_url"] = back_url
+    if right_url:
+        body["right_image_url"] = right_url
+    resp = fal_run(EP_IMAGE_TO_3D, body)
+    glb = (resp.get("model_glb") or {}).get("url")
+    thumb = (resp.get("thumbnail") or {}).get("url")
+    if not glb:
+        raise RuntimeError(f"image_to_3d_multiview: no model_glb in response: {resp!r}")
+    return {"glb": glb, "thumbnail": thumb}
+
+
+def generate_views(image_url: str, prompt_hint: str = "") -> dict:
+    """Synthesize LEFT / BACK / RIGHT views of the subject in ``image_url``.
+
+    Three Nano Banana edit calls (run concurrently), each re-rendering the same
+    object/subject rotated to a new side with identical style/materials on a plain
+    white background. ``prompt_hint`` is an optional short description of the
+    subject prepended to the rotation instruction. Returns
+    ``{"left": url, "back": url, "right": url}`` — each value is an uploaded fal
+    URL, or ``None`` if that view failed (callers degrade gracefully).
+    """
+    subject = (prompt_hint.strip() + " ") if prompt_hint and prompt_hint.strip() else "The same object/subject "
+    sides = {
+        "left": "LEFT",
+        "back": "BACK",
+        "right": "RIGHT",
+    }
+
+    def _one(side_word: str) -> str | None:
+        prompt = (
+            f"{subject}rotated to show its {side_word} side, identical style and "
+            "materials, plain white background, centered, product shot"
+        )
+        try:
+            urls = nano_banana([image_url], prompt, n=1)
+            if not urls:
+                return None
+            # Re-upload to fal CDN so the URL is a stable input for the 3D call.
+            png = _fetch_url(urls[0])
+            return fal_upload_bytes(png, f"view_{side_word.lower()}.png", "image/png")
+        except Exception:
+            return None
+
+    out: dict[str, str | None] = {"left": None, "back": None, "right": None}
+    with cf.ThreadPoolExecutor(max_workers=3) as ex:
+        futs = {ex.submit(_one, word): key for key, word in sides.items()}
+        for fut in cf.as_completed(futs):
+            out[futs[fut]] = fut.result()
+    return out
 
 
 def train_lora(zip_url: str, trigger: str, is_style: bool) -> str:

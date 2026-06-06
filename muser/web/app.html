@@ -48,7 +48,17 @@
                    padding-left:18px; padding-right:18px; }
   button.primary:hover { opacity:.85; }
 
-  .wrap { max-width:1280px; margin:0 auto; padding:14px 28px 80px; }
+  /* Full-bleed layout: the page uses the entire viewport width with only a
+     small consistent gutter (Cosmos/Pinterest-style edge-to-edge grid). The
+     search/header controls stay readable via a centered `.lede` cap inside
+     the otherwise full-width wrap; the GRID goes wide. */
+  .wrap { max-width:none; margin:0; padding:14px 20px 80px; }
+  /* Readable-width cap for the search bar + tool rows on the Search tab so the
+     query input doesn't stretch across a 2560px monitor while the grid does.
+     Everything in #searchView is capped EXCEPT the results grid + its empty
+     state, which fill the full viewport width. */
+  .lede { max-width:1180px; margin:0 auto; }
+  #searchView > :not(#results):not(#empty) { max-width:1180px; margin-left:auto; margin-right:auto; }
 
   .searchbar { position:relative; display:flex; gap:8px; margin-bottom:4px; }
   .searchbar input { flex:1; font-size:15px; padding:11px 14px; }
@@ -96,8 +106,10 @@
              animation:spin .9s linear infinite; display:inline-block; }
   @keyframes spin { to { transform:rotate(360deg); } }
 
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr));
-          gap:34px 16px; }
+  /* Full-width responsive grid: more, denser columns that fill the viewport.
+     min track 168px → many columns on wide monitors, still ≥2 on a phone. */
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(168px,1fr));
+          gap:26px 14px; }
   .card { background:transparent; border:0; display:flex; flex-direction:column;
           animation:card-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both; }
   @keyframes card-in {
@@ -338,36 +350,107 @@
   .ckstage .ckst-name { flex:1; text-transform:capitalize; }
   .ckstage .ckst-n { color:var(--mut); }
 
-  /* Results tab: run cards (grid) + run detail. Reuses .grid/.card idioms. */
-  .runcard { cursor:pointer; background:transparent; border:0; padding:0;
-             text-align:left; display:flex; flex-direction:column; }
-  .runcard .rthumb { width:100%; aspect-ratio:1; object-fit:cover;
-                     background:var(--paper); }
+  /* Results tab: run cards (grid) + run detail. Reuses .grid/.card idioms.
+     Run cards carry more text than image cards, so the run list uses a slightly
+     wider min track than the dense image grid. */
+  #runGrid { grid-template-columns:repeat(auto-fill,minmax(248px,1fr)); gap:20px 18px; }
+  .runcard { cursor:pointer; text-align:left; display:flex; flex-direction:column;
+             background:var(--paper); border:1px solid var(--line); border-radius:10px;
+             padding:0; overflow:hidden;
+             transition:border-color 150ms ease, transform 150ms cubic-bezier(0.22,1,0.36,1),
+                        box-shadow 150ms ease; }
+  .runcard:hover { border-color:color-mix(in srgb, var(--fg) 40%, var(--line));
+                   transform:translateY(-2px);
+                   box-shadow:0 6px 18px color-mix(in srgb,#000 22%,transparent); }
+  .runcard .rthumb { width:100%; aspect-ratio:4/3; object-fit:cover;
+                     background:color-mix(in srgb, var(--fg) 6%, var(--paper)); display:block; }
   .runcard .rthumb.empty { display:flex; align-items:center; justify-content:center;
                            font:italic 400 13px/1 var(--serif); color:var(--mut); }
-  .runcard .rbrief { font-size:13px; color:var(--fg); padding:9px 0 0; line-height:1.4;
+  .runcard .rbody { padding:11px 13px 13px; display:flex; flex-direction:column; gap:7px; }
+  .runcard .rbrief { font-size:13.5px; color:var(--fg); line-height:1.35; font-weight:500;
                      display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
                      overflow:hidden; }
-  .runcard:hover .rbrief { text-decoration:underline; }
-  .runcard .rmeta { font:italic 400 12px/1.4 var(--serif); color:var(--mut); padding:3px 0 0; }
-  .runcard .rstatus { font-size:11px; padding:3px 0 0; color:var(--mut);
-                      font-variant-numeric:tabular-nums; }
-  .runcard .rstatus.running { color:#caa468; }
-  .runcard .rstatus.error { color:#c0392b; }
-  .runcard .rstatus.done { color:var(--fg); }
-  .run-detail .rd-config { font-size:12px; color:var(--mut); line-height:1.7;
-                           margin:6px 0 18px; font-family:var(--serif); font-style:italic; }
-  .run-detail .rd-sec { font-size:11px; color:var(--mut); letter-spacing:.08em;
-                        text-transform:uppercase; margin:20px 0 10px; }
-  .outcard { display:flex; flex-direction:column; }
+  .runcard:hover .rbrief { text-decoration:underline; text-underline-offset:2px; }
+  .runcard .rrow { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  /* generator badge — small pill */
+  .gbadge { display:inline-flex; align-items:center; gap:5px; font-size:10.5px;
+            font-weight:600; letter-spacing:.02em; padding:2px 8px; border-radius:11px;
+            color:var(--fg); background:color-mix(in srgb, var(--fg) 9%, transparent);
+            border:1px solid color-mix(in srgb, var(--fg) 16%, transparent); white-space:nowrap; }
+  .gbadge .gdot { width:6px; height:6px; border-radius:50%; background:var(--gc, #7a8aa0); flex:0 0 auto; }
+  /* status pill — colored by state */
+  .spill { display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:600;
+           padding:2px 9px; border-radius:11px; letter-spacing:.02em; white-space:nowrap;
+           color:var(--sp-fg, var(--mut)); background:var(--sp-bg, color-mix(in srgb,var(--mut) 14%,transparent)); }
+  .spill .sdot { width:6px; height:6px; border-radius:50%; background:currentColor; flex:0 0 auto; }
+  .spill.running { --sp-fg:#caa468; --sp-bg:color-mix(in srgb,#caa468 16%,transparent); }
+  .spill.running .sdot { animation:pulse 1.1s ease-in-out infinite; }
+  .spill.done { --sp-fg:#5aa469; --sp-bg:color-mix(in srgb,#5aa469 16%,transparent); }
+  .spill.error { --sp-fg:#c0392b; --sp-bg:color-mix(in srgb,#c0392b 16%,transparent); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+  .runcard .rmetaline { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--mut);
+                        font-variant-numeric:tabular-nums; }
+  .runcard .rmetaline .rsep { width:3px; height:3px; border-radius:50%; background:var(--mut); opacity:.5; }
+
+  /* ── Run detail: header band + grouped output sections ─────────────────── */
+  .run-detail .rd-head { background:
+              radial-gradient(120% 160% at 0% 0%, color-mix(in srgb, var(--fg) 6%, transparent), transparent 62%),
+              var(--paper);
+              border:1px solid var(--line); border-radius:12px;
+              padding:18px 20px 16px; margin:4px 0 8px; }
+  .run-detail .rd-title { font:500 19px/1.3 var(--sans); color:var(--fg); margin:0 0 12px;
+              letter-spacing:-.01em; }
+  .run-detail .rd-chips { display:flex; flex-wrap:wrap; gap:8px; }
+  .rd-chip { display:inline-flex; align-items:baseline; gap:6px; font-size:11.5px;
+             padding:4px 11px; border-radius:13px; white-space:nowrap;
+             background:color-mix(in srgb, var(--fg) 7%, transparent);
+             border:1px solid color-mix(in srgb, var(--fg) 13%, transparent); }
+  .rd-chip .rdk { color:var(--mut); font-size:10px; letter-spacing:.05em; text-transform:uppercase; }
+  .rd-chip .rdv { color:var(--fg); font-weight:600; font-variant-numeric:tabular-nums; }
+  .rd-chip.flag { background:color-mix(in srgb,#3a7bd5 13%,transparent);
+                  border-color:color-mix(in srgb,#3a7bd5 28%,transparent); color:var(--fg); font-weight:600; }
+  .run-detail .rd-err { font-size:12px; color:#c0392b; margin:4px 0 0;
+              background:color-mix(in srgb,#c0392b 8%,transparent);
+              border:1px solid color-mix(in srgb,#c0392b 24%,transparent);
+              border-radius:8px; padding:9px 12px; }
+  .run-detail .rd-sec { display:flex; align-items:center; gap:10px;
+                        font-size:11px; color:var(--mut); letter-spacing:.08em;
+                        text-transform:uppercase; margin:24px 0 12px; }
+  .run-detail .rd-sec::after { content:""; flex:1; height:1px;
+                        background:var(--line); }
+  .run-detail .rd-sec .rd-sec-n { color:var(--fg); font-weight:600;
+                        background:color-mix(in srgb,var(--fg) 9%,transparent);
+                        border-radius:9px; padding:1px 8px; letter-spacing:0; }
+  /* sub-group header when a section is split by generator (comparison runs) */
+  .run-detail .rd-grp { font:600 12px/1 var(--sans); color:var(--fg); margin:14px 0 8px;
+                        display:flex; align-items:center; gap:7px; text-transform:none; letter-spacing:0; }
+  .run-detail .rd-empty { color:var(--mut); font-style:italic; font-family:var(--serif);
+                          padding:24px 0; font-size:13px; }
+  /* output card grid: tidy, consistent gutters */
+  .outgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr));
+             gap:18px 16px; }
+  .outcard { display:flex; flex-direction:column; background:var(--paper);
+             border:1px solid var(--line); border-radius:10px; overflow:hidden;
+             transition:border-color 150ms ease, box-shadow 150ms ease; }
+  .outcard:hover { border-color:color-mix(in srgb, var(--fg) 30%, var(--line));
+                   box-shadow:0 4px 14px color-mix(in srgb,#000 16%,transparent); }
   .outcard img { width:100%; aspect-ratio:1; object-fit:cover; background:var(--paper);
-                 cursor:zoom-in; }
+                 cursor:zoom-in; display:block; }
+  .outcard .obody { padding:9px 11px 11px; display:flex; flex-direction:column; }
   .outcard .okind { font-size:10px; color:var(--mut); letter-spacing:.06em;
-                    text-transform:uppercase; padding:6px 0 0; }
+                    text-transform:uppercase; }
   .outcard .oprompt { font:italic 400 11px/1.4 var(--serif); color:var(--fg);
                       padding:3px 0 0; display:-webkit-box; -webkit-line-clamp:3;
                       -webkit-box-orient:vertical; overflow:hidden; }
-  .outcard .orow { display:flex; gap:13px; padding:6px 0 0; align-items:center; flex-wrap:wrap; }
+  .outcard .orow { display:flex; gap:13px; padding:7px 0 0; align-items:center; flex-wrap:wrap; }
+  .outcard .orow button.mk3d { background:color-mix(in srgb,var(--fg) 8%,transparent);
+                      border:1px solid color-mix(in srgb,var(--fg) 18%,transparent);
+                      border-radius:13px; padding:3px 11px; color:var(--fg); font-size:11px;
+                      font-weight:600; cursor:pointer; transition:background 140ms ease, border-color 140ms ease; }
+  .outcard .orow button.mk3d:hover { background:color-mix(in srgb,var(--fg) 16%,transparent);
+                      border-color:color-mix(in srgb,var(--fg) 32%,transparent); }
+  .outcard .orow button.mk3d:disabled { opacity:.6; cursor:default; }
+  .outcard .o3d { padding:0 11px 11px; }
   .outcard .orow button, .outcard .orow a { background:transparent; border:0; padding:0;
                       color:var(--mut); font-size:11px; cursor:pointer; text-decoration:none;
                       border-bottom:1px solid transparent; }
@@ -491,63 +574,89 @@
                             font-size:12px; text-transform:uppercase; }
   .console-head .ch-hint { font-size:11px; }
 
-  /* the single shared bar: one rail, many thumbs absolutely positioned on it */
-  .blendbar { position:relative; height:38px; margin:6px 4px 10px;
-              touch-action:none; }
-  .blendbar .bb-track { position:absolute; left:0; right:0; top:50%;
-              transform:translateY(-50%); height:8px; border-radius:4px;
-              background:linear-gradient(90deg,
-                        color-mix(in srgb, var(--fg) 7%, var(--paper)),
-                        color-mix(in srgb, var(--fg) 12%, var(--paper)));
-              box-shadow: inset 0 1px 2px color-mix(in srgb, #000 30%, transparent),
-                          inset 0 -1px 0 color-mix(in srgb, #fff 7%, transparent); }
-  /* faint ticks at 0 / mid / full to read the bar as a scale */
-  .blendbar .bb-tick { position:absolute; top:50%; width:1px; height:14px;
-              transform:translate(-50%,-50%);
-              background:color-mix(in srgb, var(--fg) 14%, transparent);
-              pointer-events:none; }
-  .bb-thumb { position:absolute; top:50%; left:var(--x,0%);
-              width:18px; height:18px; border-radius:50%;
-              transform:translate(-50%,-50%);
-              background:radial-gradient(circle at 35% 28%,
-                        color-mix(in srgb, #fff 78%, var(--knob)), var(--knob) 72%);
-              border:1.5px solid color-mix(in srgb, #000 38%, var(--knob));
-              box-shadow:0 1px 3px color-mix(in srgb, #000 50%, transparent),
-                         0 0 0 0 color-mix(in srgb, var(--knob) 60%, transparent);
-              cursor:grab; touch-action:none;
-              transition:left 90ms linear, box-shadow 140ms ease, transform 120ms ease;
-              z-index:2; }
-  .bb-thumb:hover, .bb-thumb:focus-visible {
-              box-shadow:0 1px 3px color-mix(in srgb, #000 50%, transparent),
-                         0 0 0 5px color-mix(in srgb, var(--knob) 24%, transparent);
-              z-index:5; outline:none; }
-  .bb-thumb.drag { cursor:grabbing; z-index:6;
-              transform:translate(-50%,-50%) scale(1.22);
-              box-shadow:0 2px 7px color-mix(in srgb, #000 58%, transparent),
-                         0 0 0 8px color-mix(in srgb, var(--knob) 30%, transparent); }
-  /* floating value tip above the active thumb */
-  .bb-thumb .bb-tip { position:absolute; bottom:calc(100% + 9px); left:50%;
-              transform:translateX(-50%); padding:2px 7px; border-radius:4px;
-              font:600 11px/1.4 var(--sans); font-variant-numeric:tabular-nums;
-              color:var(--bg); background:var(--knob); white-space:nowrap;
-              opacity:0; pointer-events:none; transition:opacity 120ms ease; z-index:7; }
-  .bb-thumb .bb-tip::after { content:""; position:absolute; top:100%; left:50%;
-              transform:translateX(-50%); border:4px solid transparent;
-              border-top-color:var(--knob); }
-  .bb-thumb:hover .bb-tip, .bb-thumb.drag .bb-tip, .bb-thumb:focus-visible .bb-tip { opacity:1; }
+  /* ── Chunky segmented allocation bar ────────────────────────────────────
+     One thick rounded rail partitioned into one colored segment per metric;
+     segment WIDTH = its share of 100 %. Dividers between segments drag to
+     reallocate share between neighbours. Widths animate via a CSS transition
+     so toggles / resets ease into place. */
+  .allocbar { position:relative; height:46px; margin:6px 2px 14px;
+              border-radius:23px; overflow:hidden; touch-action:none;
+              display:flex; user-select:none;
+              background:color-mix(in srgb, var(--fg) 8%, var(--paper));
+              box-shadow: inset 0 1px 2px color-mix(in srgb, #000 34%, transparent),
+                          inset 0 -1px 0 color-mix(in srgb, #fff 9%, transparent),
+                          0 1px 3px color-mix(in srgb, #000 26%, transparent); }
+  .allocbar.animating .ab-seg { transition:flex-basis 360ms cubic-bezier(0.22,1,0.36,1),
+                                          background 220ms ease; }
+  .ab-seg { position:relative; flex:0 0 auto; height:100%;
+            display:flex; align-items:center; justify-content:center;
+            overflow:hidden; min-width:0; will-change:flex-basis;
+            background:linear-gradient(180deg,
+                      color-mix(in srgb, #fff 16%, var(--seg)),
+                      var(--seg) 58%,
+                      color-mix(in srgb, #000 16%, var(--seg)));
+            box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 22%, transparent),
+                        inset 0 -2px 6px color-mix(in srgb, #000 24%, transparent); }
+  .ab-seg + .ab-seg { box-shadow: inset 1px 0 0 color-mix(in srgb, #000 30%, transparent),
+                        inset 0 1px 0 color-mix(in srgb, #fff 22%, transparent),
+                        inset 0 -2px 6px color-mix(in srgb, #000 24%, transparent); }
+  .ab-seg .ab-lab { display:flex; flex-direction:column; align-items:center; gap:1px;
+            padding:0 6px; pointer-events:none; line-height:1.05; text-align:center;
+            color:#fff; text-shadow:0 1px 2px color-mix(in srgb, #000 60%, transparent);
+            white-space:nowrap; overflow:hidden; }
+  .ab-seg .ab-nm { font:600 10.5px/1 var(--sans); letter-spacing:.01em;
+            max-width:100%; overflow:hidden; text-overflow:ellipsis; }
+  .ab-seg .ab-pc { font:700 13px/1 var(--sans); font-variant-numeric:tabular-nums; }
+  .ab-seg.narrow .ab-nm { display:none; }
+  .ab-seg.tiny .ab-lab { opacity:0; }
+  /* hover always surfaces the full label even when too narrow to show it */
+  .ab-seg:hover .ab-lab { opacity:1; }
+  .ab-seg:hover .ab-nm { display:block; position:absolute; bottom:calc(100% + 6px);
+            left:50%; transform:translateX(-50%); padding:2px 7px; border-radius:4px;
+            background:var(--seg); color:#fff; z-index:9;
+            box-shadow:0 2px 6px color-mix(in srgb,#000 50%,transparent); }
+  /* dividers: a grab strip straddling each seam */
+  .ab-div { position:absolute; top:0; bottom:0; width:16px;
+            transform:translateX(-50%); z-index:5; cursor:ew-resize;
+            display:flex; align-items:center; justify-content:center;
+            touch-action:none; }
+  .ab-div::before { content:""; width:3px; height:60%; border-radius:2px;
+            background:color-mix(in srgb,#fff 78%,transparent);
+            box-shadow:0 0 0 1px color-mix(in srgb,#000 34%,transparent),
+                       0 1px 3px color-mix(in srgb,#000 46%,transparent);
+            transition:height 130ms ease, background 130ms ease, width 130ms ease; }
+  .ab-div:hover::before, .ab-div.drag::before { height:80%; width:4px;
+            background:#fff; }
+  .ab-div.drag { z-index:8; }
 
-  /* legend: colour swatch ↔ parameter name ↔ live value, wraps freely below */
-  .bb-legend { display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:4px; }
-  .bb-leg { display:inline-flex; align-items:center; gap:6px; cursor:pointer;
+  /* legend: swatch + clickable name + live % per metric, wraps below */
+  .ab-legend { display:flex; flex-wrap:wrap; gap:7px 16px; margin-top:2px; }
+  .ab-leg { display:inline-flex; align-items:center; gap:7px; cursor:pointer;
             font-size:11.5px; color:var(--mut); white-space:nowrap;
-            transition:color 120ms ease; }
-  .bb-leg:hover, .bb-leg.lit { color:var(--fg); }
-  .bb-leg .dot { width:9px; height:9px; border-radius:50%; flex:0 0 auto;
-                 background:var(--knob);
+            transition:color 120ms ease, opacity 160ms ease; }
+  .ab-leg:hover, .ab-leg.lit { color:var(--fg); }
+  .ab-leg .dot { width:10px; height:10px; border-radius:3px; flex:0 0 auto;
+                 background:var(--seg);
                  box-shadow:0 0 0 1px color-mix(in srgb, #000 22%, transparent),
-                            0 0 6px var(--knob); }
-  .bb-leg .lv { color:var(--fg); font-weight:600;
+                            0 0 6px color-mix(in srgb, var(--seg) 70%, transparent);
+                 transition:background 160ms ease, box-shadow 160ms ease; }
+  .ab-leg .nm { transition:opacity 160ms ease; }
+  .ab-leg .lv { color:var(--fg); font-weight:600;
                 font-variant-numeric:tabular-nums; }
+  .ab-leg.off { opacity:.5; }
+  .ab-leg.off .nm { text-decoration:line-through; }
+  .ab-leg.off .dot { background:var(--mut); box-shadow:0 0 0 1px color-mix(in srgb,#000 22%,transparent); }
+  .ab-leg.off .lv { color:var(--mut); }
+
+  /* exclude strength — a SEPARATE slim slider, visually distinct from the bar */
+  .ab-neg { display:flex; align-items:center; gap:10px; margin:14px 2px 2px;
+            padding-top:12px; border-top:1px dashed var(--line); }
+  .ab-neg .ab-neg-lab { font-size:11px; color:var(--mut); letter-spacing:.04em;
+            text-transform:uppercase; white-space:nowrap; }
+  .ab-neg input[type=range] { flex:1; accent-color:#cf4f3a; min-width:120px;
+            border:0; padding:0; background:transparent; cursor:pointer; }
+  .ab-neg .ab-neg-val { font:600 12px/1 var(--sans); color:var(--fg);
+            font-variant-numeric:tabular-nums; min-width:30px; text-align:right; }
 
   /* ---- curated high-aesthetic homepage showcase bar ---- */
   .showcase-bar { display:flex; align-items:center; gap:12px; flex-wrap:wrap;
@@ -2318,16 +2427,21 @@ SORT_METRICS.forEach(m => {
 });
 $("#sApply").addEventListener("click", () => { _saveSortBlend(); applySortBlend(); });
 $("#sReset").addEventListener("click", () => {
-  SORT_METRICS.forEach(m => _setSortWeight(m.id, m.def));
   _setBlend(0); _saveBlend(0);
-  _saveSortBlend(); applySortBlend();
-  // Also reset the exclude-strength knob to its default and repaint the console.
-  const negDef = (CONSOLE_KNOBS.find(k => k.kind === "neg") || {}).def ?? 0.5;
-  $("#negStrength").value = negDef.toFixed(2);
-  $("#negStrengthVal").textContent = negDef.toFixed(2);
-  if(typeof _saveConsole === "function") _saveConsole();
-  if(typeof syncConsole === "function") syncConsole();
-  if($("#q").value.trim().length >= 2 && $("#neg").value.trim()) liveSearch();
+  // Restore the allocation bar to its default shares + enabled set (animated),
+  // which writes the six weights through _commitAlloc → applySortBlend.
+  if(typeof _alloc !== "undefined" && _alloc){
+    _alloc = { shares:Object.assign({}, ALLOC_DEFAULT.shares),
+               enabled:Object.assign({}, ALLOC_DEFAULT.enabled) };
+    _commitAlloc(true);
+    if(typeof _paintAlloc === "function") _paintAlloc(true);
+  } else {
+    SORT_METRICS.forEach(m => _setSortWeight(m.id, m.def));
+    _saveSortBlend(); applySortBlend();
+  }
+  // Also reset the separate exclude-strength control to its default.
+  if(typeof _setNeg === "function") _setNeg(ABNEG.def, true);
+  else { $("#negStrength").value = "0.50"; $("#negStrengthVal").textContent = "0.50"; }
 });
 
 // ---- Single "Relevance ↔ Aesthetic" blend (t ∈ [0,1]) ----------------------
@@ -2396,203 +2510,261 @@ _wireSortBlendInputs();
 // so re-ranking and exclude behaviour are untouched — the console is just a
 // nicer driver. Values persist in localStorage and restore on load.
 // ============================================================================
-const CONSOLE_KEY = "muser-console-v1";
-// One spec per knob. `kind` decides what the value means + where it writes.
-//   kind:"weight" → a SORT_METRICS weight (target = sW_<id>, 0..2).
-//   kind:"neg"    → exclude strength (target = #negStrength, 0..1.5).
-const CONSOLE_KNOBS = [
-  { id:"vec",   kind:"weight", label:"Relevance",     color:"#3a7bd5", min:0, max:2,   def:1.00, hint:"Vector / embedding match — the primary signal." },
-  { id:"aes",   kind:"weight", label:"Aesthetic V2",  color:"#d08a2a", min:0, max:2,   def:0.30, hint:"LAION Aesthetics V2 — how ‘pretty’ the image is." },
-  { id:"ps",    kind:"weight", label:"PickScore",     color:"#c75b8a", min:0, max:2,   def:0.10, hint:"PickScore — human-preference proxy (Pick-a-Pic)." },
-  { id:"aes25", kind:"weight", label:"Aesthetic V2.5",color:"#5aa469", min:0, max:2,   def:0.00, hint:"LAION Aesthetics V2.5 — refined successor to V2." },
-  { id:"hps",   kind:"weight", label:"HPS v2.1",      color:"#8a6fd0", min:0, max:2,   def:0.00, hint:"Human Preference Score — prompt-aware preference." },
-  { id:"aes0",  kind:"weight", label:"Zero-shot",     color:"#4bb3b8", min:0, max:2,   def:0.00, hint:"Zero-shot CLIP aesthetic prompt — fast but weak." },
-  { id:"neg",   kind:"neg",    label:"Exclude force", color:"#cf4f3a", min:0, max:1.5, def:0.50, hint:"How hard the Exclude term is pushed out of the query vector." },
+const CONSOLE_KEY = "muser-alloc-v1";
+// One spec per BLEND metric (the 100 %-budget bar). Exclude strength is NOT a
+// blend metric — it lives in its own slim slider below the bar (see ABNEG).
+// `id` matches a SORT_METRICS weight (target = #sW_<id>); the segment SHARE
+// (0..1, all enabled shares sum to 1) is written straight onto that weight —
+// applySortBlend() is a linear blend, so share-as-weight is exactly right.
+const ALLOC_METRICS = [
+  { id:"vec",   label:"Relevance",      color:"#3a7bd5", hint:"Vector / embedding match — the primary signal." },
+  { id:"aes",   label:"Aesthetic V2",   color:"#d08a2a", hint:"LAION Aesthetics V2 — how ‘pretty’ the image is." },
+  { id:"ps",    label:"PickScore",      color:"#c75b8a", hint:"PickScore — human-preference proxy (Pick-a-Pic)." },
+  { id:"aes25", label:"Aesthetic V2.5", color:"#5aa469", hint:"LAION Aesthetics V2.5 — refined successor to V2." },
+  { id:"hps",   label:"HPS v2.1",       color:"#8a6fd0", hint:"Human Preference Score — prompt-aware preference." },
+  { id:"aes0",  label:"Zero-shot",      color:"#4bb3b8", hint:"Zero-shot CLIP aesthetic prompt — fast but weak." },
 ];
-// Map a knob → its current numeric value, read straight from live state so the
-// console always reflects whatever the rest of the app set (e.g. _applyBlend,
-// the negStrength handler, or a Reset).
-function _consoleVal(k){
-  if(k.kind === "neg") return parseFloat($("#negStrength").value);
-  return parseFloat($("#sW_"+k.id).value);
+const ABNEG = { min:0, max:1.5, def:0.50 };   // exclude strength range (separate control)
+// Default shares: seed from the legacy per-metric defaults, normalized to 1
+// over the metrics that start non-zero (vec/aes/ps), the rest enabled at 0-floor.
+const ALLOC_DEFAULT = (() => {
+  const seed = { vec:1.00, aes:0.30, ps:0.10, aes25:0, hps:0, aes0:0 };
+  const enabled = { vec:true, aes:true, ps:true, aes25:false, hps:false, aes0:false };
+  return { shares: _normShares(seed, enabled), enabled };
+})();
+// Normalize a {id:weight} map to shares summing to 1 over the *enabled* ids.
+// Disabled ids get share 0. If every enabled weight is 0, spread evenly.
+function _normShares(weights, enabled){
+  const ids = ALLOC_METRICS.map(m => m.id);
+  const on = ids.filter(id => enabled[id]);
+  let tot = on.reduce((s,id) => s + Math.max(0, weights[id]||0), 0);
+  const out = {};
+  ids.forEach(id => out[id] = 0);
+  if(on.length === 0) return out;
+  if(tot <= 1e-9){ on.forEach(id => out[id] = 1/on.length); return out; }
+  on.forEach(id => out[id] = Math.max(0, weights[id]||0) / tot);
+  return out;
 }
-// Commit a knob's value back into the underlying state + trigger its effect.
-function _consoleCommit(k, v, persist){
-  v = Math.max(k.min, Math.min(k.max, v));
-  if(k.kind === "neg"){
-    // Exclude strength: mirror into the legacy slider + its label, then re-run
-    // search exactly like #negStrength's own input handler does.
-    $("#negStrength").value = v.toFixed(2);
-    $("#negStrengthVal").textContent = v.toFixed(2);
-    if($("#q").value.trim().length >= 2 && $("#neg").value.trim()) liveSearch();
-  } else {
-    // A SORT_METRICS weight: reuse _setSortWeight (writes #sW_<id> + its label),
-    // keep the legacy single-blend bar in sync, persist the six, re-rank.
-    _setSortWeight(k.id, v);
-    _refreshBlendVisFromWeights();
-    _saveSortBlend();
-    applySortBlend();
+// Live alloc state (mutated by drags / legend toggles, persisted to localStorage).
+let _alloc = null;
+function _saveAlloc(){
+  try{ localStorage.setItem(CONSOLE_KEY, JSON.stringify({ shares:_alloc.shares, enabled:_alloc.enabled })); }catch{}
+}
+function _loadAlloc(){
+  let s = null;
+  try{ s = JSON.parse(localStorage.getItem(CONSOLE_KEY) || "null"); }catch{}
+  if(!s || !s.shares || !s.enabled)
+    return { shares:Object.assign({}, ALLOC_DEFAULT.shares), enabled:Object.assign({}, ALLOC_DEFAULT.enabled) };
+  // Backfill any metric ids missing from an older payload.
+  const enabled = {}, shares = {};
+  ALLOC_METRICS.forEach(m => {
+    enabled[m.id] = (s.enabled[m.id] != null) ? !!s.enabled[m.id] : ALLOC_DEFAULT.enabled[m.id];
+    shares[m.id]  = (s.shares[m.id]  != null) ? +s.shares[m.id]   : 0;
+  });
+  return { shares:_normShares(shares, enabled), enabled };
+}
+// Push the current shares onto the six legacy weights (#sW_<id>) — disabled → 0 —
+// then persist + re-rank. This is the single bridge into the existing machinery.
+function _commitAlloc(persist){
+  ALLOC_METRICS.forEach(m => {
+    const w = _alloc.enabled[m.id] ? (_alloc.shares[m.id] || 0) : 0;
+    _setSortWeight(m.id, w);
+  });
+  _refreshBlendVisFromWeights();   // keep the legacy single-blend bar estimate alive
+  _saveSortBlend();
+  applySortBlend();
+  if(persist) _saveAlloc();
+}
+// Read the current value of the separate exclude-strength control.
+function _negVal(){ return parseFloat($("#negStrength").value); }
+function _setNeg(v, persist){
+  v = Math.max(ABNEG.min, Math.min(ABNEG.max, v));
+  $("#negStrength").value = v.toFixed(2);
+  $("#negStrengthVal").textContent = v.toFixed(2);
+  const slider = $("#abNeg"), val = $("#abNegVal");
+  if(slider) slider.value = v.toFixed(2);
+  if(val) val.textContent = v.toFixed(2);
+  if($("#q").value.trim().length >= 2 && $("#neg").value.trim()) liveSearch();
+  if(persist) _saveAlloc();
+}
+
+// Repaint the segmented bar + legend from `_alloc`. `animate` adds a transition
+// class for one frame so width changes ease (toggles / reset), then removes it.
+const _MIN_SEG = 0.04;     // never let an enabled segment collapse fully while dragging
+function repaintConsole(){ _paintAlloc(false); }
+function _paintAlloc(animate){
+  const bar = $("#allocBar"), legend = $("#allocLegend");
+  if(!bar || !legend) return;
+  const on = ALLOC_METRICS.filter(m => _alloc.enabled[m.id]);
+  if(animate) bar.classList.add("animating");
+  // segments
+  ALLOC_METRICS.forEach(m => {
+    const seg = m._seg; if(!seg) return;
+    const enabled = _alloc.enabled[m.id];
+    const share = enabled ? (_alloc.shares[m.id] || 0) : 0;
+    const pct = share * 100;
+    seg.style.flexBasis = pct + "%";
+    seg.style.display = enabled ? "" : "none";
+    seg.classList.toggle("narrow", pct < 13);
+    seg.classList.toggle("tiny", pct < 7);
+    if(m._pc) m._pc.textContent = Math.round(pct) + "%";
+    seg.setAttribute("title", m.label + " · " + Math.round(pct) + "% — " + m.hint);
+    // legend value + struck/dim state
+    if(m._lv) m._lv.textContent = enabled ? Math.round(pct) + "%" : "off";
+    if(m._leg) m._leg.classList.toggle("off", !enabled);
+  });
+  // dividers: one between each pair of *adjacent enabled* segments, positioned at
+  // the cumulative share boundary. Rebuild from scratch (cheap, ≤5 dividers).
+  bar.querySelectorAll(".ab-div").forEach(d => d.remove());
+  let cum = 0;
+  for(let i = 0; i < on.length - 1; i++){
+    cum += _alloc.shares[on[i].id] || 0;
+    const div = document.createElement("div");
+    div.className = "ab-div";
+    div.style.left = (cum * 100) + "%";
+    div.dataset.left = on[i].id; div.dataset.right = on[i+1].id;
+    bar.appendChild(div);
+    _wireDivider(div, on[i].id, on[i+1].id);
   }
-  if(persist) _saveConsole();
+  if(animate){
+    setTimeout(() => bar.classList.remove("animating"), 380);
+  }
 }
-function _saveConsole(){
-  try{
-    const s = {};
-    CONSOLE_KNOBS.forEach(k => s[k.id] = _consoleVal(k));
-    localStorage.setItem(CONSOLE_KEY, JSON.stringify(s));
-  }catch{}
-}
-function _loadConsole(){
-  try{ return JSON.parse(localStorage.getItem(CONSOLE_KEY) || "{}"); }catch{ return {}; }
-}
-// Repaint one thumb (its x position on the shared rail) + its tip + legend value.
-// Every knob has a different scale (max 2 for weights, 1.5 for exclude) — each
-// maps independently to 0..100% of the SAME rail, so the bar reads as one scale.
-function _paintKnob(k){
-  if(!k._thumb) return;
-  const v = _consoleVal(k);
-  const pct = ((v - k.min) / (k.max - k.min)) * 100;
-  k._thumb.style.setProperty("--x", pct.toFixed(2) + "%");
-  k._thumb.setAttribute("aria-valuenow", v.toFixed(2));
-  if(k._tip) k._tip.textContent = k.label + " " + v.toFixed(2);
-  if(k._lv)  k._lv.textContent  = v.toFixed(2);
-}
-function repaintConsole(){ CONSOLE_KNOBS.forEach(_paintKnob); }
-// Build ONE rail with one draggable thumb per parameter, plus a colour legend.
+// Build the segmented bar, legend, and the separate exclude slider once.
 function buildSortConsole(){
   const host = $("#sortConsole");
   if(!host) return;
   host.innerHTML =
     `<div class="console-head">
        <span class="ch-title">Blend</span>
-       <span class="ch-hint">one bar, many handles — relevance, each aesthetic model, and exclude strength</span>
+       <span class="ch-hint">budget bar — drag the dividers to reallocate; click a name to toggle a metric</span>
      </div>
-     <div class="blendbar" id="blendBar">
-       <span class="bb-track"></span>
-       <span class="bb-tick" style="left:0%"></span>
-       <span class="bb-tick" style="left:50%"></span>
-       <span class="bb-tick" style="left:100%"></span>
-     </div>
-     <div class="bb-legend" id="bbLegend"></div>`;
-  const bar = host.querySelector("#blendBar");
-  const legend = host.querySelector("#bbLegend");
-  CONSOLE_KNOBS.forEach(k => {
-    const thumb = document.createElement("span");
-    thumb.className = "bb-thumb";
-    thumb.style.setProperty("--knob", k.color);
-    thumb.tabIndex = 0;
-    thumb.setAttribute("role", "slider");
-    thumb.setAttribute("aria-label", k.label + " — " + k.hint);
-    thumb.setAttribute("aria-valuemin", k.min);
-    thumb.setAttribute("aria-valuemax", k.max);
-    thumb.title = k.label + " · " + k.hint;
-    thumb.innerHTML = `<span class="bb-tip"></span>`;
-    bar.appendChild(thumb);
-    k._thumb = thumb;
-    k._tip = thumb.querySelector(".bb-tip");
+     <div class="allocbar" id="allocBar"></div>
+     <div class="ab-legend" id="allocLegend"></div>
+     <div class="ab-neg">
+       <span class="ab-neg-lab">Exclude strength</span>
+       <input type="range" id="abNeg" min="${ABNEG.min}" max="${ABNEG.max}" step="0.05" value="${_negVal().toFixed(2)}">
+       <span class="ab-neg-val" id="abNegVal">${_negVal().toFixed(2)}</span>
+     </div>`;
+  const bar = host.querySelector("#allocBar");
+  const legend = host.querySelector("#allocLegend");
+  ALLOC_METRICS.forEach(m => {
+    const seg = document.createElement("div");
+    seg.className = "ab-seg"; seg.style.setProperty("--seg", m.color);
+    seg.innerHTML = `<span class="ab-lab"><span class="ab-nm">${m.label}</span><span class="ab-pc">0%</span></span>`;
+    bar.appendChild(seg);
+    m._seg = seg; m._pc = seg.querySelector(".ab-pc");
 
-    // legend entry: colour dot + name + live value; hover/focus lifts the thumb.
     const leg = document.createElement("span");
-    leg.className = "bb-leg"; leg.style.setProperty("--knob", k.color);
-    leg.title = k.hint;
-    leg.innerHTML = `<span class="dot"></span><span class="nm">${k.label}</span>
-                     <span class="lv">0.00</span>`;
+    leg.className = "ab-leg"; leg.style.setProperty("--seg", m.color);
+    leg.title = m.hint + "  (click name to enable / disable)";
+    leg.innerHTML = `<span class="dot"></span><span class="nm">${m.label}</span><span class="lv">0%</span>`;
     legend.appendChild(leg);
-    k._leg = leg;
-    k._lv = leg.querySelector(".lv");
-    const lift = (on) => { thumb.classList.toggle("drag", on); leg.classList.toggle("lit", on); };
-    leg.addEventListener("pointerenter", () => lift(true));
-    leg.addEventListener("pointerleave", () => { if(!k._dragging) lift(false); });
-
-    _wireKnob(k, bar);
+    m._leg = leg; m._lv = leg.querySelector(".lv");
+    leg.querySelector(".nm").addEventListener("click", () => _toggleMetric(m.id));
+    leg.querySelector(".dot").addEventListener("click", () => _toggleMetric(m.id));
   });
-  // Press on the bare rail (not on a thumb): grab the NEAREST thumb and drag it
-  // from there, so the whole bar is clickable, not just the 18px handles.
-  bar.addEventListener("pointerdown", (e) => {
-    if(e.target.closest(".bb-thumb")) return;          // a thumb handles its own press
+  // separate exclude-strength slider
+  const neg = host.querySelector("#abNeg");
+  neg.addEventListener("input", () => _setNeg(parseFloat(neg.value), true));
+  _paintAlloc(false);
+}
+// Enable / disable a metric. Disabling: its share is redistributed proportionally
+// to the still-enabled metrics. Enabling: it takes a proportional share back
+// (1/(n+1) of the new total) and the rest are scaled down to make room. Animated.
+function _toggleMetric(id){
+  const wasOn = _alloc.enabled[id];
+  const others = ALLOC_METRICS.map(m => m.id).filter(x => x !== id && _alloc.enabled[x]);
+  if(wasOn){
+    if(others.length === 0) return;             // never disable the last enabled metric
+    _alloc.enabled[id] = false;
+    const freed = _alloc.shares[id] || 0;
+    _alloc.shares[id] = 0;
+    const tot = others.reduce((s,x) => s + (_alloc.shares[x]||0), 0);
+    if(tot <= 1e-9) others.forEach(x => _alloc.shares[x] = 1/others.length);
+    else others.forEach(x => _alloc.shares[x] += freed * (_alloc.shares[x]/tot));
+  } else {
+    _alloc.enabled[id] = true;
+    const n = others.length;
+    const take = 1/(n+1);                        // new metric's fair share
+    others.forEach(x => _alloc.shares[x] *= (1 - take));
+    _alloc.shares[id] = take;
+  }
+  _alloc.shares = _normShares(_alloc.shares, _alloc.enabled);
+  _commitAlloc(true);
+  _paintAlloc(true);
+}
+// Drag a divider: move share between its left/right neighbour. The seam position
+// (fraction of bar width) sets where left's cumulative boundary lands; the delta
+// from that vs. all-segments-before-left is the left segment's new share.
+function _wireDivider(div, leftId, rightId){
+  const bar = $("#allocBar");
+  // sum of shares of all enabled segments strictly before `leftId`
+  const beforeShare = () => {
+    const on = ALLOC_METRICS.filter(m => _alloc.enabled[m.id]).map(m => m.id);
+    let s = 0; for(const x of on){ if(x === leftId) break; s += _alloc.shares[x]||0; } return s;
+  };
+  let dragging = false;
+  const onMove = (e) => {
+    if(!dragging) return;
+    e.preventDefault();
     const r = bar.getBoundingClientRect();
     const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / (r.width || 1)));
-    let best = null, bestD = Infinity;
-    CONSOLE_KNOBS.forEach(k => {
-      const f = (_consoleVal(k) - k.min) / (k.max - k.min);
-      const d = Math.abs(f - frac);
-      if(d < bestD){ bestD = d; best = k; }
-    });
-    if(best && best._thumb) best._thumb.dispatchEvent(
-      new PointerEvent("pointerdown", { clientX:e.clientX, clientY:e.clientY,
-        pointerId:e.pointerId, bubbles:false }));
-  });
-  repaintConsole();
-}
-// Pointer drag (mouse + touch) + keyboard arrows for one thumb on the shared rail.
-// Pointer-down brings the thumb to front so overlapping handles stay grabbable.
-function _wireKnob(k, bar){
-  const thumb = k._thumb;
-  const step = 0.05;
-  const fromClientX = (clientX) => {
-    const r = bar.getBoundingClientRect();
-    const frac = Math.max(0, Math.min(1, (clientX - r.left) / (r.width || 1)));
-    let v = k.min + frac * (k.max - k.min);
-    v = Math.round(v / step) * step;            // snap to step
-    return Math.max(k.min, Math.min(k.max, v));
-  };
-  const onMove = (e) => {
-    if(!k._dragging) return;
-    e.preventDefault();
-    _consoleCommit(k, fromClientX(e.clientX), true);
-    _paintKnob(k);
+    const before = beforeShare();
+    const pair = (_alloc.shares[leftId]||0) + (_alloc.shares[rightId]||0);
+    let left = frac - before;
+    left = Math.max(_MIN_SEG, Math.min(pair - _MIN_SEG, left));
+    _alloc.shares[leftId]  = left;
+    _alloc.shares[rightId] = pair - left;
+    _commitAlloc(true);
+    _paintAlloc(false);     // no transition while actively dragging (follows pointer 1:1)
   };
   const onUp = (e) => {
-    if(!k._dragging) return;
-    k._dragging = false;
-    thumb.classList.remove("drag"); if(k._leg) k._leg.classList.remove("lit");
-    try { thumb.releasePointerCapture(e.pointerId); } catch {}
+    if(!dragging) return;
+    dragging = false; div.classList.remove("drag");
+    try { div.releasePointerCapture(e.pointerId); } catch {}
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
   };
-  // Drag begins on the thumb itself (so the right handle is picked even when
-  // several overlap); a press on bare rail snaps the *nearest* thumb to it.
-  thumb.addEventListener("pointerdown", (e) => {
+  div.addEventListener("pointerdown", (e) => {
     e.preventDefault(); e.stopPropagation();
-    k._dragging = true; thumb.classList.add("drag");
-    if(k._leg) k._leg.classList.add("lit");
-    thumb.focus({preventScroll:true});
-    try { thumb.setPointerCapture(e.pointerId); } catch {}
+    dragging = true; div.classList.add("drag");
+    try { div.setPointerCapture(e.pointerId); } catch {}
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
   });
-  thumb.addEventListener("keydown", (e) => {
-    let d = 0;
-    if(e.key === "ArrowLeft" || e.key === "ArrowDown") d = -step;
-    else if(e.key === "ArrowRight" || e.key === "ArrowUp") d = +step;
-    else if(e.key === "Home") return _consoleCommit(k, k.min, true), _paintKnob(k), e.preventDefault();
-    else if(e.key === "End")  return _consoleCommit(k, k.max, true), _paintKnob(k), e.preventDefault();
-    else return;
-    e.preventDefault();
-    _consoleCommit(k, _consoleVal(k) + d, true);
-    _paintKnob(k);
-  });
 }
-// Restore persisted knob values into underlying state (without re-searching on
-// load), build the widget, then paint. Weights flow through _setSortWeight so
-// the legacy machinery stays consistent; exclude strength just sets the slider.
+// Restore persisted alloc into the legacy weights (without re-searching on load),
+// build the widget, then paint.
 (function _initConsole(){
-  const saved = _loadConsole();
-  CONSOLE_KNOBS.forEach(k => {
-    const v = (saved[k.id] != null) ? saved[k.id] : _consoleVal(k);
-    if(k.kind === "neg"){
-      $("#negStrength").value = v.toFixed(2);
-      $("#negStrengthVal").textContent = v.toFixed(2);
-    } else {
-      _setSortWeight(k.id, v);
-    }
+  _alloc = _loadAlloc();
+  ALLOC_METRICS.forEach(m => {
+    const w = _alloc.enabled[m.id] ? (_alloc.shares[m.id] || 0) : 0;
+    _setSortWeight(m.id, w);
   });
+  // exclude strength restores from its own legacy slider (already wired elsewhere);
+  // nothing to seed here beyond reflecting it into the new slim slider on build.
   _refreshBlendVisFromWeights();
   buildSortConsole();
 })();
 // Keep the console in sync if state changes elsewhere (Reset button, the legacy
-// negStrength handler firing, etc.). Cheap idempotent repaint.
-function syncConsole(){ if($("#sortConsole")) repaintConsole(); }
+// negStrength handler firing, etc.). Re-derives shares from the live weights so a
+// Reset that rewrites #sW_* is reflected on the bar.
+function syncConsole(){
+  if(!$("#allocBar")) return;
+  const weights = {};
+  ALLOC_METRICS.forEach(m => weights[m.id] = parseFloat($("#sW_"+m.id).value) || 0);
+  // enabled = currently-enabled set, but force-enable any metric that now has
+  // weight > 0 (e.g. Reset pushed aes/ps back up) so the bar shows it.
+  ALLOC_METRICS.forEach(m => { if(weights[m.id] > 1e-9) _alloc.enabled[m.id] = true; });
+  _alloc.shares = _normShares(weights, _alloc.enabled);
+  _saveAlloc();
+  // reflect exclude into the slim slider
+  const neg = $("#abNeg"), nv = $("#abNegVal");
+  if(neg) neg.value = _negVal().toFixed(2);
+  if(nv) nv.textContent = _negVal().toFixed(2);
+  _paintAlloc(true);
+}
 
 let _currentResults = [];                                // last /api/search payload — used by the Search-tab sort blend
 
@@ -2871,8 +3043,11 @@ $("#neg").addEventListener("input", () => {
 });
 $("#negStrength").addEventListener("input", () => {
   $("#negStrengthVal").textContent = parseFloat($("#negStrength").value).toFixed(2);
-  if(typeof _saveConsole === "function") _saveConsole();
-  if(typeof syncConsole === "function") syncConsole();
+  // keep the blend console's slim exclude slider in sync
+  const neg = $("#abNeg"), nv = $("#abNegVal");
+  if(neg) neg.value = parseFloat($("#negStrength").value).toFixed(2);
+  if(nv) nv.textContent = parseFloat($("#negStrength").value).toFixed(2);
+  if(typeof _saveAlloc === "function" && typeof _alloc !== "undefined" && _alloc) _saveAlloc();
   if ($("#q").value.trim().length >= 2 && $("#neg").value.trim()) liveSearch();
 });
 $("#q").addEventListener("keydown", e => {
@@ -3240,6 +3415,10 @@ function routeFromHash(){
   // nothing to render).
   const mi = h.match(/^#\/?image\/([a-f0-9]+)/i);
   if(mi) return {view:"image", uid:mi[1]};
+  // #/explore/<method>/<clusterId> — drilled into a single cluster. clusterId
+  // may be negative, so allow a leading minus. method is [a-z]+ (hdbscan/kmeans).
+  const mc = h.match(/^#\/?explore\/([a-z]+)\/(-?\d+)/i);
+  if(mc) return {view:"explore", cluster:{method:mc[1], id:parseInt(mc[2],10)}};
   const m = h.match(/^#\/?([a-z]+)/i);
   const v = m && m[1] in VIEWS ? m[1] : null;
   if(h && h !== "#" && h !== "#/" && !v){
@@ -3252,12 +3431,25 @@ function viewFromHash(){ return routeFromHash().view; }
 window.addEventListener("popstate", (e) => {
   let route;
   if(e.state && e.state.view && e.state.view in VIEWS){
-    route = {view: e.state.view, uid: e.state.uid || null};
+    route = {view: e.state.view, uid: e.state.uid || null, cluster: e.state.cluster || null};
   } else {
     route = routeFromHash();
   }
   _suppressHistory = true;
-  try { showView(route.view, {uid: route.uid}); } finally { _suppressHistory = false; }
+  try {
+    showView(route.view, {uid: route.uid});
+    // Explore cluster drill-down: a state carrying `cluster` means we're INSIDE
+    // a cluster (Forward into it, or reopen on reload); no cluster means we're
+    // back at the cluster grid — close any open detail.
+    if(route.view === "explore"){
+      if(route.cluster && route.cluster.id != null){
+        const c = route.cluster;
+        openCluster(c.method, c.id, c.label || ("cluster "+c.id), c.sub || "", c.size || 0, false);
+      } else {
+        closeClusterDetail();
+      }
+    }
+  } finally { _suppressHistory = false; }
 });
 
 // ---- AI tab: images whose C2PA Content Credentials declare AI origin ----
@@ -3333,17 +3525,49 @@ async function loadRuns(){
   msg.textContent = `${runs.length} run${runs.length===1?"":"s"}`;
   runs.forEach(run => grid.appendChild(renderRunCard(run)));
 }
+// Stable-ish color per generator so the same generator reads the same dot
+// across cards (side-by-side compare). Hash the name into a hue.
+function _genColor(name){
+  const known = { nano_banana:"#d0a23a", lora:"#8a6fd0", flux:"#c75b8a",
+                  sdxl:"#5aa469", "3d":"#4bb3b8" };
+  const k = (name||"").toLowerCase();
+  if (known[k]) return known[k];
+  let h = 0; for (let i=0;i<k.length;i++) h = (h*31 + k.charCodeAt(i)) % 360;
+  return `hsl(${h} 42% 58%)`;
+}
+function _genLabel(name){ return (name||"").replace(/_/g," ") || "—"; }
+// Status pill: maps a free-text status onto the .running/.done/.error variants.
+function _statusPill(status){
+  const s = (status||"").toLowerCase();
+  let cls = "", label = status || "";
+  if (!status) return "";
+  if (s === "done" || s === "complete" || s === "ok" || s === "success") { cls = "done"; label = "done"; }
+  else if (s === "error" || s === "failed") { cls = "error"; label = "error"; }
+  else if (s === "running" || s === "pending" || s === "queued") { cls = "running"; label = s; }
+  return `<span class="spill ${cls}"><span class="sdot"></span>${esc(label)}</span>`;
+}
 function renderRunCard(run){
   const c = document.createElement("button"); c.className = "runcard"; c.type = "button";
   const thumb = run.thumb
     ? `<img class="rthumb" loading="lazy" src="/api/pipeline/${enc(run.id)}/file/${run.thumb.split("/").map(enc).join("/")}" alt="">`
     : `<div class="rthumb empty">no preview</div>`;
   const brief = run.brief ? esc(run.brief) : "(no brief)";
-  const status = run.status || "";
+  const gen = run.generator
+    ? `<span class="gbadge"><span class="gdot" style="--gc:${_genColor(run.generator)}"></span>${esc(_genLabel(run.generator))}</span>`
+    : "";
+  const pill = _statusPill(run.status);
+  const meta = [];
+  if (run.n_outputs != null) meta.push(`${run.n_outputs} output${run.n_outputs===1?"":"s"}`);
+  if (run.created) meta.push(relTime(run.created));
+  const metaline = meta.length
+    ? `<div class="rmetaline">${meta.map((m,i)=>(i?`<span class="rsep"></span>`:"")+esc(m)).join("")}</div>`
+    : "";
   c.innerHTML = thumb
-    + `<div class="rbrief" title="${esc(run.brief||"")}">${brief}</div>`
-    + `<div class="rmeta">${esc(run.generator||"")} · ${run.n_outputs!=null?run.n_outputs+" out":""}</div>`
-    + `<div class="rstatus ${status}">${status}${run.created?" · "+relTime(run.created):""}</div>`;
+    + `<div class="rbody">`
+    +   `<div class="rbrief" title="${esc(run.brief||"")}">${brief}</div>`
+    +   (gen || pill ? `<div class="rrow">${gen}${pill}</div>` : "")
+    +   metaline
+    + `</div>`;
   c.onclick = () => showView("results", {runId: run.id});
   return c;
 }
@@ -3357,38 +3581,105 @@ async function openRunDetail(runId){
   catch { body.innerHTML = `<div class="empty">Failed to load this run.</div>`; return; }
   renderRunDetail(d);
 }
+// A labeled config chip: <key> <value>. `flag` styles boolean feature chips.
+function _rdChip(key, val, isFlag){
+  return `<span class="rd-chip${isFlag?" flag":""}">`
+    + (key ? `<span class="rdk">${esc(key)}</span>` : "")
+    + `<span class="rdv">${esc(val)}</span></span>`;
+}
 function renderRunDetail(d){
   const body = $("#runDetailBody");
   const cfg = d.config || {};
-  const cfgBits = [];
-  if (cfg.generator) cfgBits.push(`generator: ${esc(cfg.generator)}`);
-  if (cfg.generator === "lora" && cfg.lora_type) cfgBits.push(`LoRA: ${esc(cfg.lora_type)}`);
-  if (cfg.n_outputs != null) cfgBits.push(`${cfg.n_outputs} outputs`);
-  const flags = ["caption","cutout","upscale_refs","expand_prompts","make_3d"]
-    .filter(k => cfg[k]).map(k => k.replace(/_/g," "));
-  if (flags.length) cfgBits.push(flags.join(" · "));
-  const refs = (d.refs || []).length;
-  if (refs) cfgBits.push(`${refs} reference${refs===1?"":"s"}`);
   const brief = cfg.brief || d.brief || "";
+  const groups = [
+    { key:"image",  title:"Generated images" },
+    { key:"cutout", title:"Cutouts" },
+    { key:"3d",     title:"3D models" },
+  ];
+  // Bucket outputs by kind, preserving each output's original index (needed by
+  // makeThreeD → /api/pipeline/<id>/threed which addresses outputs by index).
+  const byKind = {};
+  (d.outputs || []).forEach((o, i) => {
+    const k = o.kind || "image"; (byKind[k] = byKind[k] || []).push([o, i]);
+  });
+  body.innerHTML = "";
+  body.appendChild(_buildRunDetailDOM(d, cfg, brief, groups, byKind));
+}
+// Build the run-detail DOM imperatively so output cards get live handlers.
+function _buildRunDetailDOM(d, cfg, brief, groups, byKind){
+  const frag = document.createDocumentFragment();
 
-  let html = "";
-  if (brief) html += `<h3 style="margin:6px 0 4px">${esc(brief)}</h3>`;
-  html += `<div class="rd-config">${cfgBits.map(esc).join(" &nbsp;·&nbsp; ")}`;
-  if (d.status) html += `${cfgBits.length?" &nbsp;·&nbsp; ":""}status: ${esc(d.status)}`;
-  html += `</div>`;
-  if (d.status === "error" && d.error) html += `<div class="rd-config" style="color:#c0392b">${esc(d.error)}</div>`;
+  // header band
+  const headBand = document.createElement("div"); headBand.className = "rd-head";
+  const title = document.createElement("div"); title.className = "rd-title";
+  title.textContent = brief || "(no brief)";
+  headBand.appendChild(title);
+  const chipWrap = document.createElement("div"); chipWrap.className = "rd-chips";
+  const chips = [];
+  if (cfg.generator) {
+    const lbl = cfg.generator === "lora" && cfg.lora_type
+      ? `${_genLabel(cfg.generator)} · ${cfg.lora_type}` : _genLabel(cfg.generator);
+    chips.push(_rdChip("generator", lbl));
+  }
+  if (cfg.n_outputs != null) chips.push(_rdChip("n", cfg.n_outputs));
+  if (cfg.model) chips.push(_rdChip("model", cfg.model));
+  const refs = (d.refs || []).length;
+  if (refs) chips.push(_rdChip("refs", refs));
+  ["cutout","upscale_refs","make_3d","caption","expand_prompts"]
+    .filter(k => cfg[k]).forEach(k => chips.push(_rdChip("", k.replace(/_/g," "), true)));
+  if (d.status) chips.push(_statusPill(d.status) || _rdChip("status", d.status));
+  chipWrap.innerHTML = chips.join("");
+  headBand.appendChild(chipWrap);
+  if ((d.status||"").toLowerCase() === "error" && d.error) {
+    const err = document.createElement("div"); err.className = "rd-err"; err.textContent = d.error;
+    headBand.appendChild(err);
+  }
+  frag.appendChild(headBand);
 
   const outs = d.outputs || [];
-  html += `<div class="rd-sec">Outputs (${outs.length})</div>`;
   if (!outs.length) {
-    html += `<div class="empty" style="padding:30px 0">No outputs.</div>`;
-  } else {
-    html += `<div class="files" id="runOutGrid"></div>`;
+    const e = document.createElement("div"); e.className = "rd-empty"; e.textContent = "No outputs.";
+    frag.appendChild(e); return frag;
   }
-  body.innerHTML = html;
 
-  const grid = $("#runOutGrid");
-  if (grid) outs.forEach((o, i) => grid.appendChild(renderOutput(d.id, o, i)));
+  groups.forEach(g => {
+    const items = byKind[g.key] || [];
+    if (!items.length) return;
+    const sec = document.createElement("div"); sec.className = "rd-sec";
+    sec.appendChild(document.createTextNode(g.title));
+    const n = document.createElement("span"); n.className = "rd-sec-n"; n.textContent = items.length;
+    sec.appendChild(n);
+    frag.appendChild(sec);
+
+    const gens = g.key === "image"
+      ? [...new Set(items.map(([o]) => o.generator).filter(Boolean))] : [];
+    if (g.key === "image" && gens.length > 1) {
+      // one sub-grid per generator (side-by-side compare)
+      gens.forEach(gen => {
+        const grp = document.createElement("div"); grp.className = "rd-grp";
+        const dot = document.createElement("span"); dot.className = "gdot";
+        dot.style.cssText = `--gc:${_genColor(gen)};width:8px;height:8px;border-radius:50%;display:inline-block;background:${_genColor(gen)}`;
+        grp.appendChild(dot); grp.appendChild(document.createTextNode(_genLabel(gen)));
+        frag.appendChild(grp);
+        const grid = document.createElement("div"); grid.className = "outgrid";
+        items.filter(([o]) => o.generator === gen)
+             .forEach(([o, i]) => grid.appendChild(renderOutput(d.id, o, i)));
+        frag.appendChild(grid);
+      });
+      // any image outputs lacking a generator tag → trailing ungrouped grid
+      const untagged = items.filter(([o]) => !o.generator);
+      if (untagged.length) {
+        const grid = document.createElement("div"); grid.className = "outgrid";
+        untagged.forEach(([o, i]) => grid.appendChild(renderOutput(d.id, o, i)));
+        frag.appendChild(grid);
+      }
+    } else {
+      const grid = document.createElement("div"); grid.className = "outgrid";
+      items.forEach(([o, i]) => grid.appendChild(renderOutput(d.id, o, i)));
+      frag.appendChild(grid);
+    }
+  });
+  return frag;
 }
 // ---- Interactive 3D (<model-viewer>) ---------------------------------------
 // Loaded once from Google's CDN on first use (this is a local tool, so an
@@ -3431,7 +3722,7 @@ function renderOutput(runId, o, idx){
   const kind = o.kind || "image";
   if (kind === "3d") {
     // Already-built 3D output → interactive rotatable viewer + download link.
-    c.innerHTML = `<div class="okind">3D model</div><div class="o3d" data-3d></div>`;
+    c.innerHTML = `<div class="obody"><div class="okind">3D model</div><div class="o3d" data-3d></div></div>`;
     const box = c.querySelector(".o3d");
     if (o.glb_url) mount3DViewer(box, o.glb_url, o.thumb_url);
     else box.innerHTML = (o.thumb_url ? `<img src="${o.thumb_url}" alt="">` : "")
@@ -3442,14 +3733,16 @@ function renderOutput(runId, o, idx){
   const img = o.url ? `<img loading="lazy" src="${o.url}" alt="">` : "";
   const prompt = o.prompt ? `<div class="oprompt" title="${esc(o.prompt)}">${esc(o.prompt)}</div>` : "";
   c.innerHTML = img
-    + `<div class="okind">${kind}</div>`
-    + prompt
-    + `<div class="orow"></div>`
-    + `<div class="o3d" data-3d style="display:none"></div>`;
+    + `<div class="obody">`
+    +   `<div class="okind">${esc(kind)}</div>`
+    +   prompt
+    +   `<div class="orow"></div>`
+    +   `<div class="o3d" data-3d style="display:none"></div>`
+    + `</div>`;
   if (o.url) c.querySelector("img").onclick = () => window.open(o.url, "_blank");
   const row = c.querySelector(".orow");
   if (kind === "image") {
-    const mk = document.createElement("button"); mk.textContent = "Make 3D";
+    const mk = document.createElement("button"); mk.className = "mk3d"; mk.textContent = "Make 3D";
     mk.title = "Generate a 3D (.glb) model from this image";
     mk.onclick = () => makeThreeD(runId, idx, c, mk);
     row.appendChild(mk);
@@ -3853,10 +4146,22 @@ function _wireTabFilter(tab){
 ["interesting","review","ai"].forEach(_wireTabFilter);
 _ensureCaptionsLoaded();
 $("#cmethod").onchange=()=>loadClusters();
-$("#cback").onclick=()=>{
+// Hide the cluster-detail view and show the cluster grid. Does NOT touch
+// history — call sites decide whether to also pop/replace the URL.
+function closeClusterDetail(){
   $("#clusterDetail").style.display="none"; $("#clusterGrid").style.display="";
   _cdHasMore=false;                                   // stop the IO from chasing further pages once the detail view is hidden
   if(_cdAbort) _cdAbort.abort();
+}
+$("#cback").onclick=()=>{
+  // If we drilled in via a pushed #/explore/<id> entry, go Back so the URL and
+  // history stay consistent (popstate restores the grid). If there's no such
+  // entry (deep link straight to a cluster), just close + fix the hash in place.
+  const st = history.state;
+  if(st && st.cluster){ history.back(); return; }
+  closeClusterDetail();
+  if(/^#\/?explore\/.+\/-?\d+/i.test(location.hash))
+    history.replaceState({view:"explore"}, "", "#/explore");
 };
 
 async function loadClusters(){
@@ -3890,7 +4195,15 @@ const CD_PAGE=120;                                    // members fetched per pag
 let _cdMethod="", _cdId=null, _cdOffset=0, _cdTotal=0, _cdHasMore=false, _cdLoading=false;
 let _cdAbort=null, _cdIO=null, _cdSub="";
 
-async function openCluster(method,id,label,sub,size){
+async function openCluster(method,id,label,sub,size,pushHistory){
+  // History-aware drill-down: entering a cluster pushes #/explore/<method>/<id>
+  // so the browser Back button returns to the cluster grid (handled in popstate).
+  // pushHistory is false when popstate itself is driving us into a cluster.
+  if(pushHistory !== false && !_suppressHistory){
+    const url = `#/explore/${method}/${id}`;
+    if(location.hash !== url)
+      history.pushState({view:"explore", cluster:{method,id,label,sub,size}}, "", url);
+  }
   $("#clusterGrid").style.display="none"; $("#clusterDetail").style.display="";
   $("#cdtitle").textContent=label;
   // reset state — a click on a new cluster mid-load must not append into the previous one
@@ -3965,9 +4278,21 @@ pollStatus(); loadFolders(); loadClusterChips();
 {
   const r = routeFromHash();
   _suppressHistory = true;
-  try { showView(r.view, {uid: r.uid}); } finally { _suppressHistory = false; }
-  const url = r.view==="image" && r.uid ? `#/image/${r.uid}` : "#/" + r.view;
-  history.replaceState({view: r.view, uid: r.uid||null}, "", url);
+  try {
+    showView(r.view, {uid: r.uid});
+    // Deep-link straight into a cluster (#/explore/<method>/<id>) → open it.
+    if(r.view === "explore" && r.cluster && r.cluster.id != null){
+      const c = r.cluster;
+      openCluster(c.method, c.id, "cluster "+c.id, "", 0, false);
+    }
+  } finally { _suppressHistory = false; }
+  const url = r.view==="image" && r.uid ? `#/image/${r.uid}`
+            : r.view==="explore" && r.cluster ? `#/explore/${r.cluster.method}/${r.cluster.id}`
+            : "#/" + r.view;
+  const state = r.view==="explore" && r.cluster
+            ? {view:"explore", cluster:{method:r.cluster.method, id:r.cluster.id}}
+            : {view: r.view, uid: r.uid||null};
+  history.replaceState(state, "", url);
   // Landing on the Search tab with no query → show the curated showcase homepage.
   if(r.view === "search" && $("#q").value.trim().length < 2 && !filterActive()) showShowcase();
 }

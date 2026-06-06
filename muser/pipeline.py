@@ -11,8 +11,8 @@ Stages (each optional except generate):
     3. cutout    — BiRefNet background removal on the reference images.
     4. refs      — choose the reference set (post cutout/upscale), cap to 14.
     5. prompts   — explicit ``gen_prompts`` | LLM ``expand_prompts`` | replicate brief.
-    6. generate  — nano_banana (per-prompt, threaded) OR lora (train then generate).
-    7. 3d        — optional image→GLB per generated image.
+    6. generate  — nano_banana / chatgpt / both (per-prompt, threaded) OR lora.
+    7. 3d        — optional image→GLB per generated image (multi-view when multi_angle).
     8. persist   — download all outputs, write ``run.json`` + update ``index.json``.
 
 Resilience: a single failed prompt/image records a stage error but never aborts the
@@ -135,9 +135,10 @@ def run_pipeline(run_id: str, config: dict, registry, services) -> dict:
     Args:
         run_id: the job/run id (also the job id in ``registry``).
         config: the parsed checkout request (mode=="generate") as a plain dict —
-            keys: generator, lora_type, caption (bool), caption_prompt, cutout,
-            upscale_refs, expand_prompts (bool), brief, gen_prompts, n_outputs,
-            make_3d, items: [{path, upscale}].
+            keys: generator ("nano_banana"|"chatgpt"|"both"|"lora"), lora_type,
+            caption (bool), caption_prompt, cutout, upscale_refs,
+            expand_prompts (bool), brief, gen_prompts, n_outputs, make_3d,
+            multi_angle (bool), items: [{path, upscale}].
         registry: the ``jobs.JobRegistry`` singleton (``set_stage``/``update``/
             ``add_error``).
         services: a mapping exposing the in-service helpers ::
@@ -276,13 +277,46 @@ def run_pipeline(run_id: str, config: dict, registry, services) -> dict:
         stage("generate", status="running", done=0, total=len(prompts))
         gen_done = threading.Lock()
         done_n = [0]
+        # Monotonic counter for output filenames so concurrent generators
+        # (nano_banana + chatgpt in "both" mode) never collide on a name.
+        out_seq = [0]
 
-        def _record_image(rel_writer_url: str, prompt: str, idx: int):
-            """Download a generated image URL into outputs/ and record it."""
-            data = gen.download(rel_writer_url)
-            rel = f"gen_{idx:03d}.png"
+        def _next_seq() -> int:
+            with gen_done:
+                out_seq[0] += 1
+                return out_seq[0]
+
+        def _save_image_bytes(data: bytes, prompt: str, generator_tag: str):
+            """Write generated PNG bytes into outputs/ and record (tagged)."""
+            seq = _next_seq()
+            rel = f"gen_{seq:03d}.png"
             (out_dir / rel).write_bytes(data)
-            add_output({"kind": "image", "file": f"outputs/{rel}", "prompt": prompt})
+            add_output({
+                "kind": "image",
+                "file": f"outputs/{rel}",
+                "prompt": prompt,
+                "generator": generator_tag,
+            })
+
+        def _record_image(rel_writer_url: str, prompt: str, generator_tag: str):
+            """Download a generated image URL into outputs/ and record (tagged)."""
+            _save_image_bytes(gen.download(rel_writer_url), prompt, generator_tag)
+
+        ref_paths = list(paths)  # cart image paths for the gpt-image (edits) route
+
+        def _gen_nano(prompt: str):
+            urls = gen.nano_banana(ref_urls, prompt, n=1)
+            if urls:
+                _record_image(urls[0], prompt, "nano_banana")
+            else:
+                registry.add_error(run_id, "", "generate", f"nano_banana: no image for prompt {prompt!r}")
+
+        def _gen_chatgpt(prompt: str):
+            blobs = gen.gpt_image(ref_paths, prompt, n=1)
+            if blobs:
+                _save_image_bytes(blobs[0], prompt, "chatgpt")
+            else:
+                registry.add_error(run_id, "", "generate", f"chatgpt: no image for prompt {prompt!r}")
 
         if generator == "lora":
             # Expensive route: build a captioned zip, upload, train, then generate.
@@ -300,45 +334,99 @@ def run_pipeline(run_id: str, config: dict, registry, services) -> dict:
                 lora_url = None
 
             if lora_url:
-                for idx, prompt in enumerate(prompts):
+                for prompt in prompts:
                     try:
                         urls = gen.flux_lora_generate(lora_url, prompt, n=1)
                         if urls:
-                            _record_image(urls[0], prompt, idx)
+                            _record_image(urls[0], prompt, "lora")
                     except Exception as e:
                         registry.add_error(run_id, "", "generate", f"{type(e).__name__}: {e}")
                     done_n[0] += 1
                     stage("generate", done=done_n[0])
         else:
-            # nano_banana — one image per prompt, parallelized with a small pool.
-            def _one(args):
-                idx, prompt = args
-                try:
-                    urls = gen.nano_banana(ref_urls, prompt, n=1)
-                    if urls:
-                        _record_image(urls[0], prompt, idx)
-                    else:
-                        registry.add_error(run_id, "", "generate", f"no image for prompt #{idx}")
-                except Exception as e:
-                    registry.add_error(run_id, "", "generate", f"{type(e).__name__}: {e}")
+            # nano_banana / chatgpt / both — one (or two) images per prompt.
+            # In "both" mode each prompt fans out to BOTH generators concurrently,
+            # producing two tagged image outputs the UI can compare side by side.
+            want_nano = generator in ("nano_banana", "both")
+            want_chatgpt = generator in ("chatgpt", "both")
+
+            def _one(prompt):
+                tasks = []
+                if want_nano:
+                    tasks.append(_gen_nano)
+                if want_chatgpt:
+                    tasks.append(_gen_chatgpt)
+                if len(tasks) > 1:
+                    # Run the two generators concurrently for this prompt.
+                    with cf.ThreadPoolExecutor(max_workers=len(tasks)) as inner:
+                        futs = [inner.submit(_run_gen, fn, prompt) for fn in tasks]
+                        for f in cf.as_completed(futs):
+                            f.result()
+                else:
+                    for fn in tasks:
+                        _run_gen(fn, prompt)
                 with gen_done:
                     done_n[0] += 1
                     registry.set_stage(run_id, "generate", done=done_n[0])
 
+            def _run_gen(fn, prompt):
+                try:
+                    fn(prompt)
+                except Exception as e:
+                    registry.add_error(run_id, "", "generate", f"{type(e).__name__}: {e}")
+
             with cf.ThreadPoolExecutor(max_workers=4) as ex:
-                list(ex.map(_one, list(enumerate(prompts))))
+                list(ex.map(_one, list(prompts)))
 
         stage("generate", status="done", done=done_n[0], total=len(prompts))
 
         # ---- 7. optional 3d -------------------------------------------------
         if config.get("make_3d"):
+            multi_angle = bool(config.get("multi_angle"))
+            brief = config.get("brief") or ""
+            # Snapshot only the *generated* images (not view/cutout outputs) so the
+            # multi-angle pass we add below doesn't recurse into its own view images.
             image_outputs = [o for o in run["outputs"] if o.get("kind") == "image"]
             stage("3d", status="running", done=0, total=len(image_outputs))
             for i, o in enumerate(image_outputs):
                 try:
                     img_path = d / o["file"]
-                    img_url = gen.fal_upload_path(str(img_path))
-                    res = gen.image_to_3d(img_url)
+                    front_url = gen.fal_upload_path(str(img_path))
+
+                    if multi_angle:
+                        # Synthesize L/B/R views, save them as visible outputs, then
+                        # feed whatever succeeded into the multi-view reconstruction.
+                        views = {}
+                        try:
+                            views = gen.generate_views(front_url, prompt_hint=brief)
+                        except Exception as e:
+                            registry.add_error(run_id, "", "3d", f"generate_views: {type(e).__name__}: {e}")
+                        for label in ("left", "back", "right"):
+                            vurl = (views or {}).get(label)
+                            if not vurl:
+                                continue
+                            try:
+                                vpng = gen.download(vurl)
+                                v_rel = f"view_{i:03d}_{label}.png"
+                                (out_dir / v_rel).write_bytes(vpng)
+                                add_output({
+                                    "kind": "image",
+                                    "file": f"outputs/{v_rel}",
+                                    "view": label,
+                                    "generator": "nano_banana",
+                                    "src_image_index": i,
+                                })
+                            except Exception as e:
+                                registry.add_error(run_id, "", "3d", f"view {label}: {type(e).__name__}: {e}")
+                        res = gen.image_to_3d_multiview(
+                            front_url,
+                            (views or {}).get("left"),
+                            (views or {}).get("back"),
+                            (views or {}).get("right"),
+                        )
+                    else:
+                        res = gen.image_to_3d(front_url)
+
                     glb = gen.download(res["glb"])
                     glb_rel = f"model_{i:03d}.glb"
                     (out_dir / glb_rel).write_bytes(glb)
