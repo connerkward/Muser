@@ -34,7 +34,11 @@ import uuid
 # ---- endpoint ids (single source of truth) ----------------------------------
 EP_NANO_BANANA = "fal-ai/gemini-3.1-flash-image-preview/edit"
 EP_CUTOUT = "fal-ai/birefnet/v2"
-EP_IMAGE_TO_3D = "fal-ai/hunyuan3d-v3/image-to-3d"
+# Meshy 6 won a bake-off vs Hunyuan3D-v3 and Tripo v2.5 on clean 3/4 inputs
+# (cleaner topology, recognizable geometry). Multiview still uses Hunyuan since it
+# accepts the left/back/right extra views.
+EP_IMAGE_TO_3D = "fal-ai/meshy/v6/image-to-3d"
+EP_MULTIVIEW_3D = "fal-ai/hunyuan3d-v3/image-to-3d"
 EP_EXPAND = "fal-ai/any-llm/vision"
 EP_LORA_TRAIN = "fal-ai/flux-lora-fast-training"
 EP_LORA_GEN = "fal-ai/flux-lora"
@@ -404,14 +408,10 @@ def gpt_image(
 
 
 def image_to_3d(image_url: str) -> dict:
-    """Hunyuan3D v3 image→3D. Returns ``{"glb": <url>, "thumbnail": <url|None>}``."""
+    """Meshy 6 image→3D. Returns ``{"glb": <url>, "thumbnail": <url|None>}``."""
     resp = fal_run(
         EP_IMAGE_TO_3D,
-        {
-            "input_image_url": image_url,
-            "generate_type": "Normal",
-            "face_count": 500000,
-        },
+        {"image_url": image_url, "target_polycount": 50000},
     )
     glb = (resp.get("model_glb") or {}).get("url")
     thumb = (resp.get("thumbnail") or {}).get("url")
@@ -444,7 +444,7 @@ def image_to_3d_multiview(
         body["back_image_url"] = back_url
     if right_url:
         body["right_image_url"] = right_url
-    resp = fal_run(EP_IMAGE_TO_3D, body)
+    resp = fal_run(EP_MULTIVIEW_3D, body)
     glb = (resp.get("model_glb") or {}).get("url")
     thumb = (resp.get("thumbnail") or {}).get("url")
     if not glb:

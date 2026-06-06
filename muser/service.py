@@ -53,6 +53,24 @@ HIDDEN_CLUSTER_MATCHERS = [
 ]
 
 
+# "Demo mode" hides NSFW + the people/selfie clusters everywhere. On by default;
+# toggled from the web debug menu via /api/demo-mode. A mutable holder so the
+# nested _hidden() closure and the endpoint share one flag. Dead-file hiding is
+# unconditional (not part of demo mode).
+_DEMO = {"hide": True}
+
+
+class DemoModeReq(BaseModel):
+    on: bool
+
+
+class ContactSheetReq(BaseModel):
+    paths: list[str]
+    cols: int = 6
+    cell: int = 256
+    max: int = 36
+
+
 class IndexReq(BaseModel):
     folder: str
     recursive: bool = True
@@ -840,6 +858,8 @@ def create_app(model: str = DEFAULT_MODEL):
         set/dict lookups (plus one stat for the dead check) — O(1) per result."""
         if not os.path.exists(path):
             return True
+        if not _DEMO["hide"]:
+            return False  # demo mode off → only dead files are hidden
         if path in _refresh_scores_cache()["nsfw"]:
             return True
         if path in _hidden_cluster_paths():
@@ -1768,6 +1788,52 @@ def create_app(model: str = DEFAULT_MODEL):
         if not os.path.isfile(path):
             raise HTTPException(404, "not found")
         return FileResponse(path)
+
+    @app.get("/api/demo-mode")
+    def demo_mode_get():
+        return {"hide": _DEMO["hide"]}
+
+    @app.post("/api/demo-mode")
+    def demo_mode_set(req: DemoModeReq):
+        # Flip the global hide flag (NSFW + people/selfie clusters). Off reveals
+        # everything except dead files. Affects all result endpoints immediately.
+        _DEMO["hide"] = bool(req.on)
+        return {"hide": _DEMO["hide"]}
+
+    @app.post("/api/contact-sheet")
+    def contact_sheet(req: ContactSheetReq):
+        # Montage up to `max` images into one numbered grid JPEG — used by the MCP
+        # to show the model the whole result set in a single image (token-cheap).
+        # Cells are square smart-crops; a 1-based number is drawn in each corner so
+        # the model can map a cell back to the Nth result.
+        from PIL import Image, ImageDraw, ImageFont
+        from .embedders import _load_rgb
+        paths = [p for p in (req.paths or []) if os.path.isfile(p)][: max(1, req.max)]
+        if not paths:
+            raise HTTPException(400, "no valid paths")
+        cols = max(1, req.cols)
+        cell = max(64, req.cell)
+        rows = (len(paths) + cols - 1) // cols
+        sheet = Image.new("RGB", (cols * cell, rows * cell), (18, 18, 18))
+        draw = ImageDraw.Draw(sheet)
+        try:
+            font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial Bold.ttf", 22)
+        except Exception:
+            font = ImageFont.load_default()
+        for i, p in enumerate(paths):
+            try:
+                im = _smart_crop_square(_load_rgb(p, max_side=cell * 2), cell)
+            except Exception:
+                continue
+            x, y = (i % cols) * cell, (i // cols) * cell
+            sheet.paste(im, (x, y))
+            lbl = str(i + 1)
+            draw.rectangle([x + 3, y + 3, x + 3 + 14 * len(lbl) + 10, y + 33], fill=(0, 0, 0))
+            draw.text((x + 9, y + 6), lbl, fill=(255, 255, 255), font=font)
+        buf = io.BytesIO()
+        sheet.save(buf, "JPEG", quality=85)
+        return Response(content=buf.getvalue(), media_type="image/jpeg",
+                        headers={"X-Sheet-Count": str(len(paths))})
 
     @app.get("/api/upscale")
     def upscale(path: str):
