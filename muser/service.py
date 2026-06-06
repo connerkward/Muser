@@ -935,10 +935,14 @@ def create_app(model: str = DEFAULT_MODEL):
         # the kNN limit applies AFTER the cut (otherwise the top-k of out-of-
         # filter neighbors could return zero in-filter hits).
         emb = state.warm()
-        qv = emb.embed_queries([q])[0]
+        # Lowercase query text before embedding: SigLIP/CLIP tokenizers are
+        # case-sensitive and were trained on lowercased alt-text, so "Porsche
+        # interior" and "porsche interior" embed to very different vectors (the
+        # capitalized form returns garbage). Normalizing makes case irrelevant.
+        qv = emb.embed_queries([q.lower()])[0]
         if neg and neg.strip():
             import numpy as np
-            nv = emb.embed_queries([neg])[0]
+            nv = emb.embed_queries([neg.lower()])[0]
             qv = qv - neg_strength * nv
             n = float(np.linalg.norm(qv))
             if n > 0:
@@ -1004,7 +1008,7 @@ def create_app(model: str = DEFAULT_MODEL):
             raise HTTPException(400, "text modification is required")
         emb = state.wait_ready()
         iv = emb.embed_images([img])[0]
-        tv = emb.embed_queries([text])[0]
+        tv = emb.embed_queries([text.lower()])[0]  # case-insensitive (see /api/search)
         qv = alpha * iv + beta * tv
         n = float(np.linalg.norm(qv))
         if not np.isfinite(n) or n == 0:
@@ -2143,7 +2147,7 @@ def create_app(model: str = DEFAULT_MODEL):
             # with canonical so we only sort over paths that actually have scores.
             state.wait_ready()
             emb = state.warm()
-            qv = emb.embed_queries([q.strip()])[0]
+            qv = emb.embed_queries([q.strip().lower()])[0]  # case-insensitive (see /api/search)
             hits = state.index.search_dedup(state.model_name, qv, k=500, method="embed")
             sem_paths = {h["path"] for h in hits}
             canon = [p for p in canon if p in sem_paths]

@@ -21,16 +21,27 @@ export interface SearchHit {
   /** Number of duplicate files (length of `dupes`). 1 when unique. */
   dupe_count?: number;
 }
+/** Pseudo-relevance-feedback chip the service returns alongside results:
+ *  a cluster label common to the top hits ("you might also try"). */
+export interface Refinement {
+  label: string;
+  count: number;
+}
 export interface SearchResponse {
   query: string;
   model: string;
   results: SearchHit[];
+  /** Cluster-label refinements derived from the top hits (may be absent/empty). */
+  refinements?: Refinement[];
 }
 export interface StatusResponse {
   model: string;
   models: string[];
   indexed: number;
   db: string;
+  ready?: boolean;
+  task?: unknown;
+  metadata?: unknown;
 }
 export interface IndexResponse {
   added: number;
@@ -89,7 +100,15 @@ export async function ensureService(maxWaitMs = 120_000): Promise<StatusResponse
   );
 }
 
-/** GET /api/search?q=&k=&folder= — text query, optional folder scope. */
+/** GET /api/search?q=&k=&folder= — text query, optional folder scope.
+ *
+ *  PURE EMBEDDING kNN. We deliberately pass ONLY q/k/folder. /api/search
+ *  defaults to `method="embed"` (cosine over the model vectors), so results
+ *  come back in embedding-similarity order. We do NOT send any of the
+ *  endpoint's optional re-ranking params (sort-blend / aesthetic metrics /
+ *  `neg` / metadata filters) — those belong to the standalone web UI's
+ *  "advanced" search, not this MCP gallery. Keep this a clean kNN: the gallery
+ *  must rank/select on embedding similarity alone. */
 export async function search(query: string, k: number, folder?: string): Promise<SearchResponse> {
   let url = `${BASE}/api/search?q=${encodeURIComponent(query)}&k=${k}`;
   if (folder) url += `&folder=${encodeURIComponent(folder)}`;
@@ -160,6 +179,13 @@ export async function thumbDataUri(path: string, size = 260): Promise<string | n
   } catch {
     return null;
   }
+}
+
+/** A large preview for the fullscreen lightbox. The sandboxed iframe can't reach
+ *  /api/image itself, so we inline a big thumbnail (whole image, not cover-cropped)
+ *  as a base64 data URI. Reuses /api/thumb at a large size — one extra fetch per hit. */
+export function fullDataUri(path: string, size = 1400): Promise<string | null> {
+  return thumbDataUri(path, size);
 }
 
 /** POST /api/index {folder, recursive} */

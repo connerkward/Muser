@@ -12,6 +12,10 @@ export interface Hit {
    *  raw cosine `score` is flat/uncalibrated, so prefer this for the displayed %. */
   prob?: number;
   thumb: string | null;
+  /** Large whole-image preview (base64) for the fullscreen lightbox, inlined by
+   *  the server because the sandboxed iframe can't fetch /api/image. Falls back
+   *  to `thumb` when absent (e.g. the mock preview). */
+  full?: string | null;
   /** All paths that are this same image (includes `path`). Length 1 when unique. */
   dupes?: string[];
   dupe_count?: number;
@@ -50,12 +54,18 @@ export interface GalleryHandlers {
   /** Reveal a duplicate file in Finder. The sandboxed iframe can't call
    *  /api/reveal, so the live app routes this to the host as a chat message. */
   onReveal?: (path: string) => void;
+  /** Toggle the *whole app* into the host's fullscreen display mode (MCP
+   *  `requestDisplayMode`). Returns true if the host honoured it; when absent or
+   *  false, the gallery falls back to a CSS maximized overlay. */
+  onToggleFullscreen?: () => boolean | Promise<boolean>;
 }
 
 export interface Gallery {
   render: (payload: Payload) => void;
   setStatus: (text: string) => void;
   setBusy: (busy: boolean) => void;
+  /** Re-sync the fullscreen button with the host's current display mode. */
+  syncFullscreen: () => void;
   readonly folder: string;
 }
 
@@ -234,6 +244,73 @@ export function createGallery(handlers: GalleryHandlers): Gallery {
     modal.classList.add("show");
   }
 
+  // ---- App fullscreen toggle (whole gallery) -------------------------------
+  // Prefer the host's real fullscreen display mode; if the host declines or
+  // isn't connected (standalone preview), fall back to a CSS maximized layout
+  // by toggling `data-app-fs` on <html>.
+  const fsToggle = $<HTMLButtonElement>("fsToggle");
+  function appIsFullscreen(): boolean {
+    return document.documentElement.dataset.appFs === "1"
+      || document.documentElement.dataset.mcpDisplay === "fullscreen";
+  }
+  function setCssFullscreen(on: boolean): void {
+    document.documentElement.dataset.appFs = on ? "1" : "0";
+    syncFsButton();
+  }
+  function syncFsButton(): void {
+    if (!fsToggle) return;
+    const on = appIsFullscreen();
+    fsToggle.classList.toggle("on", on);
+    fsToggle.title = on ? "Exit fullscreen (Esc)" : "Fullscreen";
+    fsToggle.setAttribute("aria-pressed", String(on));
+  }
+  async function toggleAppFullscreen(): Promise<void> {
+    const want = !appIsFullscreen();
+    let hostHandled = false;
+    if (handlers.onToggleFullscreen) {
+      try {
+        hostHandled = await handlers.onToggleFullscreen();
+      } catch {
+        hostHandled = false;
+      }
+    }
+    // Host didn't take it (or no host) → CSS maximized fallback overlay.
+    if (!hostHandled) setCssFullscreen(want);
+    else syncFsButton();
+  }
+  fsToggle?.addEventListener("click", () => void toggleAppFullscreen());
+
+  // ---- Image lightbox (whole image, not the cover-cropped thumb) -----------
+  const lightbox = $<HTMLDivElement>("lightbox");
+  const lightboxImg = $<HTMLImageElement>("lightboxImg");
+  const lightboxCap = $<HTMLDivElement>("lightboxCap");
+  const lightboxClose = $<HTMLSpanElement>("lightboxClose");
+
+  const closeLightbox = () => lightbox?.classList.remove("show");
+  function openLightbox(hit: Hit): void {
+    if (!lightbox) return;
+    const src = hit.full ?? hit.thumb;
+    if (!src) return;
+    lightboxImg.src = src;
+    lightboxImg.alt = hit.path;
+    if (lightboxCap) lightboxCap.textContent = hit.path.split("/").pop() ?? hit.path;
+    lightbox.classList.add("show");
+  }
+  lightboxClose?.addEventListener("click", closeLightbox);
+  lightbox?.addEventListener("click", (e) => {
+    if (e.target === lightbox || e.target === lightboxImg) closeLightbox();
+  });
+
+  // One Esc handler closes whatever overlay is open, then exits CSS fullscreen.
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (lightbox?.classList.contains("show")) {
+      closeLightbox();
+    } else if (document.documentElement.dataset.appFs === "1") {
+      setCssFullscreen(false);
+    }
+  });
+
   // ---- Status / busy / render ----------------------------------------------
   const setStatus = (text: string) => {
     status.textContent = text;
@@ -259,6 +336,11 @@ export function createGallery(handlers: GalleryHandlers): Gallery {
     }
     const scopeLbl = folder || "library";
     setStatus(`${p.results.length} result${p.results.length === 1 ? "" : "s"} · ${scopeLbl}`);
+    // Render in the exact order the service returned — i.e. embedding-similarity
+    // (cosine kNN) order. Do NOT sort or filter by aesthetic/sort-blend scores
+    // here; selection and ordering must stay pure embedding. The per-card score
+    // badge below shows the embedding score (calibrated prob when present),
+    // which is fine — it's display only and doesn't affect ordering.
     for (const hit of p.results) {
       const name = hit.path.split("/").pop() ?? hit.path;
       const card = document.createElement("div");
@@ -297,17 +379,28 @@ export function createGallery(handlers: GalleryHandlers): Gallery {
       meta.className = "meta";
       meta.append(Object.assign(document.createElement("div"), { className: "name", textContent: name }));
       card.append(meta);
-      card.addEventListener("click", () => handlers.onSelect?.(hit));
+      // One click does BOTH: (a) the existing add-to-prompt action, and
+      // (b) opens the full image fullscreen so the user sees the whole thing,
+      // not the cover-cropped thumb. The dupe badge stops-propagation, so its
+      // own click still opens the duplicates modal instead.
+      card.addEventListener("click", () => {
+        handlers.onSelect?.(hit);
+        openLightbox(hit);
+      });
       grid.append(card);
     }
   }
 
   renderColorSet();
+  syncFsButton();
 
   return {
     render,
     setStatus,
     setBusy,
+    /** Re-read the host display mode (call when the host context changes) so the
+     *  fullscreen button reflects host-driven mode switches. */
+    syncFullscreen: syncFsButton,
     get folder() {
       return folder;
     },

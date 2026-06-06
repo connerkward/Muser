@@ -17,6 +17,9 @@
       <input id="scope" class="scope" type="search" list="folders" placeholder="all folders" autocomplete="off"
              title="Scope to a folder (any indexed path prefix)" />
       <datalist id="folders"></datalist>
+      <button id="fsToggle" class="fsbtn" type="button" title="Fullscreen" aria-pressed="false">
+        <span class="fs-on">⤢</span><span class="fs-off">⤡</span>
+      </button>
     </header>
 
     <!-- Text-search panel -->
@@ -51,6 +54,13 @@
         <div class="sub" id="dupesSub"></div>
         <div class="files" id="dupesFiles"></div>
       </div>
+    </div>
+
+    <!-- Fullscreen image lightbox (whole image, click-outside / Esc to close) -->
+    <div class="lightbox" id="lightbox">
+      <span class="x" id="lightboxClose">✕</span>
+      <img id="lightboxImg" alt="" />
+      <div class="cap" id="lightboxCap"></div>
     </div>
     <script type="module" src="./search-app.ts"></script>
   </body>

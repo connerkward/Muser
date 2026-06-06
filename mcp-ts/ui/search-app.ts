@@ -63,6 +63,15 @@ const gallery = createGallery({
       .sendMessage({ role: "user", content: [{ type: "text", text: `Reveal this file in Finder: ${path}` }] })
       .catch(() => {});
   },
+  // Prefer the host's real fullscreen display mode. Return true only when the
+  // host actually offers + switches it; otherwise the gallery uses its CSS
+  // maximized fallback.
+  onToggleFullscreen: async () => {
+    if (!frame || !frame.connected || !frame.canFullscreen()) return false;
+    await frame.toggleFullscreen();
+    gallery.syncFullscreen();
+    return true;
+  },
 });
 
 connectMcpFrame({
@@ -73,6 +82,9 @@ connectMcpFrame({
     const payload = resultJson<Payload>(result);
     if (payload?.results) gallery.render(payload);
   },
+  // The host can switch display mode (e.g. user hits its own fullscreen
+  // control); keep our toggle button in sync with it.
+  onContextChanged: () => gallery.syncFullscreen(),
 })
   .then((f) => {
     frame = f;

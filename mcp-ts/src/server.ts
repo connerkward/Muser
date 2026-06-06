@@ -20,12 +20,14 @@ import { z } from "zod";
 import {
   ensureService,
   folders,
+  fullDataUri,
   getStatus,
   indexFolder,
   search,
   searchColor,
   searchUpload,
   thumbDataUri,
+  type Refinement,
   type SearchHit,
   type SearchResponse,
 } from "./service";
@@ -36,6 +38,9 @@ const UI_HTML = path.join(import.meta.dirname, "..", "dist", "ui", "search.html"
 /** A gallery card: service hit + a base64 thumbnail the sandboxed UI can show. */
 interface GalleryHit extends SearchHit {
   thumb: string | null;
+  /** Large base64 preview (whole image, not cover-cropped) for the fullscreen
+   *  lightbox. The sandboxed iframe can't fetch /api/image, so it's inlined. */
+  full?: string | null;
   /** base64 thumb per duplicate path, so the sandboxed iframe (which can't
    *  reach /api/thumb) can render the click-into-duplicates modal inline.
    *  Dupes are byte-identical images, so every entry reuses the rep thumb. */
@@ -52,8 +57,11 @@ interface GalleryHit extends SearchHit {
 async function attachThumbs(results: SearchHit[]): Promise<GalleryHit[]> {
   return Promise.all(
     results.map(async (h) => {
-      const thumb = await thumbDataUri(h.path);
-      const hit: GalleryHit = { ...h, thumb };
+      // The card thumb (cover-cropped) and a large whole-image preview for the
+      // fullscreen lightbox are both inlined as base64 — the sandboxed iframe
+      // has no network access of its own.
+      const [thumb, full] = await Promise.all([thumbDataUri(h.path), fullDataUri(h.path)]);
+      const hit: GalleryHit = { ...h, thumb, full };
       if (h.dupes && h.dupes.length > 1) {
         // Same image on disk → reuse the rep thumb for every duplicate path.
         hit.dupeThumbs = Object.fromEntries(h.dupes.map((p) => [p, thumb]));
@@ -63,19 +71,100 @@ async function attachThumbs(results: SearchHit[]): Promise<GalleryHit[]> {
   );
 }
 
-/** Build the gallery tool result shared by every search mode (text/color/image). */
-function galleryResult(
+/** LLM-facing search context.
+ *
+ *  This block is appended to the tool result's `content` (the text the *model*
+ *  reads) but deliberately NOT to `structuredContent` (what the gallery UI
+ *  renders). So it gives the model better grounding for follow-up queries —
+ *  index coverage, the active scope, the score spread, refinement chips, and a
+ *  plain-language hint — without ever appearing in the user-facing gallery.
+ *
+ *  Uses only existing service endpoints (/api/status, /api/folders) plus the
+ *  scores already returned, so it adds no new backend surface. */
+async function buildLlmMeta(
   mode: string,
   query: string,
   folder: string,
   results: GalleryHit[],
+  refinements: Refinement[] | undefined,
+): Promise<string> {
+  // Score the model actually saw — prefer the calibrated probability.
+  const scores = results.map((h) => h.prob ?? h.score).filter((s) => typeof s === "number");
+  let dist: { min: number; max: number; mean: number; spread: number } | null = null;
+  if (scores.length) {
+    const min = Math.min(...scores);
+    const max = Math.max(...scores);
+    const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+    dist = { min, max, mean, spread: max - min };
+  }
+
+  // Index coverage + scope, from endpoints this client already proxies.
+  const [status, folderItems] = await Promise.all([
+    getStatus().catch(() => null),
+    folders().catch(() => [] as { folder: string; count: number }[]),
+  ]);
+
+  // A short, actionable hint string the model can lean on.
+  const hints: string[] = [];
+  hints.push(
+    mode === "color"
+      ? "scores reflect how much of the queried color(s) the image contains (LAB ΔE, not semantics)"
+      : "scores are cosine similarity (calibrated probability when shown); higher = closer match",
+  );
+  if (dist) {
+    if (results.length && dist.max < 0.2) {
+      hints.push("top score is low — likely nothing in the index matches well; try rephrasing or indexing more folders");
+    } else if (dist.spread < 0.03 && results.length > 3) {
+      hints.push("scores are tightly clustered (low spread) — the query may be vague; suggest narrowing it");
+    } else if (dist.spread > 0.15) {
+      hints.push("wide score spread — the top few hits are clearly stronger than the tail");
+    }
+  }
+  if (!results.length) {
+    hints.push("no matches — index a folder with index_folder, or broaden the query/scope");
+  }
+  if (refinements?.length) {
+    hints.push(
+      "refinements are cluster labels common to the top hits — good 'you might also try' follow-up queries",
+    );
+  }
+
+  const meta = {
+    note: "LLM-only context — not shown to the user. Use it to craft better follow-up searches.",
+    mode,
+    query,
+    scope: folder || "(whole library)",
+    returned: results.length,
+    indexed_total: status?.indexed ?? null,
+    model: status?.model ?? null,
+    indexed_folders: folderItems.slice(0, 12).map((f) => ({ folder: f.folder, count: f.count })),
+    score_distribution: dist,
+    refinements: refinements ?? [],
+    hint: hints.join("; "),
+  };
+  return "muser_search_meta (LLM-only, hidden from user):\n" + JSON.stringify(meta, null, 2);
+}
+
+/** Build the gallery tool result shared by every search mode (text/color/image). */
+async function galleryResult(
+  mode: string,
+  query: string,
+  folder: string,
+  results: GalleryHit[],
+  refinements?: Refinement[],
 ) {
-  const text = results.length
+  const list = results.length
     ? results.map((h, i) => `${i + 1}. ${h.path} (${((h.prob ?? h.score) * 100).toFixed(1)}%)`).join("\n")
     : "No matches found. Index some images first with index_folder.";
+  const meta = await buildLlmMeta(mode, query, folder, results, refinements);
   return {
+    // structuredContent drives the gallery UI — no _meta here, so it never renders.
     structuredContent: { mode, folder, query, results },
-    content: [{ type: "text" as const, text }],
+    content: [
+      { type: "text" as const, text: list },
+      // Hidden-from-user, LLM-facing context block.
+      { type: "text" as const, text: meta },
+    ],
   };
 }
 
@@ -109,8 +198,8 @@ export function createServer(): McpServer {
         await indexFolder(folder, true).catch(() => undefined);
       }
       const count = k ?? 24;
-      const { results } = await search(query, count, folder);
-      return galleryResult("text", query, folder ?? "", await attachThumbs(results));
+      const { results, refinements } = await search(query, count, folder);
+      return galleryResult("text", query, folder ?? "", await attachThumbs(results), refinements);
     },
   );
 
@@ -138,8 +227,8 @@ export function createServer(): McpServer {
     },
     async ({ hex, mode, folder, k }) => {
       await ensureService();
-      const { query, results } = await searchColor(hex, k ?? 24, folder, mode ?? "all");
-      return galleryResult("color", query, folder ?? "", await attachThumbs(results));
+      const { query, results, refinements } = await searchColor(hex, k ?? 24, folder, mode ?? "all");
+      return galleryResult("color", query, folder ?? "", await attachThumbs(results), refinements);
     },
   );
 
@@ -162,13 +251,19 @@ export function createServer(): McpServer {
     },
     async ({ image_base64, filename, folder, k }) => {
       await ensureService();
-      const { results }: SearchResponse = await searchUpload(
+      const { results, refinements }: SearchResponse = await searchUpload(
         image_base64,
         filename ?? "upload.img",
         k ?? 24,
         folder,
       );
-      return galleryResult("image", `image: ${filename ?? "(uploaded)"}`, folder ?? "", await attachThumbs(results));
+      return galleryResult(
+        "image",
+        `image: ${filename ?? "(uploaded)"}`,
+        folder ?? "",
+        await attachThumbs(results),
+        refinements,
+      );
     },
   );
 

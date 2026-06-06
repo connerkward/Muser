@@ -18,11 +18,20 @@
   body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.55 var(--sans);
          -webkit-font-smoothing:antialiased; }
 
-  header { display:flex; align-items:baseline; gap:22px; padding:18px 28px 16px;
-           border-bottom:1px solid var(--line); }
+  header { display:flex; align-items:center; gap:22px; padding:10px 28px 9px;
+           border-bottom:1px solid var(--line);
+           flex-wrap:nowrap; min-height:32px; }
   header h1 { font:italic 400 22px/1 var(--serif); margin:0; letter-spacing:-.01em;
-              text-transform:lowercase; }
-  header .sp { flex:1; }
+              text-transform:lowercase; flex:0 0 auto; }
+  header > .nav, header > .upload, header > h1, header > select,
+  header > .spinner { flex:0 0 auto; }
+  header .sp { flex:1 1 auto; min-width:8px; }
+  /* status / model-loading message: never wrap, never grow the header height.
+     It shrinks with ellipsis instead of pushing the search bar down. */
+  header #status { flex:0 1 auto; min-width:0; max-width:40ch;
+                   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  header #spinnerLabel { flex:0 1 auto; min-width:0;
+                   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
   .nav { background:transparent; border:0; padding:2px 0; color:var(--mut);
          font-size:13px; cursor:pointer; border-bottom:1px solid transparent; }
@@ -39,27 +48,44 @@
                    padding-left:18px; padding-right:18px; }
   button.primary:hover { opacity:.85; }
 
-  .wrap { max-width:1280px; margin:0 auto; padding:30px 28px 80px; }
+  .wrap { max-width:1280px; margin:0 auto; padding:14px 28px 80px; }
 
-  .searchbar { position:relative; display:flex; gap:8px; margin-bottom:6px; }
+  .searchbar { position:relative; display:flex; gap:8px; margin-bottom:4px; }
   .searchbar input { flex:1; font-size:15px; padding:11px 14px; }
   .searchbar .neg { flex:0 1 230px; }
   .searchbar .neg::placeholder { color:var(--mut); }
 
-  .chips { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 14px;
-           margin:14px 0 22px; min-height:20px; }
+  /* Single line, never wraps. Horizontal scroll for overflow with a soft
+     right-edge fade so it reads as "more →" rather than a hard cut; text in
+     each chip ellipsises only if a single label is absurdly long. */
+  .chips { display:flex; flex-wrap:nowrap; align-items:baseline; gap:6px 14px;
+           margin:8px 0 12px; min-height:20px;
+           white-space:nowrap; overflow-x:auto; overflow-y:hidden;
+           scrollbar-width:none; text-overflow:ellipsis;
+           -webkit-mask-image:linear-gradient(to right, #000 calc(100% - 32px), transparent);
+                   mask-image:linear-gradient(to right, #000 calc(100% - 32px), transparent); }
+  .chips::-webkit-scrollbar { display:none; }
   .chips .lbl { color:var(--mut); font-size:10px; letter-spacing:.08em;
-                text-transform:uppercase; margin-right:2px; }
+                text-transform:uppercase; margin-right:2px; flex:0 0 auto; }
   .chip { background:transparent; border:0; padding:0; color:var(--mut);
-          font-size:13px; cursor:pointer; border-bottom:1px solid transparent; }
+          font-size:13px; cursor:pointer; border-bottom:1px solid transparent;
+          flex:0 0 auto; white-space:nowrap; }
   .chip:hover { color:var(--fg); border-bottom-color:var(--fg); }
   .chip.refine::before { content:"→ "; color:var(--mut); }
 
-  .tools { display:flex; align-items:center; gap:18px; margin:0 0 22px;
-           font-size:12px; color:var(--mut); }
+  .tools { display:flex; align-items:center; gap:18px; margin:0 0 12px;
+           font-size:12px; color:var(--mut);
+           flex-wrap:nowrap; min-height:20px; }
   .tools button { background:transparent; border:0; padding:0; color:var(--mut);
-                  font-size:12px; cursor:pointer; border-bottom:1px solid transparent; }
+                  font-size:12px; cursor:pointer; border-bottom:1px solid transparent;
+                  flex:0 0 auto; }
   .tools button:hover { color:var(--fg); border-bottom-color:var(--fg); }
+  /* coverage / scope / index status text in the tools row: single line + ellipsis
+     so a long "N matching · M indexed" message can't wrap and shove results down. */
+  .tools #scopemsg, .tools #idxmsg, .tools .filter-cov {
+           min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tools #idxmsg { flex:0 1 auto; max-width:34ch; }
+  .tools #scopemsg, .tools .filter-cov { flex:0 1 auto; max-width:30ch; }
 
   .upload { background:transparent; border:0; padding:0; color:var(--fg);
             font-size:13px; cursor:pointer; border-bottom:1px solid var(--fg); }
@@ -348,8 +374,14 @@
   .outcard .orow button:hover, .outcard .orow a:hover { color:var(--fg); border-bottom-color:var(--fg); }
   .outcard .orow a.glb { color:var(--fg); border-bottom:1px dotted var(--mut); }
   .outcard .orow a.glb:hover { border-bottom-style:solid; }
-  .outcard .o3d { display:flex; align-items:center; gap:8px; padding:6px 0 0; }
+  .outcard .o3d { display:flex; flex-direction:column; align-items:flex-start; gap:8px; padding:6px 0 0; }
   .outcard .o3d img { width:40px; height:40px; aspect-ratio:auto; cursor:default; }
+  /* Interactive 3D viewport (Google <model-viewer>). Fills the card width,
+     square-ish, dark stage so the model reads against the paper background. */
+  .outcard model-viewer, .outcard .mv {
+                    width:100%; height:240px; background:#111; border-radius:6px;
+                    display:block; cursor:grab; }
+  .outcard model-viewer:active { cursor:grabbing; }
   #runRefresh, #runBack { background:transparent; border:0; padding:0; color:var(--mut);
                           font-size:12px; cursor:pointer; }
   #runRefresh:hover, #runBack:hover { color:var(--fg); }
@@ -441,80 +473,85 @@
   /* ---- legacy blend controls: kept in DOM for the existing JS, never shown ---- */
   .legacy-blend { display:none; }
 
-  /* ---- unified ranking "blend console" ---------------------------------------
-     One cohesive component: a labelled stack of knob-rows sharing a common
-     visual language. Each row = a coloured channel with a draggable handle over
-     a rail; the rail's fill width encodes that knob's share of the blend. */
-  .console { --con-h:30px;
-             padding:14px 16px 6px; margin:2px 0 12px;
+  /* ---- unified ranking "blend bar" -------------------------------------------
+     ONE horizontal rail carrying every ranking parameter as a colour-coded,
+     draggable thumb. Each thumb sits at x = (value-min)/(max-min) · railWidth.
+     A legend maps colour → name; a floating tip shows name + live value while
+     hovering/dragging. Replaces the old stacked one-row-per-knob console. */
+  .console { padding:18px 20px 16px; margin:2px 0 12px;
              border:1px solid var(--line); border-radius:8px;
              background:
                radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--fg) 5%, transparent), transparent 60%),
                var(--paper);
              box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 14%, transparent),
                          0 1px 2px color-mix(in srgb, #000 18%, transparent); }
-  .console-head { display:flex; align-items:baseline; gap:10px; margin:0 0 10px;
+  .console-head { display:flex; align-items:baseline; gap:10px; margin:0 0 18px;
                   font:italic 400 13px/1 var(--serif); color:var(--mut); }
   .console-head .ch-title { color:var(--fg); font-style:normal; letter-spacing:.02em;
                             font-size:12px; text-transform:uppercase; }
   .console-head .ch-hint { font-size:11px; }
-  .con-row { display:grid; grid-template-columns:130px 1fr 52px; align-items:center;
-             gap:12px; padding:5px 0; }
-  .con-row + .con-row { border-top:1px solid color-mix(in srgb, var(--line) 60%, transparent); }
-  .con-lab { display:flex; align-items:center; gap:7px; font-size:12px; color:var(--mut);
-             white-space:nowrap; cursor:default; }
-  .con-lab .dot { width:9px; height:9px; border-radius:50%; flex:0 0 auto;
-                  box-shadow:0 0 0 1px color-mix(in srgb, #000 22%, transparent),
-                             0 0 7px var(--knob); background:var(--knob); }
-  .con-lab .nm { overflow:hidden; text-overflow:ellipsis; }
-  /* rail: a track the handle slides along; ::before is the unfilled groove,
-     the .fill child is the coloured portion from 0 → current value. */
-  .con-rail { position:relative; height:var(--con-h); display:flex; align-items:center;
-              cursor:pointer; touch-action:none; }
-  .con-rail::before { content:""; position:absolute; left:0; right:0; height:6px;
-                      border-radius:3px; background:color-mix(in srgb, var(--fg) 9%, var(--paper));
-                      box-shadow: inset 0 1px 2px color-mix(in srgb, #000 28%, transparent); }
-  .con-fill { position:absolute; left:0; height:6px; border-radius:3px; pointer-events:none;
-              width:var(--pct,0%);
+
+  /* the single shared bar: one rail, many thumbs absolutely positioned on it */
+  .blendbar { position:relative; height:38px; margin:6px 4px 10px;
+              touch-action:none; }
+  .blendbar .bb-track { position:absolute; left:0; right:0; top:50%;
+              transform:translateY(-50%); height:8px; border-radius:4px;
               background:linear-gradient(90deg,
-                        color-mix(in srgb, var(--knob) 55%, transparent),
-                        var(--knob));
-              box-shadow:0 0 8px color-mix(in srgb, var(--knob) 55%, transparent);
-              transition:width 90ms linear; }
-  .con-handle { position:absolute; top:50%; left:var(--pct,0%);
-                width:16px; height:16px; border-radius:50%;
-                transform:translate(-50%,-50%);
-                background:radial-gradient(circle at 35% 30%,
-                          color-mix(in srgb, #fff 70%, var(--knob)), var(--knob) 70%);
-                border:1px solid color-mix(in srgb, #000 35%, var(--knob));
-                box-shadow:0 1px 3px color-mix(in srgb, #000 45%, transparent),
-                           0 0 0 0 color-mix(in srgb, var(--knob) 60%, transparent);
-                cursor:grab; transition:left 90ms linear, box-shadow 140ms ease, transform 140ms ease;
-                z-index:2; }
-  .con-rail:hover .con-handle { box-shadow:0 1px 3px color-mix(in srgb, #000 45%, transparent),
-                                           0 0 0 5px color-mix(in srgb, var(--knob) 22%, transparent); }
-  .con-handle.drag { cursor:grabbing; transform:translate(-50%,-50%) scale(1.18);
-                     transition:box-shadow 140ms ease, transform 90ms ease;
-                     box-shadow:0 2px 6px color-mix(in srgb, #000 55%, transparent),
-                                0 0 0 7px color-mix(in srgb, var(--knob) 28%, transparent); }
-  /* value tooltip floating above the handle while dragging / on hover */
-  .con-tip { position:absolute; bottom:calc(50% + 13px); left:var(--pct,0%);
-             transform:translateX(-50%); padding:1px 6px; border-radius:4px;
-             font:600 11px/1.4 var(--sans); font-variant-numeric:tabular-nums;
-             color:var(--bg); background:var(--knob); white-space:nowrap;
-             opacity:0; pointer-events:none; transition:opacity 120ms ease, left 90ms linear; z-index:3; }
-  .con-tip::after { content:""; position:absolute; top:100%; left:50%; transform:translateX(-50%);
-                    border:4px solid transparent; border-top-color:var(--knob); }
-  .con-rail:hover .con-tip, .con-handle.drag ~ .con-tip { opacity:1; }
-  .con-val { font:600 12px/1 var(--sans); font-variant-numeric:tabular-nums;
-             color:var(--fg); text-align:right; }
-  .con-divider { height:1px; margin:8px 0 2px; border:0;
-                 background:color-mix(in srgb, var(--line) 80%, transparent); }
-  .con-section { font:italic 400 11px/1 var(--serif); color:var(--mut); margin:6px 0 2px; }
+                        color-mix(in srgb, var(--fg) 7%, var(--paper)),
+                        color-mix(in srgb, var(--fg) 12%, var(--paper)));
+              box-shadow: inset 0 1px 2px color-mix(in srgb, #000 30%, transparent),
+                          inset 0 -1px 0 color-mix(in srgb, #fff 7%, transparent); }
+  /* faint ticks at 0 / mid / full to read the bar as a scale */
+  .blendbar .bb-tick { position:absolute; top:50%; width:1px; height:14px;
+              transform:translate(-50%,-50%);
+              background:color-mix(in srgb, var(--fg) 14%, transparent);
+              pointer-events:none; }
+  .bb-thumb { position:absolute; top:50%; left:var(--x,0%);
+              width:18px; height:18px; border-radius:50%;
+              transform:translate(-50%,-50%);
+              background:radial-gradient(circle at 35% 28%,
+                        color-mix(in srgb, #fff 78%, var(--knob)), var(--knob) 72%);
+              border:1.5px solid color-mix(in srgb, #000 38%, var(--knob));
+              box-shadow:0 1px 3px color-mix(in srgb, #000 50%, transparent),
+                         0 0 0 0 color-mix(in srgb, var(--knob) 60%, transparent);
+              cursor:grab; touch-action:none;
+              transition:left 90ms linear, box-shadow 140ms ease, transform 120ms ease;
+              z-index:2; }
+  .bb-thumb:hover, .bb-thumb:focus-visible {
+              box-shadow:0 1px 3px color-mix(in srgb, #000 50%, transparent),
+                         0 0 0 5px color-mix(in srgb, var(--knob) 24%, transparent);
+              z-index:5; outline:none; }
+  .bb-thumb.drag { cursor:grabbing; z-index:6;
+              transform:translate(-50%,-50%) scale(1.22);
+              box-shadow:0 2px 7px color-mix(in srgb, #000 58%, transparent),
+                         0 0 0 8px color-mix(in srgb, var(--knob) 30%, transparent); }
+  /* floating value tip above the active thumb */
+  .bb-thumb .bb-tip { position:absolute; bottom:calc(100% + 9px); left:50%;
+              transform:translateX(-50%); padding:2px 7px; border-radius:4px;
+              font:600 11px/1.4 var(--sans); font-variant-numeric:tabular-nums;
+              color:var(--bg); background:var(--knob); white-space:nowrap;
+              opacity:0; pointer-events:none; transition:opacity 120ms ease; z-index:7; }
+  .bb-thumb .bb-tip::after { content:""; position:absolute; top:100%; left:50%;
+              transform:translateX(-50%); border:4px solid transparent;
+              border-top-color:var(--knob); }
+  .bb-thumb:hover .bb-tip, .bb-thumb.drag .bb-tip, .bb-thumb:focus-visible .bb-tip { opacity:1; }
+
+  /* legend: colour swatch ↔ parameter name ↔ live value, wraps freely below */
+  .bb-legend { display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:4px; }
+  .bb-leg { display:inline-flex; align-items:center; gap:6px; cursor:pointer;
+            font-size:11.5px; color:var(--mut); white-space:nowrap;
+            transition:color 120ms ease; }
+  .bb-leg:hover, .bb-leg.lit { color:var(--fg); }
+  .bb-leg .dot { width:9px; height:9px; border-radius:50%; flex:0 0 auto;
+                 background:var(--knob);
+                 box-shadow:0 0 0 1px color-mix(in srgb, #000 22%, transparent),
+                            0 0 6px var(--knob); }
+  .bb-leg .lv { color:var(--fg); font-weight:600;
+                font-variant-numeric:tabular-nums; }
 
   /* ---- curated high-aesthetic homepage showcase bar ---- */
   .showcase-bar { display:flex; align-items:center; gap:12px; flex-wrap:wrap;
-                  margin:2px 0 16px; padding:0 0 12px;
+                  margin:0 0 10px; padding:0 0 8px;
                   border-bottom:1px solid var(--line); }
   .showcase-bar .sc-title { font:italic 400 14px/1.3 var(--serif); color:var(--fg); }
   .showcase-bar .sc-count { font-size:12px; }
@@ -2408,87 +2445,123 @@ function _saveConsole(){
 function _loadConsole(){
   try{ return JSON.parse(localStorage.getItem(CONSOLE_KEY) || "{}"); }catch{ return {}; }
 }
-// Repaint a single knob row (fill width, handle position, tip + value text).
+// Repaint one thumb (its x position on the shared rail) + its tip + legend value.
+// Every knob has a different scale (max 2 for weights, 1.5 for exclude) — each
+// maps independently to 0..100% of the SAME rail, so the bar reads as one scale.
 function _paintKnob(k){
-  const row = k._row; if(!row) return;
+  if(!k._thumb) return;
   const v = _consoleVal(k);
   const pct = ((v - k.min) / (k.max - k.min)) * 100;
-  row.style.setProperty("--pct", pct.toFixed(2) + "%");
-  k._tip.textContent = v.toFixed(2);
-  k._val.textContent = v.toFixed(2);
+  k._thumb.style.setProperty("--x", pct.toFixed(2) + "%");
+  k._thumb.setAttribute("aria-valuenow", v.toFixed(2));
+  if(k._tip) k._tip.textContent = k.label + " " + v.toFixed(2);
+  if(k._lv)  k._lv.textContent  = v.toFixed(2);
 }
 function repaintConsole(){ CONSOLE_KNOBS.forEach(_paintKnob); }
+// Build ONE rail with one draggable thumb per parameter, plus a colour legend.
 function buildSortConsole(){
   const host = $("#sortConsole");
   if(!host) return;
   host.innerHTML =
     `<div class="console-head">
        <span class="ch-title">Blend</span>
-       <span class="ch-hint">drag the knobs — relevance, each aesthetic model, and exclude strength on one console</span>
-     </div>`;
-  CONSOLE_KNOBS.forEach((k, i) => {
-    if(k.kind === "neg"){
-      const hr = document.createElement("hr"); hr.className = "con-divider"; host.appendChild(hr);
-      const sec = document.createElement("div"); sec.className = "con-section";
-      sec.textContent = "Negative prompt"; host.appendChild(sec);
-    }
-    const row = document.createElement("div");
-    row.className = "con-row"; row.style.setProperty("--knob", k.color);
-    row.title = k.hint;
-    row.innerHTML =
-      `<span class="con-lab"><span class="dot"></span><span class="nm">${k.label}</span></span>
-       <span class="con-rail">
-         <span class="con-fill"></span>
-         <span class="con-handle" tabindex="0" role="slider"
-               aria-label="${k.label}" aria-valuemin="${k.min}" aria-valuemax="${k.max}"></span>
-         <span class="con-tip"></span>
-       </span>
-       <span class="con-val">0.00</span>`;
-    host.appendChild(row);
-    k._row = row;
-    k._rail = row.querySelector(".con-rail");
-    k._handle = row.querySelector(".con-handle");
-    k._tip = row.querySelector(".con-tip");
-    k._val = row.querySelector(".con-val");
-    _wireKnob(k);
+       <span class="ch-hint">one bar, many handles — relevance, each aesthetic model, and exclude strength</span>
+     </div>
+     <div class="blendbar" id="blendBar">
+       <span class="bb-track"></span>
+       <span class="bb-tick" style="left:0%"></span>
+       <span class="bb-tick" style="left:50%"></span>
+       <span class="bb-tick" style="left:100%"></span>
+     </div>
+     <div class="bb-legend" id="bbLegend"></div>`;
+  const bar = host.querySelector("#blendBar");
+  const legend = host.querySelector("#bbLegend");
+  CONSOLE_KNOBS.forEach(k => {
+    const thumb = document.createElement("span");
+    thumb.className = "bb-thumb";
+    thumb.style.setProperty("--knob", k.color);
+    thumb.tabIndex = 0;
+    thumb.setAttribute("role", "slider");
+    thumb.setAttribute("aria-label", k.label + " — " + k.hint);
+    thumb.setAttribute("aria-valuemin", k.min);
+    thumb.setAttribute("aria-valuemax", k.max);
+    thumb.title = k.label + " · " + k.hint;
+    thumb.innerHTML = `<span class="bb-tip"></span>`;
+    bar.appendChild(thumb);
+    k._thumb = thumb;
+    k._tip = thumb.querySelector(".bb-tip");
+
+    // legend entry: colour dot + name + live value; hover/focus lifts the thumb.
+    const leg = document.createElement("span");
+    leg.className = "bb-leg"; leg.style.setProperty("--knob", k.color);
+    leg.title = k.hint;
+    leg.innerHTML = `<span class="dot"></span><span class="nm">${k.label}</span>
+                     <span class="lv">0.00</span>`;
+    legend.appendChild(leg);
+    k._leg = leg;
+    k._lv = leg.querySelector(".lv");
+    const lift = (on) => { thumb.classList.toggle("drag", on); leg.classList.toggle("lit", on); };
+    leg.addEventListener("pointerenter", () => lift(true));
+    leg.addEventListener("pointerleave", () => { if(!k._dragging) lift(false); });
+
+    _wireKnob(k, bar);
+  });
+  // Press on the bare rail (not on a thumb): grab the NEAREST thumb and drag it
+  // from there, so the whole bar is clickable, not just the 18px handles.
+  bar.addEventListener("pointerdown", (e) => {
+    if(e.target.closest(".bb-thumb")) return;          // a thumb handles its own press
+    const r = bar.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / (r.width || 1)));
+    let best = null, bestD = Infinity;
+    CONSOLE_KNOBS.forEach(k => {
+      const f = (_consoleVal(k) - k.min) / (k.max - k.min);
+      const d = Math.abs(f - frac);
+      if(d < bestD){ bestD = d; best = k; }
+    });
+    if(best && best._thumb) best._thumb.dispatchEvent(
+      new PointerEvent("pointerdown", { clientX:e.clientX, clientY:e.clientY,
+        pointerId:e.pointerId, bubbles:false }));
   });
   repaintConsole();
 }
-// Pointer drag + click-to-position + keyboard arrows for one knob.
-function _wireKnob(k){
-  const rail = k._rail, handle = k._handle;
-  const step = k.kind === "neg" ? 0.05 : 0.05;
+// Pointer drag (mouse + touch) + keyboard arrows for one thumb on the shared rail.
+// Pointer-down brings the thumb to front so overlapping handles stay grabbable.
+function _wireKnob(k, bar){
+  const thumb = k._thumb;
+  const step = 0.05;
   const fromClientX = (clientX) => {
-    const r = rail.getBoundingClientRect();
+    const r = bar.getBoundingClientRect();
     const frac = Math.max(0, Math.min(1, (clientX - r.left) / (r.width || 1)));
     let v = k.min + frac * (k.max - k.min);
     v = Math.round(v / step) * step;            // snap to step
     return Math.max(k.min, Math.min(k.max, v));
   };
-  let dragging = false;
   const onMove = (e) => {
-    if(!dragging) return;
+    if(!k._dragging) return;
     e.preventDefault();
     _consoleCommit(k, fromClientX(e.clientX), true);
     _paintKnob(k);
   };
-  const onUp = () => {
-    if(!dragging) return;
-    dragging = false; handle.classList.remove("drag");
+  const onUp = (e) => {
+    if(!k._dragging) return;
+    k._dragging = false;
+    thumb.classList.remove("drag"); if(k._leg) k._leg.classList.remove("lit");
+    try { thumb.releasePointerCapture(e.pointerId); } catch {}
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
   };
-  const onDown = (e) => {
-    e.preventDefault();
-    dragging = true; handle.classList.add("drag");
-    handle.focus({preventScroll:true});
-    _consoleCommit(k, fromClientX(e.clientX), true);   // jump to the press point
-    _paintKnob(k);
+  // Drag begins on the thumb itself (so the right handle is picked even when
+  // several overlap); a press on bare rail snaps the *nearest* thumb to it.
+  thumb.addEventListener("pointerdown", (e) => {
+    e.preventDefault(); e.stopPropagation();
+    k._dragging = true; thumb.classList.add("drag");
+    if(k._leg) k._leg.classList.add("lit");
+    thumb.focus({preventScroll:true});
+    try { thumb.setPointerCapture(e.pointerId); } catch {}
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
-  };
-  rail.addEventListener("pointerdown", onDown);
-  handle.addEventListener("keydown", (e) => {
+  });
+  thumb.addEventListener("keydown", (e) => {
     let d = 0;
     if(e.key === "ArrowLeft" || e.key === "ArrowDown") d = -step;
     else if(e.key === "ArrowRight" || e.key === "ArrowUp") d = +step;
@@ -3317,14 +3390,52 @@ function renderRunDetail(d){
   const grid = $("#runOutGrid");
   if (grid) outs.forEach((o, i) => grid.appendChild(renderOutput(d.id, o, i)));
 }
+// ---- Interactive 3D (<model-viewer>) ---------------------------------------
+// Loaded once from Google's CDN on first use (this is a local tool, so an
+// external script is fine). Guarded against double-injection. If the script
+// never loads we degrade silently to the plain ⬇ .glb download link.
+let _modelViewerLoading = null;
+function ensureModelViewer(){
+  if (window.customElements && customElements.get("model-viewer")) return Promise.resolve(true);
+  if (_modelViewerLoading) return _modelViewerLoading;
+  _modelViewerLoading = new Promise((resolve) => {
+    const s = document.createElement("script");
+    s.type = "module";
+    s.src = "https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js";
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
+    document.head.appendChild(s);
+  });
+  return _modelViewerLoading;
+}
+// Mount an interactive viewer into `box` for a .glb at `glbUrl`, with a small
+// ⬇ .glb download link beside it. Falls back to download-only if the CDN
+// component can't load.
+function mount3DViewer(box, glbUrl, thumbUrl){
+  const dl = `<a class="glb" href="${glbUrl}" download style="border-bottom:1px dotted var(--mut)">⬇ .glb</a>`;
+  ensureModelViewer().then((ok) => {
+    if (ok) {
+      box.innerHTML =
+        `<model-viewer src="${glbUrl}" camera-controls auto-rotate touch-action="pan-y" `
+        + `interaction-prompt="none" exposure="1.0" shadow-intensity="0.6"></model-viewer>`
+        + `<div class="orow">${dl}</div>`;
+    } else {
+      // CDN failed → keep the thumbnail + download link.
+      box.innerHTML = (thumbUrl ? `<img src="${thumbUrl}" alt="">` : "")
+        + `<div class="orow">${dl}</div>`;
+    }
+  });
+}
 function renderOutput(runId, o, idx){
   const c = document.createElement("div"); c.className = "outcard";
   const kind = o.kind || "image";
   if (kind === "3d") {
-    // Already-built 3D output: glb download + thumbnail.
-    const thumb = o.thumb_url ? `<img src="${o.thumb_url}" alt="">` : "";
-    c.innerHTML = `${thumb}<div class="okind">3D model</div>`
-      + `<div class="orow"><a class="glb" href="${o.glb_url||"#"}" download>⬇ Download .glb</a></div>`;
+    // Already-built 3D output → interactive rotatable viewer + download link.
+    c.innerHTML = `<div class="okind">3D model</div><div class="o3d" data-3d></div>`;
+    const box = c.querySelector(".o3d");
+    if (o.glb_url) mount3DViewer(box, o.glb_url, o.thumb_url);
+    else box.innerHTML = (o.thumb_url ? `<img src="${o.thumb_url}" alt="">` : "")
+                       + `<div class="orow"><a class="glb" href="#">no .glb</a></div>`;
     return c;
   }
   // image or cutout
@@ -3363,8 +3474,7 @@ async function makeThreeD(runId, outputIndex, card, btn){
   btn.textContent = "✓ 3D ready"; btn.disabled = true;
   const box = card.querySelector(".o3d");
   box.style.display = "";
-  box.innerHTML = (j.thumb_url ? `<img src="${j.thumb_url}" alt="">` : "")
-    + `<a class="glb" href="${j.glb_url}" download style="border-bottom:1px dotted var(--mut)">⬇ Download .glb</a>`;
+  mount3DViewer(box, j.glb_url, j.thumb_url);
   toast("3D model ready");
 }
 $("#runRefresh").onclick = loadRuns;
