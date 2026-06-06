@@ -804,6 +804,103 @@
   .dc2pa { display:inline-block; background:rgba(180,120,0,.92); color:#fff;
            font-size:10px; font-weight:600; padding:2px 7px;
            letter-spacing:.02em; }
+
+  /* ===== Explore: 3D embedding point-cloud =================================== */
+  #vizBox { position:relative; height:360px; margin:0 0 22px; border:1px solid var(--line);
+            border-radius:3px; overflow:hidden; background:
+              radial-gradient(120% 90% at 50% 18%, var(--paper) 0%, var(--bg) 70%); }
+  #vizBox canvas { display:block; width:100%; height:100%; touch-action:none; }
+  #vizBox.empty { display:none; }
+  /* faint hand-drawn grain over the canvas */
+  #vizGrain { position:absolute; inset:0; pointer-events:none; z-index:3; opacity:.06;
+              mix-blend-mode:multiply;
+              background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+              background-size:180px 180px; }
+  @media (prefers-color-scheme: dark) { #vizGrain { mix-blend-mode:screen; opacity:.08; } }
+  /* dynamic legend docked bottom-left of the viewport */
+  #vizLegend { position:absolute; left:12px; bottom:12px; z-index:4; max-height:62%;
+               width:236px; overflow-y:auto; padding:8px 9px; border-radius:3px;
+               background:color-mix(in srgb, var(--paper) 86%, transparent);
+               border:1px solid var(--line); backdrop-filter:blur(3px);
+               font-size:11px; scrollbar-width:thin;
+               animation:viz-fade 420ms cubic-bezier(0.22,1,0.36,1) both; }
+  @keyframes viz-fade { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+  #vizLegend .vlh { font:italic 400 12px/1 var(--serif); color:var(--mut);
+                    margin:0 0 6px; padding-bottom:5px; border-bottom:1px solid var(--line); }
+  .vlrow { display:flex; align-items:center; gap:7px; padding:3px 4px; border-radius:2px;
+           cursor:default; transition:background 140ms ease; }
+  .vlrow:hover { background:color-mix(in srgb, var(--fg) 8%, transparent); }
+  .vlrow .sw { width:10px; height:10px; border-radius:2px; flex:0 0 auto;
+               box-shadow:0 0 0 1px rgba(0,0,0,.12) inset; }
+  .vlrow .vll { flex:1 1 auto; min-width:0; white-space:nowrap; overflow:hidden;
+                text-overflow:ellipsis; color:var(--fg); }
+  .vlrow .vlc { flex:0 0 auto; color:var(--mut); font-variant-numeric:tabular-nums; }
+  #vizMeta { position:absolute; right:12px; top:10px; z-index:4; font-size:10px;
+             letter-spacing:.06em; text-transform:uppercase; color:var(--mut);
+             background:color-mix(in srgb, var(--paper) 70%, transparent); padding:3px 7px;
+             border-radius:2px; }
+
+  /* ===== Debug panel ('d' key) ============================================== */
+  #dbgPanel { position:fixed; right:18px; bottom:18px; z-index:9000; width:212px;
+              padding:13px 15px 15px; background:var(--paper); color:var(--fg);
+              border:1px solid var(--line); border-radius:4px;
+              box-shadow:0 8px 30px rgba(0,0,0,.18); font-size:12px;
+              animation:dbg-in 200ms cubic-bezier(0.22,1,0.36,1) both; }
+  @keyframes dbg-in { from { opacity:0; transform:translateY(8px) scale(.98); } to { opacity:1; transform:none; } }
+  #dbgPanel h4 { margin:0 0 10px; font:italic 400 14px/1 var(--serif); color:var(--fg);
+                 display:flex; justify-content:space-between; align-items:baseline; }
+  #dbgPanel h4 small { font:400 10px/1 var(--sans); letter-spacing:.08em;
+                       text-transform:uppercase; color:var(--mut); }
+  .dbgrow { margin:11px 0 0; }
+  .dbgrow label { display:flex; justify-content:space-between; color:var(--mut);
+                  margin-bottom:5px; font-size:11px; }
+  .dbgrow label b { color:var(--fg); font-weight:600; font-variant-numeric:tabular-nums; }
+  .dbgrow input[type=range] { width:100%; padding:0; border:0; accent-color:var(--fg);
+                              background:transparent; cursor:pointer; }
+  #dbgReset { margin-top:13px; width:100%; padding:6px; font-size:11px;
+              border:1px solid var(--line); background:transparent; color:var(--mut);
+              border-radius:2px; }
+  #dbgReset:hover { color:var(--fg); border-color:var(--fg); }
+  #dbgHint { margin-top:9px; font-size:10px; color:var(--mut); font-style:italic;
+             font-family:var(--serif); }
+
+  /* ===== Before/After upscale slider ======================================== */
+  .baWrap { position:relative; width:100%; user-select:none; line-height:0;
+            border-radius:2px; overflow:hidden;
+            animation:ba-reveal 460ms cubic-bezier(0.22,1,0.36,1) both; }
+  @keyframes ba-reveal { from { opacity:0; clip-path:inset(0 0 8% 0); transform:scale(.985); }
+                         to   { opacity:1; clip-path:inset(0 0 0 0);  transform:none; } }
+  .baWrap img { display:block; width:100%; height:auto; pointer-events:none; }
+  .baBefore { position:absolute; inset:0; overflow:hidden; will-change:clip-path; }
+  .baBefore img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+  .baHandle { position:absolute; top:0; bottom:0; width:2px; background:var(--fg);
+              transform:translateX(-1px); cursor:ew-resize; z-index:5;
+              box-shadow:0 0 0 1px rgba(255,255,255,.4); }
+  .baHandle::after { content:""; position:absolute; top:50%; left:50%;
+              width:30px; height:30px; transform:translate(-50%,-50%);
+              border-radius:50%; background:var(--fg);
+              box-shadow:0 2px 8px rgba(0,0,0,.3); }
+  .baHandle::before { content:"‹ ›"; position:absolute; top:50%; left:50%;
+              transform:translate(-50%,-50%); z-index:1; color:var(--bg);
+              font-size:13px; letter-spacing:-1px; pointer-events:none; }
+  .baTag { position:absolute; top:9px; z-index:6; font-size:10px; letter-spacing:.08em;
+           text-transform:uppercase; padding:3px 8px; border-radius:2px; color:#fff;
+           background:rgba(0,0,0,.55); pointer-events:none; }
+  .baTag.before { left:9px; } .baTag.after { right:9px; }
+  .baCtl { display:flex; align-items:center; gap:14px; margin-top:9px; font-size:12px;
+           color:var(--mut); }
+  .baCtl button { background:transparent; border:0; padding:0; color:var(--mut);
+                  font-size:12px; cursor:pointer; border-bottom:1px solid transparent; }
+  .baCtl button:hover { color:var(--fg); border-bottom-color:var(--fg); }
+
+  /* ===== 3D wireframe toggle ================================================= */
+  .o3d { position:relative; }
+  .wfBtn { background:transparent; border:0; padding:0; color:var(--mut); font-size:11px;
+           cursor:pointer; border-bottom:1px solid transparent; margin-left:14px; }
+  .wfBtn:hover { color:var(--fg); border-bottom-color:var(--fg); }
+  .wfBtn.on { color:var(--fg); border-bottom-color:var(--fg); }
+  .wfBtn .wfnote { color:var(--mut); font-style:italic; font-family:var(--serif);
+                   margin-left:5px; font-size:10px; }
 </style>
 </head>
 <body>
@@ -966,6 +1063,12 @@
 </div>
 
 <div class="wrap" id="exploreView" style="display:none">
+  <!-- 3D embedding point-cloud (three.js). Hidden until /api/projection returns points. -->
+  <div id="vizBox" class="empty">
+    <span id="vizMeta"></span>
+    <div id="vizGrain"></div>
+    <div id="vizLegend"><div class="vlh">clusters</div></div>
+  </div>
   <div class="row" style="margin-bottom:14px">
     <span class="mut">clustering</span>
     <select id="cmethod"><option value="hdbscan">HDBSCAN (auto count)</option><option value="kmeans">K-means</option></select>
@@ -3269,6 +3372,8 @@ function renderImageDetail(d){
       <span class="sep">·</span>
       <button id="dlens">Lens</button>
       <span class="sep">·</span>
+      <button id="dupscale">Upscale</button>
+      <span class="sep">·</span>
       <button id="dreveal">Reveal</button>
       <span class="sep">·</span>
       <button id="daddUp" class="${inCartUp?"added":""}">${inCartUp?"× Upscale queued":"Add upscaled to cart"}</button>
@@ -3318,6 +3423,7 @@ function renderImageDetail(d){
   document.getElementById("dsim").onclick = () => { showView("search"); searchImage(d.path); };
   document.getElementById("dcompose").onclick = () => { showView("search"); openCompose(d.path); };
   document.getElementById("dlens").onclick = (e) => lensSearch(d.path, e.currentTarget);
+  document.getElementById("dupscale").onclick = (e) => runUpscale(d, e.currentTarget);
   document.getElementById("dopen").onclick = () => window.open(`/api/image?path=${enc(d.path)}`,"_blank");
   document.getElementById("daddUp").onclick = (e) => {
     // Toggle: if this path is already in the cart with upscale=true, this
@@ -3396,6 +3502,7 @@ function showView(v, opts){
   });
   if(v!=="ai") clearAIPoll();
   if(v==="explore" && !$("#clusterGrid").children.length) loadClusters();
+  if(v==="explore" && typeof loadProjectionViz==="function") loadProjectionViz();
   if(v==="interesting") loadScores("#scoreGrid","#imsg","#imetric");
   if(v==="review") loadScores("#reviewGrid","#rmsg","#rcat");
   if(v==="color") loadColor();
@@ -3725,7 +3832,8 @@ function mount3DViewer(box, glbUrl, thumbUrl){
       box.innerHTML =
         `<model-viewer src="${glbUrl}" camera-controls auto-rotate touch-action="pan-y" `
         + `interaction-prompt="none" exposure="1.0" shadow-intensity="0.6"></model-viewer>`
-        + `<div class="orow">${dl}</div>`;
+        + `<div class="orow">${dl}<button class="wfBtn" type="button">Wireframe</button></div>`;
+      wireWireframeToggle(box.querySelector("model-viewer"), box.querySelector(".wfBtn"));
     } else {
       // CDN failed → keep the thumbnail + download link.
       box.innerHTML = (thumbUrl ? `<img src="${thumbUrl}" alt="">` : "")
@@ -4311,6 +4419,428 @@ pollStatus(); loadFolders(); loadClusterChips();
   history.replaceState(state, "", url);
   // Landing on the Search tab with no query → show the curated showcase homepage.
   if(r.view === "search" && $("#q").value.trim().length < 2 && !filterActive()) showShowcase();
+}
+
+/* ============================================================================
+   FEATURE 1 — Explore: interactive 3D embedding point-cloud (three.js)
+   ========================================================================== */
+function ensureThree(){
+  if (window.__muserThree) return Promise.resolve(window.__muserThree);
+  if (window.__threeLoading) return window.__threeLoading;
+  window.__threeLoading = (async () => {
+    try {
+      const THREE = await import("https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js");
+      let OrbitControls = null;
+      try {
+        const m = await import("https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js");
+        OrbitControls = m.OrbitControls;
+      } catch { /* manual orbit fallback below */ }
+      window.__muserThree = { THREE, OrbitControls };
+      return window.__muserThree;
+    } catch (e) { console.warn("three.js load failed", e); return null; }
+  })();
+  return window.__threeLoading;
+}
+
+async function loadProjectionViz(){
+  // window-scoped flag (not a module `let`) so an early boot-time call from
+  // showView can't hit the temporal-dead-zone before this block initializes.
+  if (window.__vizLoaded) return;
+  window.__vizLoaded = true;
+  const box = $("#vizBox");
+  let data;
+  try { data = await (await fetch("/api/projection?n=2000")).json(); }
+  catch { box.classList.add("empty"); return; }
+  const pts = (data && data.points) || [];
+  if (!pts.length) { box.classList.add("empty"); return; }   // nothing indexed → hide viz
+  const three = await ensureThree();
+  if (!three) { box.classList.add("empty"); return; }
+  box.classList.remove("empty");
+  mountPointCloud(three, box, data);
+}
+
+function mountPointCloud(three, box, data){
+  const { THREE, OrbitControls } = three;
+  const pts = data.points;
+  const clusters = data.clusters || [];
+  // cluster id → {color:[r,g,b], label, count, idx}
+  const cmap = new Map();
+  clusters.forEach((c, i) => cmap.set(c.id, {
+    rgb: hexToRgb(c.color || "#999999"), label: c.label || ("cluster "+c.id),
+    count: c.count || 0, idx: i, hex: c.color || "#999999",
+  }));
+
+  const W = box.clientWidth, H = box.clientHeight;
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(55, W/H, 0.01, 100);
+  camera.position.set(0, 0, 3.1);
+  const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(W, H);
+  box.insertBefore(renderer.domElement, box.firstChild);
+
+  // geometry: positions + per-vertex colors from cluster color
+  const N = pts.length;
+  const pos = new Float32Array(N*3);
+  const col = new Float32Array(N*3);
+  const baseCol = new Float32Array(N*3);
+  const cidOf = new Int32Array(N);
+  let cx=0, cy=0, cz=0;
+  for (let i=0;i<N;i++){ cx+=pts[i].x; cy+=pts[i].y; cz+=pts[i].z; }
+  cx/=N; cy/=N; cz/=N;                                   // center the cloud
+  const S = 1.6;                                          // overall scale into view
+  for (let i=0;i<N;i++){
+    const p = pts[i];
+    pos[i*3]   = (p.x-cx)*S; pos[i*3+1] = (p.y-cy)*S; pos[i*3+2] = (p.z-cz)*S;
+    const c = cmap.get(p.c) || { rgb:[0.6,0.6,0.6] };
+    col[i*3]=baseCol[i*3]=c.rgb[0];
+    col[i*3+1]=baseCol[i*3+1]=c.rgb[1];
+    col[i*3+2]=baseCol[i*3+2]=c.rgb[2];
+    cidOf[i] = p.c;
+  }
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  geom.setAttribute("color", new THREE.BufferAttribute(col, 3));
+
+  // soft round sprite so points read as a cloud, not hard squares
+  const spriteTex = makeSoftDiscTexture(THREE);
+  const mat = new THREE.PointsMaterial({
+    size: 0.05, sizeAttenuation:true, vertexColors:true,
+    map: spriteTex, transparent:true, alphaTest:0.02, depthWrite:false,
+    opacity:0.92, blending: THREE.NormalBlending,
+  });
+  const cloud = new THREE.Points(geom, mat);
+  scene.add(cloud);
+
+  // controls: OrbitControls if available, else a minimal manual orbit
+  let controls = null, manual = null;
+  if (OrbitControls){
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true; controls.dampingFactor = 0.08;
+    controls.enablePan = false; controls.autoRotate = false;   // we rotate the cloud itself
+    controls.minDistance = 1.2; controls.maxDistance = 8;
+    controls.rotateSpeed = 0.7;
+  } else {
+    manual = manualOrbit(camera, renderer.domElement);
+  }
+
+  // ambient slow auto-rotation of the cloud (continuous), pauses while dragging
+  let dragging = false;
+  const onDown = () => dragging = true;
+  const onUp = () => dragging = false;
+  renderer.domElement.addEventListener("pointerdown", onDown);
+  window.addEventListener("pointerup", onUp);
+
+  let raf = 0, alive = true;
+  const colAttr = geom.getAttribute("color");
+  function tick(){
+    if (!alive) return;
+    if (!dragging) cloud.rotation.y += 0.0016;            // ambient slow spin
+    if (controls) controls.update();
+    else if (manual) manual.update();
+    renderer.render(scene, camera);
+    raf = requestAnimationFrame(tick);
+  }
+  tick();
+
+  // resize handling tied to the box
+  const ro = new ResizeObserver(() => {
+    const w = box.clientWidth, h = box.clientHeight;
+    if (!w || !h) return;
+    camera.aspect = w/h; camera.updateProjectionMatrix(); renderer.setSize(w, h);
+  });
+  ro.observe(box);
+
+  // ---- dynamic legend (docked corner) ----
+  buildLegend(clusters, cmap, (focusId) => setHighlight(focusId));
+
+  function setHighlight(focusId){
+    // brighten the focused cluster, dim others; focusId==null restores
+    for (let i=0;i<N;i++){
+      const on = (focusId==null) || (cidOf[i]===focusId);
+      const k = on ? 1 : 0.12;
+      colAttr.array[i*3]   = baseCol[i*3]*k   + (on?0:0);
+      colAttr.array[i*3+1] = baseCol[i*3+1]*k;
+      colAttr.array[i*3+2] = baseCol[i*3+2]*k;
+      // brighten focused points a touch toward white
+      if (focusId!=null && on){
+        colAttr.array[i*3]   = Math.min(1, baseCol[i*3]*1.15 + 0.10);
+        colAttr.array[i*3+1] = Math.min(1, baseCol[i*3+1]*1.15 + 0.10);
+        colAttr.array[i*3+2] = Math.min(1, baseCol[i*3+2]*1.15 + 0.10);
+      }
+    }
+    colAttr.needsUpdate = true;
+  }
+
+  // meta readout
+  const meta = $("#vizMeta");
+  if (meta) meta.textContent =
+    `${(data.sampled||N).toLocaleString()} / ${(data.total_indexed||N).toLocaleString()} pts · ${clusters.length} clusters`;
+
+  // dispose hook (not strictly needed; viz lives for the page, but keep it clean)
+  window.__vizState = { setHighlight, dispose(){
+    alive = false; cancelAnimationFrame(raf); ro.disconnect();
+    renderer.domElement.removeEventListener("pointerdown", onDown);
+    window.removeEventListener("pointerup", onUp);
+    geom.dispose(); mat.dispose(); spriteTex.dispose(); renderer.dispose();
+  }};
+}
+
+function buildLegend(clusters, cmap, onFocus){
+  const lg = $("#vizLegend");
+  if (!lg) return;
+  lg.innerHTML = `<div class="vlh">clusters</div>`;
+  // sort by count desc for a readable legend
+  const sorted = clusters.slice().sort((a,b)=>(b.count||0)-(a.count||0));
+  sorted.forEach(c => {
+    const row = document.createElement("div"); row.className = "vlrow";
+    row.innerHTML = `<span class="sw" style="background:${c.color||"#999"}"></span>`
+      + `<span class="vll" title="${esc(c.label||"")}">${esc(c.label||("cluster "+c.id))}</span>`
+      + `<span class="vlc">${(c.count||0).toLocaleString()}</span>`;
+    row.addEventListener("mouseenter", () => onFocus(c.id));
+    row.addEventListener("mouseleave", () => onFocus(null));
+    lg.appendChild(row);
+  });
+}
+
+function hexToRgb(hex){
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex||"");
+  if (!m) return [0.6,0.6,0.6];
+  return [parseInt(m[1],16)/255, parseInt(m[2],16)/255, parseInt(m[3],16)/255];
+}
+function makeSoftDiscTexture(THREE){
+  const s = 64, cv = document.createElement("canvas"); cv.width=cv.height=s;
+  const g = cv.getContext("2d");
+  const grad = g.createRadialGradient(s/2,s/2,0, s/2,s/2,s/2);
+  grad.addColorStop(0,  "rgba(255,255,255,1)");
+  grad.addColorStop(0.45,"rgba(255,255,255,0.9)");
+  grad.addColorStop(1,  "rgba(255,255,255,0)");
+  g.fillStyle = grad; g.beginPath(); g.arc(s/2,s/2,s/2,0,Math.PI*2); g.fill();
+  const t = new THREE.CanvasTexture(cv); t.needsUpdate = true; return t;
+}
+// minimal orbit fallback if OrbitControls module is unreachable
+function manualOrbit(camera, el){
+  let theta=0, phi=0, r=3.1, down=false, px=0, py=0;
+  el.addEventListener("pointerdown", e=>{ down=true; px=e.clientX; py=e.clientY; });
+  window.addEventListener("pointerup", ()=> down=false);
+  window.addEventListener("pointermove", e=>{
+    if(!down) return;
+    theta -= (e.clientX-px)*0.005; phi -= (e.clientY-py)*0.005;
+    phi = Math.max(-1.3, Math.min(1.3, phi)); px=e.clientX; py=e.clientY;
+  });
+  el.addEventListener("wheel", e=>{ e.preventDefault(); r = Math.max(1.2, Math.min(8, r + e.deltaY*0.002)); }, {passive:false});
+  return { update(){
+    camera.position.set(
+      r*Math.cos(phi)*Math.sin(theta),
+      r*Math.sin(phi),
+      r*Math.cos(phi)*Math.cos(theta));
+    camera.lookAt(0,0,0);
+  }};
+}
+
+/* ============================================================================
+   FEATURE 2 — Debug panel ('d' key): thumbnail size + items per row
+   ========================================================================== */
+const DBG_KEY = "muser.debug.grid";
+let _dbgPanel = null;
+const _dbgDefaults = { thumb: 230, cols: 0 };            // cols 0 = auto-fill (default)
+function _dbgLoad(){
+  try { return Object.assign({}, _dbgDefaults, JSON.parse(localStorage.getItem(DBG_KEY)||"{}")); }
+  catch { return Object.assign({}, _dbgDefaults); }
+}
+function _dbgSave(s){ try { localStorage.setItem(DBG_KEY, JSON.stringify(s)); } catch {} }
+function applyGridSettings(){
+  const s = _dbgLoad();
+  let style = document.getElementById("dbgStyle");
+  if (!style){ style = document.createElement("style"); style.id="dbgStyle"; document.head.appendChild(style); }
+  // cols 0 → auto-fill with the thumb size as min track; cols N → exactly N columns.
+  const cols = s.cols > 0
+    ? `repeat(${s.cols}, 1fr)`
+    : `repeat(auto-fill, minmax(${s.thumb}px, 1fr))`;
+  style.textContent = `.grid { grid-template-columns:${cols} !important; }`;
+}
+function isTypingTarget(t){
+  if (!t) return false;
+  const tag = (t.tagName||"").toLowerCase();
+  return tag==="input" || tag==="textarea" || tag==="select" || t.isContentEditable;
+}
+function toggleDebugPanel(){
+  if (_dbgPanel){ _dbgPanel.remove(); _dbgPanel = null; return; }
+  const s = _dbgLoad();
+  const el = document.createElement("div"); el.id = "dbgPanel";
+  el.innerHTML = `
+    <h4>debug <small>press d / esc</small></h4>
+    <div class="dbgrow">
+      <label>thumbnail size <b id="dbgThumbV">${s.thumb}px</b></label>
+      <input type="range" id="dbgThumb" min="120" max="480" step="10" value="${s.thumb}">
+    </div>
+    <div class="dbgrow">
+      <label>items per row <b id="dbgColsV">${s.cols>0?s.cols:"auto"}</b></label>
+      <input type="range" id="dbgCols" min="0" max="12" step="1" value="${s.cols}">
+    </div>
+    <button id="dbgReset" type="button">reset</button>
+    <div id="dbgHint">live-applied to every grid · saved locally</div>`;
+  document.body.appendChild(el);
+  _dbgPanel = el;
+  const thumb = el.querySelector("#dbgThumb"), cols = el.querySelector("#dbgCols");
+  const tv = el.querySelector("#dbgThumbV"), cv = el.querySelector("#dbgColsV");
+  const persist = () => {
+    const ns = { thumb: +thumb.value, cols: +cols.value };
+    tv.textContent = ns.thumb+"px"; cv.textContent = ns.cols>0?ns.cols:"auto";
+    _dbgSave(ns); applyGridSettings();
+  };
+  thumb.addEventListener("input", persist);
+  cols.addEventListener("input", persist);
+  el.querySelector("#dbgReset").onclick = () => {
+    _dbgSave(Object.assign({}, _dbgDefaults));
+    thumb.value=_dbgDefaults.thumb; cols.value=_dbgDefaults.cols;
+    tv.textContent=_dbgDefaults.thumb+"px"; cv.textContent="auto";
+    applyGridSettings();
+  };
+}
+// global keybind — 'd' toggles, only when NOT typing; Esc closes
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && _dbgPanel){ toggleDebugPanel(); return; }
+  if (e.key !== "d" && e.key !== "D") return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;         // don't hijack ⌘D etc.
+  if (isTypingTarget(e.target)) return;                   // typing 'd' in search must not trigger
+  e.preventDefault();
+  toggleDebugPanel();
+});
+applyGridSettings();                                       // apply saved settings at boot
+
+/* ============================================================================
+   FEATURE 3 — Photo detail: run upscale + before/after slider
+   ========================================================================== */
+async function runUpscale(d, btn){
+  if (btn.dataset.busy === "1") return;
+  btn.dataset.busy = "1";
+  const old = btn.textContent;
+  btn.innerHTML = `<span class="spinner" style="vertical-align:-1px"></span> Upscaling…`;
+  btn.disabled = true;
+  let blobUrl = null;
+  try {
+    const r = await fetch(`/api/upscale?path=${enc(d.path)}`);
+    if (!r.ok){ throw new Error("upscale failed (" + r.status + ")"); }
+    const blob = await r.blob();
+    blobUrl = URL.createObjectURL(blob);
+  } catch (e){
+    btn.disabled = false; btn.dataset.busy = "0"; btn.textContent = old;
+    toast("Upscale failed — " + (e.message||"error")); return;
+  }
+  btn.disabled = false; btn.dataset.busy = "0"; btn.textContent = old;
+  mountBeforeAfter(d, blobUrl);
+}
+function mountBeforeAfter(d, upscaledUrl){
+  // Replace the detail image block with a draggable before/after comparison.
+  const host = document.querySelector("#dbody .dwrap > div:first-child");
+  if (!host){ toast("Upscaled (no image slot found)"); return; }
+  const origUrl = `/api/image?path=${enc(d.path)}`;
+  const wrap = document.createElement("div"); wrap.className = "baWrap";
+  wrap.innerHTML = `
+    <img class="baBase" src="${upscaledUrl}" alt="upscaled">
+    <div class="baBefore"><img src="${origUrl}" alt="original"></div>
+    <span class="baTag before">Before</span>
+    <span class="baTag after">After</span>
+    <div class="baHandle"></div>`;
+  host.innerHTML = "";
+  host.appendChild(wrap);
+  // revert control
+  const ctl = document.createElement("div"); ctl.className = "baCtl";
+  ctl.innerHTML = `<span class="mut">drag the divider · original ↔ upscaled</span>`
+    + `<button type="button" class="baRevert">revert</button>`;
+  host.appendChild(ctl);
+
+  const before = wrap.querySelector(".baBefore");
+  const handle = wrap.querySelector(".baHandle");
+  let pct = 50;
+  function setPct(p){
+    pct = Math.max(0, Math.min(100, p));
+    // .baBefore reveals the ORIGINAL on the left of the divider
+    before.style.clipPath = `inset(0 ${100-pct}% 0 0)`;
+    handle.style.left = pct + "%";
+  }
+  setPct(50);
+  let drag = false;
+  const xToPct = (clientX) => {
+    const rc = wrap.getBoundingClientRect();
+    return ((clientX - rc.left) / rc.width) * 100;
+  };
+  const onMove = (e) => { if (!drag) return; setPct(xToPct(e.clientX)); };
+  handle.addEventListener("pointerdown", (e)=>{ drag=true; handle.setPointerCapture(e.pointerId); });
+  wrap.addEventListener("pointerdown", (e)=>{ if(e.target===handle) return; drag=true; setPct(xToPct(e.clientX)); });
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", ()=> drag=false);
+
+  ctl.querySelector(".baRevert").onclick = () => {
+    URL.revokeObjectURL(upscaledUrl);
+    host.innerHTML = `
+      <a href="${origUrl}" target="_blank">
+        <img class="dimg" src="${origUrl}" alt="${esc(d.name||"")}" />
+      </a>`;
+  };
+}
+
+/* ============================================================================
+   FEATURE 4 — 3D results: wireframe toggle (true wireframe via model-viewer scene)
+   ========================================================================== */
+function wireWireframeToggle(mv, btn){
+  if (!mv || !btn) return;
+  let on = false;
+  const apply = () => {
+    // Reach into model-viewer's three.js scene graph. mv.model exposes the
+    // loaded GLTF; traverse meshes and flip material.wireframe. If unreachable
+    // (no model yet, or API not exposed), fall back to hiding the texture map.
+    let touched = 0, fallback = false;
+    try {
+      const model = mv.model;                              // model-viewer's Model wrapper
+      const root = model && (model[Object.getOwnPropertySymbols(model).find(s=>{
+        try { return model[s] && model[s].isObject3D; } catch { return false; }
+      })]);
+      // Prefer the documented-ish path: mv.model.materials -> but wireframe lives on
+      // three materials, so traverse the scene object if we can find it.
+      const scene = (mv[Object.getOwnPropertySymbols(mv).find(s=>{
+        try { const v = mv[s]; return v && v.modelContainer; } catch { return false; }
+      })] || {}).modelContainer || root;
+      if (scene && scene.traverse){
+        scene.traverse(o => {
+          if (o.isMesh && o.material){
+            const mats = Array.isArray(o.material) ? o.material : [o.material];
+            mats.forEach(m => {
+              if (on){
+                m.userData._wfPrevMap = m.map; m.userData._wfPrevWire = m.wireframe;
+                m.wireframe = true;
+              } else {
+                if ("_wfPrevWire" in m.userData) m.wireframe = m.userData._wfPrevWire;
+                else m.wireframe = false;
+              }
+              m.needsUpdate = true; touched++;
+            });
+          }
+        });
+      } else { fallback = true; }
+    } catch { fallback = true; }
+
+    if (!touched && on){
+      // No mesh reachable (no live model, or scene graph not exposed): flat
+      // untextured fallback via model-viewer attributes, clearly labeled.
+      fallback = true;
+      mv.removeAttribute("environment-image");
+      mv.style.setProperty("--poster-color", "transparent");
+    }
+    // Restore-on-off for the fallback path
+    if (!on && fallback){ /* attributes restored implicitly; nothing texture to undo */ }
+
+    btn.classList.toggle("on", on);
+    btn.innerHTML = on
+      ? `Wireframe ✓${ (touched? "" : `<span class="wfnote">(flat — no mesh reachable)</span>`) }`
+      : `Wireframe`;
+    if (on && !touched) toast("No live mesh — showing flat fallback");
+  };
+  btn.onclick = () => {
+    if (!mv.model && !mv.loaded){ toast("No 3D model loaded yet"); return; }
+    on = !on; apply();
+  };
 }
 </script>
 </body>
