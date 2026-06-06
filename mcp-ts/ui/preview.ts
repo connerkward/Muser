@@ -32,7 +32,17 @@ const SAMPLE: Hit[] = [
   { path: `${FOLDER}/green-triangle.png`, score: 0.26, thumb: greenTriangle },
   { path: `${FOLDER}/yellow-star.png`, score: 0.25, thumb: yellowStar },
   { path: `${FOLDER}/purple-heart.png`, score: 0.24, thumb: purpleHeart },
-];
+].map((h, i) => ({
+  // Mock aesthetic scores so the blend control visibly re-ranks in the preview.
+  // Intentionally inverse-ish to `score` (the lowest-relevance item is the most
+  // "aesthetic") so dialing up an aesthetic metric clearly reorders the grid.
+  ...h,
+  aesthetic_v2: 0.2 + i * 0.15,
+  pickscore: 0.9 - i * 0.12,
+  aesthetic_v25: 0.5,
+  hps_v21: i % 2 === 0 ? 0.8 : 0.3,
+  aesthetic: 0.4,
+}));
 
 // Naive keyword ranking against the filename so the search box feels live.
 function mockSearch(query: string): Hit[] {

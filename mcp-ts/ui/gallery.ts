@@ -22,6 +22,14 @@ export interface Hit {
   /** base64 thumb per dupe path, supplied inline by the server (the sandboxed
    *  iframe can't fetch /api/thumb). Falls back to the card thumb if absent. */
   dupeThumbs?: Record<string, string | null>;
+  // ---- Per-result aesthetic scores (0–1), inlined by /api/search ----------
+  // Used by the blend control to re-rank: final = Σ wᵢ·(hit[field] ?? 0).
+  // Present on text/embedding hits; absent (→ treated as 0) on color/reverse.
+  aesthetic_v2?: number;
+  pickscore?: number;
+  aesthetic_v25?: number;
+  hps_v21?: number;
+  aesthetic?: number;
 }
 export interface Payload {
   /** Which search produced these results — selects the active tab on render. */
@@ -76,6 +84,80 @@ const COLOR_PRESETS = [
   "#c83c3c", "#e08a2a", "#e8d44a", "#4a9e4a", "#3a7bd5",
   "#7a4ad0", "#d04a9e", "#1a1a1a", "#ffffff",
 ];
+
+// ---- Aesthetic-blend re-rank model -----------------------------------------
+// The blend re-orders the CURRENT result set client-side by a linear sum:
+//   final = Σ wᵢ · (hit[field] ?? 0)
+// where the weights are *shares* that sum to 1 over the enabled metrics. The
+// per-result aesthetic scores are inlined by /api/search (already 0–1 normalized
+// & comparable), so a plain weighted sum is exactly right — same math the main
+// web UI uses. "Relevance" is the embedding cosine (`score`). Default is
+// Relevance 100% → pure embedding order, identical to today.
+interface BlendMetric {
+  id: string;
+  /** Key on a Hit (and the localStorage share map). */
+  field: keyof Hit;
+  label: string;
+  color: string;
+  hint: string;
+}
+const BLEND_METRICS: readonly BlendMetric[] = [
+  { id: "vec", field: "score", label: "Relevance", color: "#5b6b86", hint: "Vector / embedding match — the primary signal." },
+  { id: "aes", field: "aesthetic_v2", label: "Aesthetic V2", color: "#a9823f", hint: "LAION Aesthetics V2 — how 'pretty' the image is." },
+  { id: "ps", field: "pickscore", label: "PickScore", color: "#9c5f74", hint: "PickScore — human-preference proxy (Pick-a-Pic)." },
+  { id: "aes25", field: "aesthetic_v25", label: "Aesthetic V2.5", color: "#5f7d5e", hint: "LAION Aesthetics V2.5 — refined successor to V2." },
+  { id: "hps", field: "hps_v21", label: "HPS v2.1", color: "#736a8c", hint: "Human Preference Score — prompt-aware preference." },
+  { id: "aes0", field: "aesthetic", label: "Zero-shot", color: "#5a8487", hint: "Zero-shot CLIP aesthetic prompt — fast but weak." },
+];
+const BLEND_KEY = "muser.mcp.blend";
+interface BlendState {
+  shares: Record<string, number>;
+  enabled: Record<string, boolean>;
+}
+// Normalize a {id:weight} map to shares summing to 1 over the *enabled* ids.
+// Disabled ids → 0. If every enabled weight is 0, spread evenly so the bar is
+// never empty.
+function normShares(weights: Record<string, number>, enabled: Record<string, boolean>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const m of BLEND_METRICS) out[m.id] = 0;
+  const on = BLEND_METRICS.filter((m) => enabled[m.id]);
+  if (!on.length) return out;
+  const tot = on.reduce((s, m) => s + Math.max(0, weights[m.id] ?? 0), 0);
+  if (tot <= 1e-9) {
+    for (const m of on) out[m.id] = 1 / on.length;
+    return out;
+  }
+  for (const m of on) out[m.id] = Math.max(0, weights[m.id] ?? 0) / tot;
+  return out;
+}
+function defaultBlend(): BlendState {
+  // Relevance 100%; aesthetic metrics enabled at 0 so toggling them on is one
+  // click. Pure-embedding order out of the box (unchanged from today).
+  const enabled: Record<string, boolean> = {};
+  const shares: Record<string, number> = {};
+  for (const m of BLEND_METRICS) {
+    enabled[m.id] = m.id === "vec";
+    shares[m.id] = m.id === "vec" ? 1 : 0;
+  }
+  return { shares, enabled };
+}
+function loadBlend(): BlendState {
+  let s: Partial<BlendState> | null = null;
+  try {
+    s = JSON.parse(localStorage.getItem(BLEND_KEY) ?? "null");
+  } catch {
+    s = null;
+  }
+  if (!s || !s.shares || !s.enabled) return defaultBlend();
+  const def = defaultBlend();
+  const enabled: Record<string, boolean> = {};
+  const shares: Record<string, number> = {};
+  for (const m of BLEND_METRICS) {
+    enabled[m.id] = s.enabled[m.id] != null ? !!s.enabled[m.id] : def.enabled[m.id]!;
+    shares[m.id] = s.shares[m.id] != null ? +s.shares[m.id]! : 0;
+  }
+  return { shares: normShares(shares, enabled), enabled };
+}
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -372,6 +454,219 @@ export function createGallery(handlers: GalleryHandlers): Gallery {
 
   let folder = "";
 
+  // ---- Aesthetic-blend re-rank control -------------------------------------
+  // A compact allocation bar (Relevance + 5 aesthetic models) that re-orders the
+  // current results client-side. State persists to localStorage; the blend
+  // re-applies whenever results change OR weights change. The grid is rebuilt
+  // from `lastResults` (the raw service order) re-sorted by the blend key.
+  // `#blend` may be absent in a minimal host HTML — degrade gracefully (no
+  // control, results render in plain service order).
+  const blendBox = document.getElementById("blend") as HTMLDivElement | null;
+  let blend = loadBlend();
+  let lastResults: Hit[] = [];
+
+  const blendKey = (h: Hit): number =>
+    BLEND_METRICS.reduce((sum, m) => {
+      const w = blend.enabled[m.id] ? blend.shares[m.id] ?? 0 : 0;
+      if (w <= 0) return sum;
+      const v = h[m.field];
+      return sum + w * (typeof v === "number" ? v : 0);
+    }, 0);
+
+  /** A stable, blend-ordered copy of the current results. Stable because we tag
+   *  each hit with its original index and break ties on it — so equal-key hits
+   *  (e.g. color results with no aesthetic fields) keep the service order. */
+  function blendOrdered(): Hit[] {
+    return lastResults
+      .map((h, i) => ({ h, i, k: blendKey(h) }))
+      .sort((a, b) => b.k - a.k || a.i - b.i)
+      .map((x) => x.h);
+  }
+
+  function saveBlend(): void {
+    try {
+      localStorage.setItem(BLEND_KEY, JSON.stringify(blend));
+    } catch {
+      /* private mode / quota — non-fatal, just don't persist */
+    }
+  }
+
+  /** True when the blend would change the pure-embedding order (anything other
+   *  than Relevance-only carries weight). Drives a subtle "active" hint. */
+  function blendActive(): boolean {
+    return BLEND_METRICS.some(
+      (m) => m.id !== "vec" && blend.enabled[m.id] && (blend.shares[m.id] ?? 0) > 1e-9,
+    );
+  }
+
+  // Repaint segment widths + legend percentages from `blend`.
+  function paintBlend(): void {
+    const on = BLEND_METRICS.filter((m) => blend.enabled[m.id]);
+    for (const m of BLEND_METRICS) {
+      const seg = segEls.get(m.id);
+      const pc = pcEls.get(m.id);
+      const leg = legEls.get(m.id);
+      const lv = legValEls.get(m.id);
+      const share = blend.enabled[m.id] ? blend.shares[m.id] ?? 0 : 0;
+      const pct = Math.round(share * 100);
+      if (seg) {
+        seg.style.flexBasis = share * 100 + "%";
+        seg.style.display = blend.enabled[m.id] ? "" : "none";
+        seg.classList.toggle("tiny", pct < 8);
+        seg.title = `${m.label} · ${pct}% — ${m.hint}`;
+      }
+      if (pc) pc.textContent = pct + "%";
+      if (leg) leg.classList.toggle("off", !blend.enabled[m.id]);
+      if (lv) lv.textContent = blend.enabled[m.id] ? pct + "%" : "off";
+    }
+    blendBox?.classList.toggle("active", blendActive());
+    if (resetBtn) resetBtn.disabled = !blendActive();
+  }
+
+  /** Set one metric's share (0–1), re-normalizing the OTHER enabled metrics to
+   *  fill the remainder — so the bar always sums to 100%. Mirrors the web UI's
+   *  allocation-drag semantics in a slider form. */
+  function setShare(id: string, value: number): void {
+    value = Math.max(0, Math.min(1, value));
+    const others = BLEND_METRICS.map((m) => m.id).filter(
+      (x) => x !== id && blend.enabled[x],
+    );
+    blend.shares[id] = value;
+    const rest = 1 - value;
+    const otherTot = others.reduce((s, x) => s + (blend.shares[x] ?? 0), 0);
+    if (others.length) {
+      if (otherTot <= 1e-9) {
+        for (const x of others) blend.shares[x] = rest / others.length;
+      } else {
+        for (const x of others) blend.shares[x] = ((blend.shares[x] ?? 0) / otherTot) * rest;
+      }
+    }
+    paintBlend();
+    saveBlend();
+    rerank();
+  }
+
+  function toggleMetric(id: string, enable: boolean): void {
+    blend.enabled[id] = enable;
+    blend.shares = normShares(blend.shares, blend.enabled);
+    paintBlend();
+    syncSliders();
+    saveBlend();
+    rerank();
+  }
+
+  function resetBlend(): void {
+    blend = defaultBlend();
+    paintBlend();
+    syncSliders();
+    saveBlend();
+    rerank();
+  }
+
+  // Build the control once: a segmented bar + a legend row of toggle+slider per
+  // metric. Element maps let paintBlend() mutate in place (no teardown).
+  const segEls = new Map<string, HTMLElement>();
+  const pcEls = new Map<string, HTMLElement>();
+  const legEls = new Map<string, HTMLElement>();
+  const legValEls = new Map<string, HTMLElement>();
+  const sliderEls = new Map<string, HTMLInputElement>();
+  let resetBtn: HTMLButtonElement | null = null;
+
+  function syncSliders(): void {
+    for (const m of BLEND_METRICS) {
+      const sl = sliderEls.get(m.id);
+      if (sl) sl.value = String(Math.round((blend.shares[m.id] ?? 0) * 100));
+    }
+  }
+
+  function buildBlendControl(): void {
+    if (!blendBox) return;
+    blendBox.replaceChildren();
+
+    const head = document.createElement("div");
+    head.className = "blend-head";
+    const title = Object.assign(document.createElement("span"), {
+      className: "blend-title",
+      textContent: "Blend",
+      title:
+        "Re-rank results by a weighted mix of relevance + aesthetic models. " +
+        "Re-orders the current results only — it never changes which images matched.",
+    });
+    resetBtn = Object.assign(document.createElement("button"), {
+      type: "button",
+      className: "blend-reset ghost",
+      textContent: "Reset",
+      title: "Back to Relevance 100% (pure embedding order)",
+    });
+    resetBtn.addEventListener("click", resetBlend);
+    head.append(title, resetBtn);
+
+    const bar = document.createElement("div");
+    bar.className = "blend-bar";
+    for (const m of BLEND_METRICS) {
+      const seg = document.createElement("div");
+      seg.className = "blend-seg";
+      seg.style.background = m.color;
+      const pc = Object.assign(document.createElement("span"), { className: "blend-pc" });
+      seg.append(pc);
+      bar.append(seg);
+      segEls.set(m.id, seg);
+      pcEls.set(m.id, pc);
+    }
+
+    const legend = document.createElement("div");
+    legend.className = "blend-legend";
+    for (const m of BLEND_METRICS) {
+      const row = document.createElement("label");
+      row.className = "blend-leg";
+      const cb = Object.assign(document.createElement("input"), { type: "checkbox" });
+      cb.checked = !!blend.enabled[m.id];
+      cb.addEventListener("change", () => toggleMetric(m.id, cb.checked));
+      const dot = document.createElement("span");
+      dot.className = "blend-dot";
+      dot.style.background = m.color;
+      const name = Object.assign(document.createElement("span"), {
+        className: "blend-name",
+        textContent: m.label,
+      });
+      const slider = Object.assign(document.createElement("input"), {
+        type: "range",
+        min: "0",
+        max: "100",
+        step: "1",
+        className: "blend-slider",
+      });
+      slider.value = String(Math.round((blend.shares[m.id] ?? 0) * 100));
+      slider.title = m.hint;
+      slider.addEventListener("input", () => {
+        // Dragging a disabled metric's slider implicitly enables it.
+        if (!blend.enabled[m.id]) {
+          cb.checked = true;
+          blend.enabled[m.id] = true;
+        }
+        setShare(m.id, (parseFloat(slider.value) || 0) / 100);
+      });
+      const val = Object.assign(document.createElement("span"), { className: "blend-val" });
+      row.append(cb, dot, name, slider, val);
+      legend.append(row);
+      legEls.set(m.id, row);
+      legValEls.set(m.id, val);
+      sliderEls.set(m.id, slider);
+    }
+
+    blendBox.append(head, bar, legend);
+    paintBlend();
+  }
+
+  /** Re-render the grid in blend order from the current results, without a new
+   *  search. Cheap: it just reorders existing DOM-equivalent data. */
+  function rerank(): void {
+    if (!lastResults.length) return;
+    renderCards(blendOrdered());
+  }
+
+  buildBlendControl();
+
   function render(p: Payload): void {
     if (p.mode) setMode(p.mode);
     if (typeof p.folder === "string") {
@@ -379,19 +674,31 @@ export function createGallery(handlers: GalleryHandlers): Gallery {
       if (scope && p.folder) scope.value = p.folder;
     }
     if (typeof p.query === "string" && (p.mode ?? "text") === "text") input.value = p.query;
-    grid.replaceChildren();
-    if (!p.results?.length) {
+    lastResults = p.results ?? [];
+    if (!lastResults.length) {
+      grid.replaceChildren();
+      if (blendBox) blendBox.hidden = true;
       setStatus(`No matches${folder ? " in " + folder : ""}.`);
       return;
     }
     const scopeLbl = folder || "library";
-    setStatus(`${p.results.length} result${p.results.length === 1 ? "" : "s"} · ${scopeLbl}`);
-    // Render in the exact order the service returned — i.e. embedding-similarity
-    // (cosine kNN) order. Do NOT sort or filter by aesthetic/sort-blend scores
-    // here; selection and ordering must stay pure embedding. The per-card score
-    // badge below shows the embedding score (calibrated prob when present),
-    // which is fine — it's display only and doesn't affect ordering.
-    for (const hit of p.results) {
+    setStatus(`${lastResults.length} result${lastResults.length === 1 ? "" : "s"} · ${scopeLbl}`);
+    // Show the blend control whenever there are results, and render in the
+    // user's chosen blend order. Default blend = Relevance 100%, so this is the
+    // service's exact embedding-similarity (cosine kNN) order out of the box;
+    // any aesthetic weight the user dials in re-ranks this same result set
+    // client-side (missing aesthetic fields, e.g. color/reverse hits → 0).
+    if (blendBox) blendBox.hidden = false;
+    syncSliders();
+    paintBlend();
+    renderCards(blendOrdered());
+  }
+
+  /** Build the result grid from an already-ordered hit list. Pure DOM work —
+   *  called by `render` (new results) and `rerank` (weights changed). */
+  function renderCards(hits: Hit[]): void {
+    grid.replaceChildren();
+    for (const hit of hits) {
       const name = hit.path.split("/").pop() ?? hit.path;
       const card = document.createElement("div");
       card.className = "card";

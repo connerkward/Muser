@@ -216,6 +216,110 @@ input[type="color"] {
   text-transform: lowercase;
 }
 
+/* ---- Aesthetic-blend re-rank control ----------------------------------- */
+/* Compact: a thin segmented allocation bar + a small per-metric legend of
+   checkbox-toggle + slider. Re-orders the current results client-side. */
+.blend {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--paper) 55%, transparent);
+}
+.blend[hidden] { display: none; }
+.blend-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.blend-title {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--mut);
+}
+.blend.active .blend-title { color: var(--fg); }
+.blend-reset {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 2px 6px;
+}
+.blend-bar {
+  display: flex;
+  height: 14px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--paper);
+}
+.blend-seg {
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 0;
+  display: grid;
+  place-items: center;
+  transition: flex-basis 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  overflow: hidden;
+}
+.blend-pc {
+  font-size: 9px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.92);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.blend-seg.tiny .blend-pc { display: none; }
+.blend-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 4px 16px;
+  margin-top: 10px;
+}
+.blend-leg {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.blend-leg.off { color: var(--mut); }
+.blend-leg input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 auto;
+  accent-color: var(--fg);
+  cursor: pointer;
+}
+.blend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.blend-leg.off .blend-dot { opacity: 0.4; }
+.blend-name { flex: 0 0 88px; white-space: nowrap; }
+.blend-slider {
+  flex: 1 1 auto;
+  min-width: 40px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  accent-color: var(--mut);
+  cursor: pointer;
+}
+.blend-leg.off .blend-slider { opacity: 0.5; }
+.blend-val {
+  flex: 0 0 30px;
+  text-align: right;
+  font-size: 10px;
+  color: var(--mut);
+  font-variant-numeric: tabular-nums;
+}
+
 #status { font-size: 12px; color: var(--mut); margin: 14px 2px 0; }
 .preview-note {
   font-size: 11px;

@@ -45,6 +45,11 @@
       <span class="mut" id="imgName">Reverse image search — drag an image onto the gallery, or pick one, to find visually similar images in your library.</span>
     </div>
 
+    <!-- Blend (aesthetic re-rank) control — populated by gallery.ts. A compact
+         allocation bar over Relevance + 5 aesthetic models; re-ranks the current
+         results client-side by a weighted sum of the per-result scores. -->
+    <div id="blend" class="blend" hidden></div>
+
     <div id="status">Connecting…</div>
 
     <!-- Drag-and-drop reverse-image search target: dropping an image file anywhere

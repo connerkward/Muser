@@ -20,6 +20,20 @@ export interface SearchHit {
   dupes?: string[];
   /** Number of duplicate files (length of `dupes`). 1 when unique. */
   dupe_count?: number;
+  // ---- Per-result aesthetic scores, inlined by /api/search (0–1 normalized) --
+  // Present on text/embedding hits; absent on color/reverse-image hits. The
+  // gallery's blend control re-ranks by a weighted sum of these (missing → 0).
+  // `score` (embedding cosine, above) is the "Relevance" term of that blend.
+  /** LAION Aesthetics V2 predictor. */
+  aesthetic_v2?: number;
+  /** PickScore — human-preference proxy (Pick-a-Pic). */
+  pickscore?: number;
+  /** LAION Aesthetics V2.5 — refined successor to V2. */
+  aesthetic_v25?: number;
+  /** Human Preference Score v2.1 — prompt-aware preference. */
+  hps_v21?: number;
+  /** Zero-shot CLIP aesthetic prompt. */
+  aesthetic?: number;
 }
 /** Pseudo-relevance-feedback chip the service returns alongside results:
  *  a cluster label common to the top hits ("you might also try"). */
