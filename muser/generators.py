@@ -38,7 +38,7 @@ EP_CUTOUT = "fal-ai/birefnet/v2"
 # (cleaner topology, recognizable geometry). Multiview still uses Hunyuan since it
 # accepts the left/back/right extra views.
 EP_IMAGE_TO_3D = "fal-ai/meshy/v6/image-to-3d"
-EP_MULTIVIEW_3D = "fal-ai/hunyuan3d-v3/image-to-3d"
+EP_MULTIVIEW_3D = "fal-ai/meshy/v6/multi-image-to-3d"
 EP_EXPAND = "fal-ai/any-llm/vision"
 EP_LORA_TRAIN = "fal-ai/flux-lora-fast-training"
 EP_LORA_GEN = "fal-ai/flux-lora"
@@ -426,24 +426,21 @@ def image_to_3d_multiview(
     back_url: str | None = None,
     right_url: str | None = None,
 ) -> dict:
-    """Hunyuan3D v3 **multi-view** image→3D.
+    """Meshy 6 **multi-image** image→3D.
 
-    Same endpoint as :func:`image_to_3d` but feeds the optional
-    ``left_image_url`` / ``back_image_url`` / ``right_image_url`` extra views for a
-    more faithful reconstruction. Missing views are simply omitted (the endpoint
-    treats them as optional). Returns ``{"glb": <url>, "thumbnail": <url|None>}``.
+    Meshy's ``multi-image-to-3d`` takes a flat ``image_urls`` array (1–4 images of
+    the *same object from different angles*) with no per-view semantics, so the
+    available views are passed in front, left, back, right order; missing views are
+    simply omitted (front is required). ``target_polycount`` matches the single-image
+    path. Returns ``{"glb": <url>, "thumbnail": <url|None>}`` (unchanged contract).
     """
+    image_urls = [
+        u for u in (front_url, left_url, back_url, right_url) if u
+    ]
     body: dict = {
-        "input_image_url": front_url,
-        "generate_type": "Normal",
-        "face_count": 500000,
+        "image_urls": image_urls,
+        "target_polycount": 50000,
     }
-    if left_url:
-        body["left_image_url"] = left_url
-    if back_url:
-        body["back_image_url"] = back_url
-    if right_url:
-        body["right_image_url"] = right_url
     resp = fal_run(EP_MULTIVIEW_3D, body)
     glb = (resp.get("model_glb") or {}).get("url")
     thumb = (resp.get("thumbnail") or {}).get("url")

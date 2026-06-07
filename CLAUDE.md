@@ -1,10 +1,14 @@
 # Muser — agent notes
 
-Local-first semantic image search with a built-in retrieval-eval harness.
+Local-first semantic image search with a built-in retrieval-eval harness, plus a
+fal.ai **generate** pipeline (text/image→image, 3D, LoRA) layered on the cart.
 **Python 3.12 + uv.** A TypeScript MCP ext-app lives in `mcp-ts/` — a thin HTTP
 client of the embedded service (`muser serve`) that renders results in an
 interactive gallery UI inside Claude Desktop. It loads no model and never touches
-LanceDB; it proxies `/api/search`, `/api/thumb`, `/api/index`, `/api/status`.
+LanceDB; it proxies the JSON API. Search tools (`search_images` w/ folder scope,
+`search_by_color` multi-hex, `search_similar` reverse-image) return a numbered
+**contact sheet** image (top 36) + top-3 detail thumbs so the *model* sees the
+results, plus a hidden LLM-facing metadata block; the *user* gets the full gallery.
 
 See `REQUIREMENTS.md` for scope/decisions.
 
@@ -18,15 +22,24 @@ See `REQUIREMENTS.md` for scope/decisions.
 - `muser/index.py` — `MuserIndex`: one embedded LanceDB at `~/.muser/db`, one
   table per model (`img__<model>`), cosine over L2-normalized vectors.
   Incremental by mtime; skips corrupt files.
-- `muser/cli.py` — `muser` entrypoint (typer): `index`, `search`, `bench`,
-  `models`, `cluster`, `score`, `detect`, `serve`, `web`. `detect` runs the C2PA
-  library scan headless (writes `~/.muser/c2pa.json`; same data the web "AI" tab uses).
+- `muser/cli.py` — `muser` entrypoint (typer): `index`, `reindex-metadata`, `search`,
+  `bench`, `models`, `cluster`, `score`, `caption`, `detect`, `color`, `serve`, `web`,
+  `uid`. `detect` runs the C2PA library scan headless (writes `~/.muser/c2pa.json`; same
+  data the web "AI" tab uses). The generate pipeline is web/MCP-only (no CLI command).
 - `muser/service.py` — **embedded service** (`muser serve`): FastAPI app that warms
   the model once and owns the index; serves JSON API + the web search UI
   (`muser/web/app.html`). Warm search ≈ 40 ms (precomputed dedup, see below).
-  Endpoints: /api/search, /api/index,
-  /api/thumb (PIL), /api/image, /api/reveal (open -R), /api/model, /api/status,
-  /api/folders, /api/c2pa, /api/ai, /api/ai/scan. **AI-origin detection (C2PA):**
+  Endpoints: /api/search, /api/search-upload (multipart image→image), /api/search-color
+  (multi-hex CSV + `mode=all|any`), /api/search-image, /api/search-compose, /api/filter,
+  /api/index, /api/thumb (PIL), /api/image, /api/upscale (4× → cached + /tmp mirror, for
+  the photo before/after slider), /api/projection (3D PCA cloud), /api/contact-sheet
+  (numbered montage for the MCP→LLM), /api/reveal (open -R), /api/model, /api/status,
+  /api/folders, /api/c2pa, /api/ai, /api/ai/scan, /api/color[/scan], GET|POST
+  /api/demo-mode. **Generate pipeline:** POST /api/checkout (`mode=zip|generate`),
+  /api/checkout/status, /api/checkout/zip, /api/pipelines, /api/pipeline/{id},
+  /api/pipeline/{id}/file/{path} (path-traversal-guarded static serve incl. .glb),
+  POST /api/pipeline/{id}/threed (`multi_angle`, post-hoc 3D on a generated output).
+  **AI-origin detection (C2PA):**
   `c2patool` (optional, `brew install c2patool`) reads a file's signed Content
   Credentials and reports whether they *declare* it AI-generated/-edited (IPTC
   `trainedAlgorithmicMedia` / `compositeWithTrainedAlgorithmicMedia`). Two surfaces,
@@ -68,21 +81,52 @@ See `REQUIREMENTS.md` for scope/decisions.
   "Caption missing (N)" button POSTs to `/api/caption-bulk`, which drives the
   existing busy overlay via `state.task = {"kind": "captioning", done, total}`.
   `/api/caption?path=…` returns the latest caption for a single file.
-- `muser/jobs.py` — tiny thread-safe **in-process job registry** (`REGISTRY`) backing
-  the non-blocking cart **checkout**. `POST /api/checkout {items:[{path,upscale}],
-  caption_prompt?, force_caption?}` returns a `job_id` and runs captioning (network,
-  OpenAI) **concurrently** with upscaling (local 4×, flagged items only) in a daemon
-  thread — deliberately NOT on the single `state.task` slot, so search/index stay
-  usable while it runs. `GET /api/checkout/status?id=` reports `{status, caption:{done,
-  total}, upscale:{done,total}, errors, captioned, upscaled, captions_missing,
-  zip_ready}`; `GET /api/checkout/zip?id=` serves the prebuilt zip. The job re-loads
-  captions.jsonl before building the zip, so freshly-captioned items land in the
-  bundle (fixes the prior all-null-caption export, where "Download zip" only bundled
-  pre-cached captions). Zip-building is factored into `_build_cart_zip()` shared by
-  `/api/zip` and the checkout job. Upscaled bytes are NOT durably stored (cheap to
-  recompute — only the existing `~/.muser/upscale_cache` warm cache). Web UI: a
-  dismissible bottom-right progress panel (+ minimizable pill) polls status; the
-  optional caption-prompt textarea persists to `localStorage["muser-caption-prompt"]`.
+- `muser/jobs.py` — tiny thread-safe **in-process job registry** (`REGISTRY` singleton)
+  backing the non-blocking cart **checkout** (both zip-mode and generate-mode). A job
+  carries the legacy `caption`/`upscale`/`zip` slots **and** a generic ordered `stages`
+  list (`set_stage(name,status,done,total)`) used by the multi-stage generate pipeline.
+  Jobs are ephemeral RAM (evicted after 1h or once 32 newer exist; zip bytes never
+  serialized). `POST /api/checkout {items:[{path,upscale}], caption_prompt?,
+  force_caption?, mode?}` returns a `job_id`; **zip mode** (default) runs captioning
+  (network, OpenAI) **concurrently** with upscaling (local 4×, flagged items only) in a
+  daemon thread — deliberately NOT on the single `state.task` slot, so search/index stay
+  usable. `GET /api/checkout/status?id=` reports `{status, caption, upscale, stages,
+  errors, captioned, upscaled, captions_missing, zip_ready, error}` (+ `outputs` for
+  pipeline jobs, read from run.json which survives eviction); `GET /api/checkout/zip?id=`
+  serves the prebuilt zip. The job re-loads captions.jsonl before building the zip, so
+  freshly-captioned items land in the bundle (fixes the prior all-null-caption export).
+  Zip-building is `_build_cart_zip()`, shared by `/api/zip` and the checkout job.
+  Upscaled bytes are NOT durably stored (only the `~/.muser/upscale_cache` warm cache).
+  Web UI: a dismissible bottom-right progress panel (+ minimizable pill) polls status;
+  the caption-prompt textarea persists to `localStorage["muser-caption-prompt"]`.
+- `muser/generators.py` — **fal.ai generation primitives** (stdlib `urllib` only, no
+  `fal` SDK): plain JSON POSTs to `https://fal.run/<id>` with `Authorization: Key`,
+  3-attempt 429/5xx backoff, fal-CDN upload (local bytes/file → public URL). `FAL_KEY`
+  auto-loaded from `central/.env`, never logged. Endpoint IDs are the single source of
+  truth: `nano_banana` (`gemini-3.1-flash-image-preview/edit`, ≤14 refs — `NANO_MAX_REFS`,
+  422s on 15+), `gpt_image` (OpenAI `gpt-image-1` **edits** endpoint, multipart, ≤8 refs —
+  `GPT_IMAGE_MAX_REFS`), `cutout` (BiRefNet v2 → transparent PNG), `expand_prompts`
+  (any-llm/vision = Gemini 2.5 Flash, brief→N distinct prompts), `image_to_3d`
+  (**Meshy 6** — won a bake-off vs Hunyuan3D-v3 / Tripo v2.5 on clean ¾ inputs),
+  `image_to_3d_multiview` (Hunyuan3D v3, accepts L/B/R extra views — `EP_MULTIVIEW_3D`),
+  `generate_views` (3 concurrent nano_banana edits → L/B/R product shots feeding the
+  multiview path), `train_lora`/`flux_lora_generate` (FLUX LoRA, expensive route).
+- `muser/pipeline.py` — generate-mode **checkout pipeline orchestrator**
+  (`run_pipeline`), spawned in a daemon thread by `POST /api/checkout {mode:"generate"}`.
+  Staged + resilient (a single failed prompt/image records a stage error, never aborts):
+  caption → refs(upscale+upload) → cutout → prompt-set(cap 14) → prompts (explicit
+  `gen_prompts` | LLM `expand_prompts` | replicate brief) → generate (`generator` ∈
+  {`nano_banana`, `chatgpt`, `both` (fan out per prompt), `lora` (zip→train→gen)}) →
+  optional 3d (per generated image; `multi_angle` → synth L/B/R views + multiview recon).
+  Persists to `~/.muser/pipelines/<run_id>/run.json` (atomic write under a per-run lock)
+  + `outputs/<files>`, with a newest-first `index.json` of run summaries. Final status
+  `done` iff ≥1 image materialized, else `error`.
+- `muser/projection.py` — `/api/projection` 3D point cloud for the **Explore** tab:
+  pulls a stride-sampled (≤`MAX_N=5000`) set of (path, vector) rows from the model's
+  LanceDB table, PCA-projects to 3D via **numpy SVD** (no sklearn), colors each point by
+  its HDBSCAN cluster (golden-angle palette, pure fn of cluster id), and skips hidden
+  paths via the service's `_hidden` predicate. Service caches the payload keyed by
+  (n, folder, db-mtime, clusters-mtime).
 - `muser/facets.py` — shared sidecar scaffolding for **per-image precomputed facets**
   (the c2pa.py cache pattern factored out): a `~/.muser/<name>.json` keyed by path with
   `m`(mtime_ns)+`s`(size) for incremental skip, a thread-pool `scan(paths, compute)`, and a
@@ -106,6 +150,24 @@ See `REQUIREMENTS.md` for scope/decisions.
   (hits@1, recall@5/10, mrr, ndcg@10, map) + latency. `format_table` for a comparison.
 - `eval/web.py` — Gradio UI: Benchmark tab (run + compare) and Inspect tab
   (query the corpus, gallery flags the ground-truth image).
+
+## Web UI surfaces (`muser/web/app.html`)
+
+Single-file frontend. Beyond Search, the tabs/controls added this session:
+
+- **Generate (checkout, `mode=generate`).** Cart → fal pipeline; a Results tab renders
+  outputs incl. `<model-viewer>` 3D (wireframe toggle) for `.glb`, with a post-hoc
+  "make 3D" button per image (POST /api/pipeline/{id}/threed, `multi_angle`).
+- **Explore** — the /api/projection 3D point cloud, cluster-colored.
+- **Sort blend** — a segmented allocation-bar slider that re-ranks search hits client-side
+  by a weighted sum of per-result aesthetic metrics (`_SORT_BLEND_METRICS`: aesthetic_v2,
+  pickscore, aesthetic_v25, hps_v21, aesthetic) blended with relevance; metrics are inlined
+  per hit so no re-fetch is needed.
+- **Image-upload search** (drag/drop or picker → /api/search-upload) and **multi-color
+  search** (multiple swatches + all/any mode → /api/search-color).
+- **Random-aesthetic homepage**, **debug menu** (press `d`: thumb size / columns +
+  demo-mode toggle), **photo before/after upscale slider** (/api/upscale) with a grain
+  overlay, and the NSFW("Review") tab hidden.
 
 ## Reverse-image search (web UI)
 
@@ -160,6 +222,19 @@ pass over the 17.9k uniques, so reserved for selective lookups, not wired in.
   `dbus-send --print-reply` blocks when no FileManager1 service answers; always pass a
   `timeout`. Both surfaced as multi-hour CI hangs before the fix. CI runs pytest with
   `--timeout=180` so any new hang fails fast with a stack trace instead of stalling.
+- **Global hide-filter (`_hidden`/`_filter_results`).** Every result-producing endpoint
+  funnels through `_filter_results`, which drops hidden paths (and prunes them from each
+  result's `dupes[]`) and purges dead paths from the index in the background. `_hidden(path)`
+  is O(1): dead-file (always), then — only when the **demo-mode** flag `_DEMO["hide"]` is on
+  (default; toggled via GET/POST /api/demo-mode from the web debug menu) — NSFW above
+  `NSFW_HIDE_THRESHOLD=0.9` (a rank-normalized *percentile*, so 0.9 = top ~10% most-NSFW,
+  NOT a raw probability) and membership in any `HIDDEN_CLUSTER_MATCHERS` HDBSCAN cluster
+  (substring-matched against cluster captions; seeded with a people/selfie set). Dead-file
+  hiding is unconditional; NSFW + cluster hiding are demo-mode-gated. All three constants are
+  module-level for one-line tuning.
+- **Query normalization.** Text queries are lowercased before embedding (`q.lower()`) in
+  /api/search, /api/search-compose, /api/score, etc. — the SigLIP tokenizer is
+  case-sensitive, so "Red Car" and "red car" otherwise embed differently.
 - **Known limitation — case-sensitive folder scoping:** the `/api/search?folder=` path
   prefilter compares case-sensitively, but NTFS/APFS are case-insensitive, so scoping with
   altered casing returns 0 results. Proper fix = a normalized `pathkey` column (schema
@@ -191,6 +266,11 @@ Embedded service + web search UI working (`muser serve` → http://127.0.0.1:777
 Core (embed/index/search), harness (Flickr30k/COCO/domain + ranx), CLI, and web UI are
 working and verified. Color facet search shipped (`color.py`). Skin-tone search was
 built then removed (archived at tag `skintone-v4-archived`, see `reports/skintone-archive/`).
+**Generate pipeline shipped** (`generators.py`/`pipeline.py`): cart → fal.ai image
+gen (nano_banana / gpt-image / both / LoRA), BiRefNet cutout, prompt expansion, and
+image→3D (Meshy 6, or Hunyuan3D multiview with synthesized L/B/R views). **Explore 3D
+projection** (`projection.py`) and the restyled MCP gallery (contact-sheet to the LLM)
+shipped. Global demo-mode hide-filter (dead/NSFW/people clusters) on by default.
 Always-on daemon shipped as a macOS LaunchAgent
 (`~/Library/LaunchAgents/com.muser.serve.plist`, documented in central per-machine
 doc). Next: wire `jina-v4` run (7.5GB download), add Qwen3-VL, VLM-generated ground

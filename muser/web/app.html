@@ -2193,6 +2193,12 @@ const K_STEP=120;                                  // results fetched per page; 
 const SCROLL_BUFFER=1500;                           // px below the viewport to prefetch the next page, ahead of the user
 let _searchAbort=null, _searchTimer=null, _k=K_STEP, _lastKey="", _mode="text";
 let _rendered=0, _loading=false, _hasMore=true, _io=null;
+// Set by refreshActiveView() (e.g. demo-mode toggle) to force the *next* view
+// re-run to do a CLEAN re-render — reset pagination + clear the grid even when the
+// query key is unchanged — so a now-smaller filtered set actually shrinks instead
+// of leaving stale (now-hidden) cards behind. Consumed once, then cleared, so it
+// never interferes with normal incremental scroll-pagination.
+let _forceClean=false;
 function liveSearch(){ clearTimeout(_searchTimer); _searchTimer=setTimeout(search, 180); }
 function loadMore(){ if(_loading || !_hasMore || _mode!=="text") return; _k += K_STEP; search(); }
 function maybeLoadMore(){                           // trigger the next page while the sentinel is within the buffer zone
@@ -2224,6 +2230,7 @@ function showSkeletons(n = 12){
 
 async function search(){
   if (_busy) return;  // overlay covers UI while the model is loading
+  const forceClean = _forceClean; _forceClean = false;   // consume one-shot flag for all branches below
   const q=$("#q").value.trim();
   // No query → if a filter is active, run /api/filter instead of clearing.
   // Lets the Filter panel act as "browse by metadata" with no text query.
@@ -2245,7 +2252,10 @@ async function search(){
   // ranking, so the grid has to reset+re-render. Omitting it froze results
   // (key unchanged → _rendered never reset → _renderHits appended nothing).
   const key=q+"|"+folder+"|"+neg+"|"+(neg?negS:"")+"|"+fParams;
-  if(key!==_lastKey){ _k=K_STEP; _lastKey=key; _rendered=0; _hasMore=true; showSkeletons(12); }  // new query → reset + show skeletons
+  // New query OR a forced clean re-run (demo-mode toggle) → reset paging + clear grid.
+  // Without the _forceClean branch a same-key re-run keeps _rendered, so _renderHits
+  // only appends the tail and a now-smaller result set never shrinks.
+  if(key!==_lastKey || forceClean){ _k=K_STEP; _lastKey=key; _rendered=0; _hasMore=true; showSkeletons(12); }
   _mode="text"; _loading=true;
   if(_searchAbort) _searchAbort.abort();
   _searchAbort = new AbortController();
@@ -4743,16 +4753,28 @@ function toggleDebugPanel(){
 // dispatch but forces a fresh fetch (invalidating the showcase cache).
 function refreshActiveView(){
   const v = (typeof routeFromHash==="function" ? routeFromHash().view : "search") || "search";
+  _forceClean = true;   // make the current view's re-run a CLEAN re-render, not an append
   if(v==="search"){
+    // search()/runFilter()/showShowcase() all reset _rendered + clear the grid on a
+    // clean run; search()'s same-key path now honors _forceClean (set above).
     if($("#q").value.trim().length >= 2 || filterActive()){ search(); }
     else { _showcasePool = null; showShowcase(); }   // drop cached pool → re-fetch
     return;
   }
-  if(v==="explore"){ if(typeof loadClusters==="function") loadClusters(); return; }
-  if(v==="interesting"){ loadScores("#scoreGrid","#imsg","#imetric"); return; }
-  if(v==="review"){ loadScores("#reviewGrid","#rmsg","#rcat"); return; }
-  if(v==="color"){ if(typeof loadColor==="function") loadColor(); return; }
-  if(v==="ai"){ if(typeof loadAI==="function") loadAI(); return; }
+  // loadClusters / loadScores already do g.innerHTML="" + reset paging → inherently clean.
+  if(v==="explore"){ _forceClean=false; if(typeof loadClusters==="function") loadClusters(); return; }
+  if(v==="interesting"){ _forceClean=false; loadScores("#scoreGrid","#imsg","#imetric"); return; }
+  if(v==="review"){ _forceClean=false; loadScores("#reviewGrid","#rmsg","#rcat"); return; }
+  if(v==="color"){
+    _forceClean=false;
+    // loadColor() only refreshes status; the *results* grid is owned by searchColor().
+    // If a color search is active, re-run it (searchColor → _renderFacet clears #colorGrid),
+    // so demo-mode-hidden images drop out of the color results too.
+    if(typeof loadColor==="function") loadColor();
+    if(_colorSet && _colorSet.length && typeof searchColor==="function") searchColor();
+    return;
+  }
+  if(v==="ai"){ _forceClean=false; if(typeof loadAI==="function") loadAI(); return; }
 }
 // global keybind — 'd' toggles, only when NOT typing; Esc closes
 document.addEventListener("keydown", (e) => {
