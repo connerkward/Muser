@@ -2506,8 +2506,36 @@ function _sortBlendActive(){
   // Default = no re-rank (matches the server's vec-only order).
   return SORT_METRICS.some(m => $("#sW_"+m.id).value != m.def.toFixed(2));
 }
-function _sortBlendKey(h, w){
-  return SORT_METRICS.reduce((sum, m) => sum + w[m.id] * (h[m.field] ?? 0), 0);
+// Per-field min/max over the CURRENT result set, used to min–max normalize each
+// metric to [0,1] before the weighted blend (see _blendNormStats / _sortBlendKey).
+function _blendNormStats(rows){
+  // Fields differ in scale: relevance (vec) is raw cosine ~0.1–0.35, while the
+  // aesthetic facets from scores.json are already percentile-normalized ≈[0,1].
+  // Min–max each field over the current results so a weight of w truly contributes
+  // ~w of the final — otherwise the larger-magnitude term silently dominates and
+  // the allocation budget lies about the mix.
+  const st = {};
+  SORT_METRICS.forEach(m => {
+    let lo = Infinity, hi = -Infinity;
+    for(const h of rows){
+      const v = h[m.field];
+      if(v == null || Number.isNaN(v)) continue;
+      if(v < lo) lo = v;
+      if(v > hi) hi = v;
+    }
+    st[m.field] = (lo === Infinity) ? null : { lo, hi };
+  });
+  return st;
+}
+function _normField(h, m, st){
+  const s = st[m.field];
+  const v = h[m.field];
+  if(s == null || v == null || Number.isNaN(v)) return 0;
+  if(s.hi === s.lo) return 0.5;            // degenerate: all equal → neutral
+  return (v - s.lo) / (s.hi - s.lo);       // min–max → [0,1], order-preserving
+}
+function _sortBlendKey(h, w, st){
+  return SORT_METRICS.reduce((sum, m) => sum + w[m.id] * _normField(h, m, st), 0);
 }
 function applySortBlend(){
   // Snapshot the weights once (don't re-read the DOM per comparison), then
@@ -2519,7 +2547,12 @@ function applySortBlend(){
   const g = $("#results");
   const byUid = new Map();
   Array.from(g.children).forEach(c => { if(c.dataset && c.dataset.uid) byUid.set(c.dataset.uid, c); });
-  const ranked = _currentResults.slice().sort((a, b) => _sortBlendKey(b, w) - _sortBlendKey(a, w));
+  // Compute per-field min/max ONCE per call (not per comparison) over the current
+  // result set, then sort by the min–max-normalized weighted blend. With only vec
+  // weighted (the Relevance-100% default) min–max of cosine preserves the original
+  // ranking order, so the default is unchanged.
+  const st = _blendNormStats(_currentResults);
+  const ranked = _currentResults.slice().sort((a, b) => _sortBlendKey(b, w, st) - _sortBlendKey(a, w, st));
   ranked.forEach(h => {
     const c = byUid.get(h.uid);
     if(c) g.appendChild(c);
