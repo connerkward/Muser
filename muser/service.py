@@ -53,11 +53,22 @@ HIDDEN_CLUSTER_MATCHERS = [
 ]
 
 
-# "Demo mode" hides NSFW + the people/selfie clusters everywhere. On by default;
-# toggled from the web debug menu via /api/demo-mode. A mutable holder so the
-# nested _hidden() closure and the endpoint share one flag. Dead-file hiding is
-# unconditional (not part of demo mode).
-_DEMO = {"hide": True}
+# "Demo mode" hides NSFW + the people/selfie clusters everywhere. **Off by
+# default** (NSFW/clusters shown), and the user's choice **persists across
+# restarts** via ~/.muser/demo_mode.json — so once you turn it on it stays on
+# until you turn it off. Toggled from the web debug menu via /api/demo-mode.
+# Dead-file hiding is unconditional (not part of demo mode).
+_DEMO_FILE = Path.home() / ".muser" / "demo_mode.json"
+
+
+def _load_demo_hide() -> bool:
+    try:
+        return bool(json.loads(_DEMO_FILE.read_text()).get("hide", False))
+    except Exception:
+        return False
+
+
+_DEMO = {"hide": _load_demo_hide()}
 
 
 class DemoModeReq(BaseModel):
@@ -1798,9 +1809,15 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.post("/api/demo-mode")
     def demo_mode_set(req: DemoModeReq):
-        # Flip the global hide flag (NSFW + people/selfie clusters). Off reveals
+        # Flip the global hide flag (NSFW + people/selfie clusters) AND persist it
+        # to ~/.muser/demo_mode.json so it survives restarts. Off reveals
         # everything except dead files. Affects all result endpoints immediately.
         _DEMO["hide"] = bool(req.on)
+        try:
+            _DEMO_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _DEMO_FILE.write_text(json.dumps({"hide": _DEMO["hide"]}))
+        except Exception:
+            pass
         return {"hide": _DEMO["hide"]}
 
     @app.post("/api/contact-sheet")

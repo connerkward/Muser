@@ -4706,7 +4706,7 @@ function toggleDebugPanel(){
       <input type="range" id="dbgCols" min="0" max="12" step="1" value="${s.cols}">
     </div>
     <button id="dbgReset" type="button">reset</button>
-    <div id="dbgHint">live-applied to every grid · saved locally</div>
+    <div id="dbgHint">thumbnail size auto-fits the grid · items per row (0 = auto) overrides it · saved locally</div>
     <label class="dbg-switch" for="dbgDemo">
       <input type="checkbox" id="dbgDemo">
       <span class="track"></span>
@@ -4717,18 +4717,28 @@ function toggleDebugPanel(){
   _dbgPanel = el;
   const thumb = el.querySelector("#dbgThumb"), cols = el.querySelector("#dbgCols");
   const tv = el.querySelector("#dbgThumbV"), cv = el.querySelector("#dbgColsV");
+  // The grid is width-fluid, so thumbnail size and items-per-row are the same
+  // knob. Make the relationship explicit: items-per-row=0 → thumbnail size drives
+  // an auto layout; items-per-row>0 → it forces N columns and thumbnail size is
+  // disabled (greyed) so neither control ever looks "dead/broken".
+  const syncEnabled = () => {
+    const fixed = +cols.value > 0;
+    thumb.disabled = fixed;
+    const row = thumb.closest(".dbgrow"); if (row) row.style.opacity = fixed ? "0.4" : "1";
+    tv.textContent = fixed ? "— rows fixed" : (+thumb.value)+"px";
+    cv.textContent = fixed ? (+cols.value) : "auto";
+  };
   const persist = () => {
-    const ns = { thumb: +thumb.value, cols: +cols.value };
-    tv.textContent = ns.thumb+"px"; cv.textContent = ns.cols>0?ns.cols:"auto";
-    _dbgSave(ns); applyGridSettings();
+    _dbgSave({ thumb: +thumb.value, cols: +cols.value });
+    syncEnabled(); applyGridSettings();
   };
   thumb.addEventListener("input", persist);
   cols.addEventListener("input", persist);
+  syncEnabled();
   el.querySelector("#dbgReset").onclick = () => {
     _dbgSave(Object.assign({}, _dbgDefaults));
     thumb.value=_dbgDefaults.thumb; cols.value=_dbgDefaults.cols;
-    tv.textContent=_dbgDefaults.thumb+"px"; cv.textContent="auto";
-    applyGridSettings();
+    syncEnabled(); applyGridSettings();
   };
   // ---- demo-mode toggle: server-side flag (NSFW + people clusters hidden) ----
   const demo = el.querySelector("#dbgDemo");
