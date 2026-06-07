@@ -461,6 +461,32 @@ def create_app(model: str = DEFAULT_MODEL):
             "metadata": state.index.metadata_coverage(state.model_name),
         }
 
+    @app.get("/api/jobs")
+    def jobs_list():
+        """Everything in flight, for the Jobs page:
+          - task:      the single foreground activity (index / caption / backfill)
+          - jobs:      background checkout/generate jobs from the in-process registry
+          - pipelines: recent generate-pipeline runs (newest-first, persisted)
+        """
+        from . import jobs as _jobs
+        from . import pipeline as _pl
+        # Snapshot job refs under the lock, then build public dicts outside it
+        # (public() re-acquires the same non-reentrant lock).
+        with _jobs.REGISTRY._lock:
+            raw = list(_jobs.REGISTRY._jobs.values())
+        out = []
+        for j in raw:
+            pub = _jobs.public(j)
+            pub["kind"] = j.get("kind")
+            pub["created"] = j.get("created")
+            out.append(pub)
+        out.sort(key=lambda d: d.get("created") or 0, reverse=True)
+        try:
+            pipes = _pl.list_runs()[:20]
+        except Exception:
+            pipes = []
+        return {"task": state.task, "jobs": out, "pipelines": pipes}
+
     @app.post("/api/index")
     def do_index(req: IndexReq):
         # Returns immediately; the actual indexing runs in a thread and

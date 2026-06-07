@@ -670,6 +670,33 @@
   .showcase-bar .sc-shuffle:hover { border-color:var(--fg);
                   background:color-mix(in srgb, var(--fg) 6%, transparent); }
   .showcase-bar .sc-shuffle:active { transform:scale(.96); }
+  /* ---- Jobs page ---- */
+  #jobsBody { display:flex; flex-direction:column; gap:10px; max-width:760px; }
+  .jsec { font:italic 400 13px/1 var(--serif); color:var(--mut); margin:12px 0 2px; }
+  .jsec:first-child { margin-top:0; }
+  .jobcard { border:1px solid var(--line); border-radius:4px; padding:11px 13px;
+             background:color-mix(in srgb, var(--paper) 60%, transparent); }
+  .jobcard.pipe { cursor:pointer; transition:border-color 140ms ease; }
+  .jobcard.pipe:hover { border-color:var(--fg); }
+  .jhead { display:flex; align-items:center; gap:8px; font-size:13px; }
+  .jhead b { font-weight:600; text-transform:capitalize; }
+  .jid { font-size:11px; font-variant-numeric:tabular-nums; }
+  .jdot { width:8px; height:8px; border-radius:50%; flex:0 0 auto; }
+  .jdot.ok { background:#3a9d6e; } .jdot.err { background:#c0573f; }
+  .jdot.run { background:#caa468; animation:pulse 1.1s ease-in-out infinite; }
+  .jstatus { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--mut); }
+  .jstatus.running { color:#caa468; } .jstatus.done { color:#3a9d6e; } .jstatus.error { color:#c0573f; }
+  .jstage { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--mut); margin-top:7px; }
+  .jstage .jsi { width:14px; text-align:center; }
+  .jstage.done .jsi { color:#3a9d6e; } .jstage.err .jsi { color:#c0573f; } .jstage.err { color:#c0573f; }
+  .jstage .jsn { min-width:96px; text-transform:capitalize; }
+  .jbar { flex:1; height:4px; background:var(--line); border-radius:2px; overflow:hidden; }
+  .jbar i { display:block; height:100%; background:var(--fg); transition:width 240ms ease; }
+  .jpct { font-size:11px; color:var(--mut); font-variant-numeric:tabular-nums; min-width:42px; text-align:right; }
+  .jerr { font-size:11px; color:#c0573f; margin-top:7px; }
+  .jpipe { display:flex; align-items:center; gap:10px; margin-top:9px; }
+  .jpipe img { width:48px; height:48px; object-fit:cover; border-radius:3px; flex:0 0 auto; }
+  .jbrief { font-size:12px; color:var(--mut); }
   /* ---- chosen-color set (multi-color picker) ---- */
   .colorset { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
   .colorset .cschip { display:inline-flex; align-items:center; gap:5px; padding:3px 7px 3px 5px;
@@ -945,6 +972,7 @@
     <button class="nav" data-view="review" style="display:none">Review</button>
     <button class="nav" data-view="ai">AI</button>
     <button class="nav" data-view="results">Results</button>
+    <button class="nav" data-view="jobs">Jobs</button>
   </nav>
   <input id="qMini" placeholder="Search…" autocomplete="off" />
   <input id="negMini" placeholder="Exclude…" autocomplete="off" />
@@ -960,6 +988,7 @@
   <button class="nav" id="navColor">Color</button>
   <button class="nav" id="navAI">AI</button>
   <button class="nav" id="navResults">Results</button>
+  <button class="nav" id="navJobs">Jobs</button>
   <span class="mut" id="status">…</span>
   <span class="sp"></span>
   <span class="spinner" id="spinner" style="display:none" title="Working…"></span>
@@ -1212,6 +1241,18 @@
     <button id="runBack">← back to runs</button>
     <div class="run-detail" id="runDetailBody"></div>
   </div>
+</div>
+
+<!-- Jobs: everything in flight — foreground task (index/caption), background
+     checkout/generate jobs, and recent generate-pipeline runs. Polls /api/jobs. -->
+<div class="wrap" id="jobsView" style="display:none">
+  <div class="row" style="margin-bottom:14px;display:flex;align-items:center;gap:14px">
+    <span class="sc-title" style="font:italic 400 14px/1.3 var(--serif)">Jobs &amp; activity</span>
+    <span class="mut" id="jobsMsg"></span>
+    <span style="flex:1"></span>
+    <button id="jobsRefresh" title="Reload now">↻ Refresh</button>
+  </div>
+  <div id="jobsBody"></div>
 </div>
 
 <!-- Per-image detail view (#/image/<uid>). All sections are populated by
@@ -3619,9 +3660,9 @@ function openDetail(uid){ showView("image", {uid}); }
 // ---- view switching (Search / Explore / Interesting / Review / AI / Image) ----
 // `image` is a *detail* view (no nav button) — it's only reached from hash
 // routing (#/image/<uid>) or programmatically via openDetail(uid).
-const VIEWS={search:"searchView",explore:"exploreView",interesting:"interestingView",review:"reviewView",color:"colorView",ai:"aiView",results:"resultsView",image:"imageView"};
-const NAVS={search:"navSearch",explore:"navExplore",interesting:"navInteresting",review:"navReview",color:"navColor",ai:"navAI",results:"navResults"};
-const VIEW_TITLES={search:"Search",explore:"Explore",interesting:"Interesting",review:"Review",color:"Color",ai:"AI",results:"Results",image:"Image"};
+const VIEWS={search:"searchView",explore:"exploreView",interesting:"interestingView",review:"reviewView",color:"colorView",ai:"aiView",results:"resultsView",jobs:"jobsView",image:"imageView"};
+const NAVS={search:"navSearch",explore:"navExplore",interesting:"navInteresting",review:"navReview",color:"navColor",ai:"navAI",results:"navResults",jobs:"navJobs"};
+const VIEW_TITLES={search:"Search",explore:"Explore",interesting:"Interesting",review:"Review",color:"Color",ai:"AI",results:"Results",jobs:"Jobs",image:"Image"};
 // Internal flag: when popstate or initial-route call showView, suppress the
 // pushState so back/forward don't double-stack history entries.
 let _suppressHistory=false;
@@ -3640,6 +3681,7 @@ function showView(v, opts){
     b.classList.toggle("on", b.dataset.view === v);
   });
   if(v!=="ai") clearAIPoll();
+  if(v!=="jobs") clearJobsPoll();
   if(v==="explore" && !$("#clusterGrid").children.length) loadClusters();
   if(v==="explore" && typeof loadProjectionViz==="function") loadProjectionViz();
   if(v==="interesting") loadScores("#scoreGrid","#imsg","#imetric");
@@ -3647,6 +3689,7 @@ function showView(v, opts){
   if(v==="color") loadColor();
   if(v==="ai") loadAI();
   if(v==="results") openResults(opts.runId);
+  if(v==="jobs") startJobsPoll();
   if(v==="image" && opts.uid) loadImageDetail(opts.uid);
   // Returning to Search with no query + no filter and an empty grid → showcase.
   if(v==="search" && typeof showShowcase==="function"
@@ -3720,6 +3763,78 @@ window.addEventListener("popstate", (e) => {
 // trigger/poll a background scan with progress.
 let _aiPoll=null;
 function clearAIPoll(){ if(_aiPoll){ clearInterval(_aiPoll); _aiPoll=null; } }
+
+// ---- Jobs page: poll /api/jobs while the tab is open ----
+let _jobsPoll=null;
+function clearJobsPoll(){ if(_jobsPoll){ clearInterval(_jobsPoll); _jobsPoll=null; } }
+function startJobsPoll(){ loadJobs(); if(!_jobsPoll) _jobsPoll=setInterval(loadJobs, 1200); }
+function _pbar(done, total){
+  const pct = total>0 ? Math.round(100*done/total) : (done>0?100:0);
+  return `<div class="jbar"><i style="width:${Math.max(0,Math.min(100,pct))}%"></i></div>
+          <span class="jpct">${total>0?`${done}/${total}`:""}</span>`;
+}
+function _stageRow(s){
+  const icon = s.status==="done" ? "✓" : s.status==="error" ? "✕" : "◌";
+  const cls = s.status==="done" ? "done" : s.status==="error" ? "err" : "run";
+  return `<div class="jstage ${cls}"><span class="jsi">${icon}</span><span class="jsn">${s.name}</span>
+          ${s.total>0?_pbar(s.done,s.total):""}</div>`;
+}
+function _jobCard(j){
+  const stages = (j.stages||[]).map(_stageRow).join("");
+  const legacy = [];
+  if(j.caption && j.caption.total) legacy.push(`<div class="jstage run"><span class="jsn">caption</span>${_pbar(j.caption.done,j.caption.total)}</div>`);
+  if(j.upscale && j.upscale.total) legacy.push(`<div class="jstage run"><span class="jsn">upscale</span>${_pbar(j.upscale.done,j.upscale.total)}</div>`);
+  const errs = (j.errors||[]).length ? `<div class="jerr">${j.errors.length} error(s): ${(j.errors[0]&&j.errors[0].error||"").slice(0,80)}</div>` : "";
+  const badge = j.status==="running" ? `<span class="jdot run"></span>` : j.status==="error" ? `<span class="jdot err"></span>` : `<span class="jdot ok"></span>`;
+  return `<div class="jobcard">
+    <div class="jhead">${badge}<b>${j.kind||"job"}</b><span class="jid mut">${(j.id||"").slice(0,8)}</span>
+      <span style="flex:1"></span><span class="jstatus ${j.status}">${j.status}</span></div>
+    ${stages||legacy.join("")}
+    ${j.zip_ready?`<div class="jstage done"><span class="jsi">✓</span><span class="jsn">zip ready</span></div>`:""}
+    ${errs}
+  </div>`;
+}
+function _pipeCard(p){
+  const thumb = p.thumb ? `/api/pipeline/${p.id}/file/${encodeURIComponent(p.thumb)}` : null;
+  return `<div class="jobcard pipe" data-run="${p.id}">
+    <div class="jhead"><span class="jdot ${p.status==='done'?'ok':p.status==='error'?'err':'run'}"></span>
+      <b>${p.generator||"pipeline"}</b><span class="jid mut">${(p.id||"").slice(0,8)}</span>
+      <span style="flex:1"></span><span class="jstatus ${p.status}">${p.status}</span></div>
+    <div class="jpipe">${thumb?`<img loading="lazy" src="${thumb}">`:""}<span class="jbrief">${(p.brief||"").slice(0,90)}</span></div>
+  </div>`;
+}
+async function loadJobs(){
+  let r; try{ r=await (await fetch("/api/jobs")).json(); }catch(e){ return; }
+  const body=$("#jobsBody"); if(!body) return;
+  const parts=[];
+  // Foreground task (index / caption / backfill)
+  if(r.task && r.task.kind){
+    const t=r.task;
+    parts.push(`<div class="jsec">Foreground</div>
+      <div class="jobcard"><div class="jhead"><span class="jdot run"></span><b>${t.kind}</b>
+        ${t.folder?`<span class="jid mut">${t.folder}</span>`:""}<span style="flex:1"></span></div>
+        ${(t.total!=null)?_pbar(t.done||0,t.total||0):""}</div>`);
+  }
+  // Background jobs (checkout / generate)
+  const active=(r.jobs||[]);
+  if(active.length){
+    parts.push(`<div class="jsec">Background jobs (${active.length})</div>`);
+    parts.push(active.map(_jobCard).join(""));
+  }
+  // Recent generate-pipeline runs
+  if((r.pipelines||[]).length){
+    parts.push(`<div class="jsec">Recent generate runs</div>`);
+    parts.push(r.pipelines.map(_pipeCard).join(""));
+  }
+  if(!parts.length){ body.innerHTML=`<div class="mut" style="padding:20px 0">Nothing running. Start a checkout or index a folder and it'll show up here.</div>`; }
+  else body.innerHTML=parts.join("");
+  // Click a pipeline run → open it in Results
+  body.querySelectorAll(".jobcard.pipe").forEach(c=>{
+    c.onclick=()=>{ const id=c.dataset.run; if(id) showView("results",{runId:id}); };
+  });
+  $("#jobsMsg").textContent = new Date().toLocaleTimeString();
+}
+$("#jobsRefresh") && ($("#jobsRefresh").onclick = loadJobs);
 async function loadAI(){
   let r; try{ r=await (await fetch("/api/ai")).json(); }catch(e){ return; }
   const msg=$("#aimsg"), btn=$("#aiScan");
