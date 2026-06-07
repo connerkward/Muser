@@ -1100,6 +1100,8 @@
   <div class="row" style="margin-bottom:14px">
     <span class="mut">clustering</span>
     <select id="cmethod"><option value="hdbscan">HDBSCAN (auto count)</option><option value="kmeans">K-means</option></select>
+    <span class="mut" style="margin-left:8px">space</span>
+    <select id="cspace" title="Embedding space for clusters + Similar. SigLIP (default) is text-aligned; DINOv2 is self-supervised visual structure."><option value="">SigLIP</option><option value="dinov2">DINOv2</option></select>
     <span class="mut" id="cmsg"></span>
   </div>
   <div class="grid" id="clusterGrid"></div>
@@ -3069,7 +3071,10 @@ async function searchImage(path){
   toast(`Searching by image: ${path.split("/").pop()}`);
   _mode="image"; _lastKey=""; _rendered=0; _hasMore=false; showSkeletons(12);   // image-similar: fixed top-N, no scroll-load
   let r;
-  try { r = await (await fetch(`/api/search-image?path=${enc(path)}&k=120`, {signal:_searchAbort.signal})).json(); }
+  // Optional DINOv2 space: when the Explore "space" toggle is set to DINOv2,
+  // Similar ranks in the stored DINOv2 space too (additive; SigLIP is default).
+  const sp = (window._simSpace==="dinov2") ? "&space=dinov2" : "";
+  try { r = await (await fetch(`/api/search-image?path=${enc(path)}&k=120${sp}`, {signal:_searchAbort.signal})).json(); }
   catch(e){ if(e.name==="AbortError") return; throw e; }
   _renderHits(r);
 }
@@ -4349,7 +4354,18 @@ function _wireTabFilter(tab){
 }
 ["interesting","review","ai"].forEach(_wireTabFilter);
 _ensureCaptionsLoaded();
+// Optional embedding space for Explore clusters + the card "Similar" button.
+// "" = SigLIP (default, unchanged); "dinov2" = stored DINOv2 vectors (no model
+// load). Persisted on window so searchImage() can read it from any tab.
+window._simSpace = "";
 $("#cmethod").onchange=()=>loadClusters();
+$("#cspace").onchange=()=>{
+  window._simSpace = $("#cspace").value;
+  // DINOv2 ships a single HDBSCAN clustering; disable the method picker there
+  // so the (SigLIP-only) method options don't imply a choice that's ignored.
+  $("#cmethod").disabled = (window._simSpace==="dinov2");
+  loadClusters();
+};
 // Hide the cluster-detail view and show the cluster grid. Does NOT touch
 // history — call sites decide whether to also pop/replace the URL.
 function closeClusterDetail(){
@@ -4372,7 +4388,8 @@ async function loadClusters(){
   const method=$("#cmethod").value;
   $("#clusterDetail").style.display="none"; $("#clusterGrid").style.display="";
   $("#cmsg").textContent="loading…";
-  const r=await (await fetch(`/api/clusters?method=${method}`)).json();
+  const sp = (window._simSpace==="dinov2") ? "&space=dinov2" : "";
+  const r=await (await fetch(`/api/clusters?method=${method}${sp}`)).json();
   const g=$("#clusterGrid"); g.innerHTML="";
   if(!r.built){ $("#cmsg").textContent="Not built yet — run:  muser cluster"; return; }
   $("#cmsg").textContent=`${r.clusters.length} clusters · ${r.n.toLocaleString()} images`;
@@ -4441,7 +4458,8 @@ async function loadMoreClusterMembers(isFirst){
   _cdAbort=new AbortController();
   const method=_cdMethod, id=_cdId, offset=_cdOffset;
   let r;
-  try { r=await (await fetch(`/api/cluster?method=${method}&id=${id}&offset=${offset}&limit=${CD_PAGE}`, {signal:_cdAbort.signal})).json(); }
+  const sp = (window._simSpace==="dinov2") ? "&space=dinov2" : "";
+  try { r=await (await fetch(`/api/cluster?method=${method}&id=${id}&offset=${offset}&limit=${CD_PAGE}${sp}`, {signal:_cdAbort.signal})).json(); }
   catch(e){ if(e.name==="AbortError") return; _cdLoading=false; throw e; }
   if(method!==_cdMethod || id!==_cdId) { _cdLoading=false; return; }   // a newer cluster was opened mid-fetch — drop this page
   const g=$("#cdgrid");

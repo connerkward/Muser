@@ -999,8 +999,33 @@ def create_app(model: str = DEFAULT_MODEL):
         refinements = _refinements([r["path"] for r in results], q)
         return {"query": q, "model": state.model_name, "results": results, "refinements": refinements}
 
+    def _dinov2_results(path: str, k: int):
+        """Reverse-image (Similar) in the OPTIONAL DINOv2 space, reusing stored
+        vectors (no model load). Returns result dicts shaped exactly like
+        /api/search-image's SigLIP path — run through the same _filter_results
+        hide policy + per-result enrichment — or None when DINOv2 can't serve
+        this path (sidecar missing or path not in the npz) so the caller falls
+        back to SigLIP."""
+        from . import dinov2 as _dino
+        neighbors = _dino.similar(path, k=k)
+        if neighbors is None:
+            return None
+        results = [
+            {"path": p, "name": os.path.basename(p), "score": round(s, 4), "dupes": [p], "dupe_count": 1}
+            for p, s in neighbors
+        ]
+        results = [r for r in results if r["path"] != path]
+        results = _filter_results(results)
+        for r in results:
+            r["uid"] = uid_for(r["path"])
+        _attach_dims(results, [r["path"] for r in results])
+        _attach_scores(results)
+        _attach_c2pa(results)
+        return results
+
     @app.get("/api/search-image")
     def search_image(path: str, k: int = 24, dedup: bool = True, method: str = "embed", folder: str | None = None,
+                     space: str | None = None,
                      min_width: int | None = None, max_width: int | None = None,
                      min_height: int | None = None, max_height: int | None = None,
                      min_short_side: int | None = None, max_short_side: int | None = None,
@@ -1009,8 +1034,20 @@ def create_app(model: str = DEFAULT_MODEL):
                      min_filesize: int | None = None, max_filesize: int | None = None):
         # Image-to-image search: embed the file at `path`, find nearest neighbors
         # in the index. Works for any file PIL can open — doesn't need to be indexed.
+        # `space=dinov2` (optional) ranks in the stored DINOv2 space instead of
+        # SigLIP, reusing precomputed vectors (no model load); absent/any other
+        # value = SigLIP (default), unchanged. Falls back to SigLIP if the path
+        # isn't in the DINOv2 npz.
         if not os.path.exists(path):
             raise HTTPException(404, f"no such image: {path}")
+        if space == "dinov2":
+            results = _dinov2_results(path, k)
+            if results is not None:
+                refinements = _refinements([r["path"] for r in results], os.path.basename(path))
+                return {"query": f"image: {os.path.basename(path)}", "ref_path": path,
+                        "model": "dinov2", "space": "dinov2",
+                        "results": results, "refinements": refinements}
+            # else: fall through to SigLIP (path not in npz / sidecar absent)
         emb = state.warm()
         qv = emb.embed_images([path])[0]
         meta = _meta_from_params(
@@ -2119,8 +2156,57 @@ def create_app(model: str = DEFAULT_MODEL):
         )
         return any(mt.lower() in hay for mt in HIDDEN_CLUSTER_MATCHERS)
 
+    def _dinov2_clusters_payload():
+        """Map ~/.muser/dinov3_clusters.json into the SAME response shape
+        /api/clusters returns, so the Explore grid renders unchanged. Labels
+        reuse the representative image's caption (captions.jsonl) when available,
+        else "cluster N". Thumbnails use the cluster's sample paths (basenames
+        resolved to full paths via the npz). Degrades to built:False when the
+        DINOv2 cluster sidecar is absent."""
+        from . import dinov2 as _dino
+        data = _dino.clusters()
+        if not data:
+            return {"built": False, "clusters": []}
+        caps = _load_captions()
+        cl_map = data.get("clusters", {})
+        out_clusters = []
+        total = 0
+        for cid, cl in cl_map.items():
+            try:
+                cid_int = int(cid)
+            except (TypeError, ValueError):
+                continue
+            if cid_int == -1:  # noise / unclustered
+                continue
+            members = [p for p in _dino.cluster_members(cid_int) if not _hidden(p)]
+            size = cl.get("size", len(members))
+            total += size
+            # Label = caption of the first resolvable sample image, else "cluster N".
+            label = None
+            for p in members:
+                cap = caps.get(p)
+                if cap:
+                    label = cap
+                    break
+            if not label:
+                label = f"cluster {cid_int}"
+            out_clusters.append({
+                "id": cid_int, "label": label, "sublabel": "",
+                "size": size,
+                "reps": [{"path": p, "uid": uid_for(p)} for p in members[:4]],
+            })
+        out_clusters.sort(key=lambda c: c["size"], reverse=True)
+        return {
+            "built": True, "method": "hdbscan", "methods": ["hdbscan"],
+            "n": total, "clusters": out_clusters,
+        }
+
     @app.get("/api/clusters")
-    def clusters(method: str = "hdbscan"):
+    def clusters(method: str = "hdbscan", space: str | None = None):
+        # `space=dinov2` (optional) serves the DINOv2 cluster sidecar instead of
+        # the default SigLIP clusters.json; absent/any other value = SigLIP.
+        if space == "dinov2":
+            return _dinov2_clusters_payload()
         c = _clusters()
         if not c or method not in c["methods"]:
             return {"built": False, "clusters": []}
@@ -2156,7 +2242,17 @@ def create_app(model: str = DEFAULT_MODEL):
         }
 
     @app.get("/api/cluster")
-    def cluster_members(method: str, id: int, offset: int = 0, limit: int = 80):
+    def cluster_members(method: str, id: int, offset: int = 0, limit: int = 80, space: str | None = None):
+        # `space=dinov2` (optional) serves members from the DINOv2 cluster
+        # sidecar (its `sample` paths) instead of SigLIP; absent = SigLIP.
+        if space == "dinov2":
+            from . import dinov2 as _dino
+            members = [p for p in _dino.cluster_members(int(id)) if not _hidden(p)]
+            page = members[offset : offset + limit]
+            return {
+                "total": len(members),
+                "members": [{"path": p, "name": os.path.basename(p), "uid": uid_for(p)} for p in page],
+            }
         c = _clusters()
         if not c or method not in c["methods"]:
             return {"total": 0, "members": []}
