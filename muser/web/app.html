@@ -4833,20 +4833,21 @@ function applyGridSettings(){
   const s = _dbgLoad();
   let style = document.getElementById("dbgStyle");
   if (!style){ style = document.createElement("style"); style.id="dbgStyle"; document.head.appendChild(style); }
-  // Image-card grids (not the cluster mosaic / run grids) can switch to masonry.
-  const CARD_GRIDS = "#results,#scoreGrid,#reviewGrid,#aiGrid,#colorGrid";
   if (s.masonry){
-    // Pinterest/Cosmos-style masonry. Tiles are absolutely positioned by a JS
-    // layout pass (layoutMasonry) into the shortest column, so appending a page
-    // never reshuffles what's already on screen (CSS multi-column can't do that
-    // — it re-balances on every append). Labels hidden → pure image wall; the
-    // thumb fills the JS-computed tile height (object-fit:cover). Thumbs are
-    // fetched aspect-preserving (fit=contain) so dims-known tiles never crop.
-    const labels = CARD_GRIDS.split(",").map(g => `${g}>.card .meta,${g}>.card .foot`).join(",");
+    // Pinterest/Cosmos-style masonry, scoped to #results ONLY — the search /
+    // showcase / image wall, which renders through _renderHits → layoutMasonry.
+    // The analytic grids (Interesting/Review/AI/Color) render through their own
+    // functions and aren't JS-positioned, so they MUST stay a normal square grid
+    // (otherwise their flex cards stack full-width → "one big image"). They keep
+    // honoring the size knobs below. Tiles on the wall are absolutely positioned
+    // into the shortest column (append-only, no reshuffle); labels hidden; the
+    // thumb fills the JS-computed tile height; thumbs fetched aspect-preserving.
+    const cols = s.cols > 0 ? `repeat(${s.cols},1fr)` : `repeat(auto-fill,minmax(${s.thumb}px,1fr))`;
     style.textContent =
-      `${CARD_GRIDS}{display:block !important;position:relative;}` +
-      `${labels}{display:none;}` +
-      `.card .thumb{aspect-ratio:auto;height:100%;}`;
+      `#results{display:block !important;position:relative;}` +
+      `#results>.card .meta,#results>.card .foot{display:none;}` +
+      `#results .card .thumb{aspect-ratio:auto;height:100%;}` +
+      `#scoreGrid,#reviewGrid,#aiGrid,#colorGrid{grid-template-columns:${cols} !important;}`;
     _retuneThumbs(true);
     layoutMasonry(true);
   } else {
@@ -4861,7 +4862,10 @@ function applyGridSettings(){
 }
 
 // ---- masonry: aspect-preserving thumbs + JS column layout (append-only) ----
-const _MASONRY_GRIDS = "#results,#scoreGrid,#reviewGrid,#aiGrid,#colorGrid";
+// Scoped to #results (the search/showcase/image wall). The analytic grids render
+// through their own functions and are NOT JS-positioned, so they must not be
+// masonry'd — they stay a normal square grid.
+const _MASONRY_GRIDS = "#results";
 const _MASONRY_GAP = 14;
 function _masonryOn(){ try { return !!_dbgLoad().masonry; } catch { return false; } }
 function _thumbFitSrc(src, contain){
