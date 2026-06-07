@@ -2216,7 +2216,12 @@ let _rendered=0, _loading=false, _hasMore=true, _io=null;
 // never interferes with normal incremental scroll-pagination.
 let _forceClean=false;
 function liveSearch(){ clearTimeout(_searchTimer); _searchTimer=setTimeout(search, 180); }
-function loadMore(){ if(_loading || !_hasMore || _mode!=="text") return; _k += K_STEP; search(); }
+function loadMore(){
+  if(_loading || !_hasMore) return;
+  if(_mode==="text"){ _k += K_STEP; search(); }
+  else if(_mode==="showcase"){ showcaseMore(); }       // homepage: page deeper into the aesthetic pool
+  else if(_mode==="image"){ loadMoreImage(); }          // Similar / reverse-image: pull a deeper top-N
+}
 function maybeLoadMore(){                           // trigger the next page while the sentinel is within the buffer zone
   const s=document.getElementById("sentinel");
   if(s && s.getBoundingClientRect().top < innerHeight + SCROLL_BUFFER) loadMore();
@@ -2237,6 +2242,10 @@ function ensureSentinel(){                          // a 1px marker kept just be
 function showSkeletons(n = 12){
   const g = $("#results");
   g.replaceChildren();
+  // Masonry uses JS absolute positioning + a fixed grid height; block-flow
+  // skeletons would overlap/overflow. Reset the layout state and skip them —
+  // warm search is ~40ms, so the gap is imperceptible.
+  if (_masonryOn()){ g.style.height = ""; g.style.position = ""; g._mHeights = null; g._mLaidOut = 0; return; }
   for (let i = 0; i < n; i++) {
     const d = document.createElement("div");
     d.className = "skeleton";
@@ -2293,7 +2302,10 @@ async function search(){
 let _showcaseActive = false;
 let _showcasePool = null;            // cached union of score items, keyed by path
 const SHOWCASE_METRICS = ["aesthetic_v2", "pickscore", "hps_v21", "aesthetic_v25"];
-const SHOWCASE_N = 30;
+const SHOWCASE_PAGE = 60;            // tiles rendered per page; infinite scroll appends more
+let _showcaseQueue = null;           // shuffled pool (paged through on scroll)
+let _showcaseCursor = 0;             // how far into the queue we've rendered
+let _showcaseResults = [];           // cumulative rendered set (for _renderHits' tail-append)
 function _shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.random()*(i+1)|0; [a[i],a[j]]=[a[j],a[i]]; } return a; }
 async function _loadShowcasePool(){
   if(_showcasePool) return _showcasePool;
@@ -2302,7 +2314,7 @@ async function _loadShowcasePool(){
   // Pull top items per metric in parallel; dedupe by path (keep the first seen).
   const reqs = SHOWCASE_METRICS.map(async (m) => {
     try{
-      const r = await (await fetch(`/api/score?metric=${enc(m)}&order=desc&limit=120`)).json();
+      const r = await (await fetch(`/api/score?metric=${enc(m)}&order=desc&limit=600`)).json();
       if(r && Array.isArray(r.items)){
         anyOk = true;
         for(const it of r.items){ if(it && it.path && !byPath.has(it.path)) byPath.set(it.path, it); }
@@ -2329,11 +2341,25 @@ async function showShowcase(){
     $("#empty").textContent = "Index a folder, then search it.";
     return;
   }
-  const sample = _shuffle(pool.slice()).slice(0, SHOWCASE_N);
+  // Shuffle the whole pool once, then page through it on scroll (Pinterest/Cosmos
+  // style) instead of showing a fixed 30. _hasMore stays true until the queue runs out.
+  _showcaseQueue = _shuffle(pool.slice());
+  _showcaseCursor = 0;
+  _showcaseResults = [];
+  _rendered = 0;
   $("#empty").style.display = "none";
-  _renderHits({ results: sample, refinements: [] });
-  // Drop a small "✨ shuffle" affordance above the grid so the showcase re-rolls.
   _mountShowcaseBar(pool.length);
+  showcaseMore();   // render the first page
+}
+function showcaseMore(){
+  if(!_showcaseQueue || _mode!=="showcase") return;
+  const next = _showcaseQueue.slice(_showcaseCursor, _showcaseCursor + SHOWCASE_PAGE);
+  if(!next.length){ _hasMore = false; return; }
+  _showcaseCursor += next.length;
+  _showcaseResults = _showcaseResults.concat(next);
+  _renderHits({ results: _showcaseResults, refinements: [] });
+  _hasMore = _showcaseCursor < _showcaseQueue.length;
+  maybeLoadMore();   // tall window / short page → keep filling to the buffer
 }
 function _mountShowcaseBar(total){
   let bar = $("#showcaseBar");
@@ -2562,6 +2588,9 @@ function applySortBlend(){
     const c = byUid.get(h.uid);
     if(c) g.appendChild(c);
   });
+  // Masonry: the DOM order just changed globally → re-pack every tile into the
+  // new order (append-only doesn't hold when a blend re-ranks the whole set).
+  if(_masonryOn()) layoutMasonry(true);
 }
 function _setSortWeight(id, v){
   $("#sW_"+id).value = v.toFixed(2);
@@ -2979,8 +3008,9 @@ function _renderHits(r){
       : "No matches — is this folder indexed with the current model?";
     _hasMore=false; renderRefinements([]); return;
   }
-  _hasMore = _mode==="text" && r.results.length >= _k;   // a full page back ⇒ more are ranked below
-  if (_rendered === 0) g.replaceChildren();              // first page back: drop skeletons before appending real cards
+  if (_mode==="text") _hasMore = r.results.length >= _k;  // text: full page ⇒ more ranked below. Other modes set _hasMore themselves.
+  const _wasReset = (_rendered === 0);
+  if (_wasReset) g.replaceChildren();                    // first page back: drop skeletons before appending real cards
   r.results.slice(_rendered).forEach(h=>{                // append only the newly-fetched tail (kNN prefix is stable)
     const conf = h.prob ?? h.score;                       // calibrated P(match) when the model provides it, else raw cosine
     const pct=Math.max(0,Math.min(100,Math.round(conf*100)));
@@ -3028,7 +3058,16 @@ function _renderHits(r){
   renderRefinements(r.refinements || []);
   // If the user has a non-default sort blend dialed in, apply it after each page
   // lands so newly-appended cards land in the right rank.
-  if(_sortBlendActive()) applySortBlend();
+  if(_masonryOn()){
+    // Pinterest/Cosmos wall = append-only. Do NOT globally re-rank on each page:
+    // the sort blend would reshuffle the whole wall on every scroll. The blend
+    // still orders the normal grid, and an explicit blend-slider change re-packs
+    // the wall (see applySortBlend). Stable order here → existing tiles never move.
+    _retuneThumbs(true);
+    layoutMasonry(_wasReset);
+  } else if(_sortBlendActive()){
+    applySortBlend();
+  }
 }
 
 // C2PA provenance badge: pin an "AI?" flag on the thumb when the file's signed
@@ -3067,22 +3106,40 @@ async function c2paFlag(card, path, prefetched){
   }catch(e){}
 }
 
+// Reverse-image / "Similar" now scroll-loads deeper top-N (like text search):
+// _imgUrlFn builds the request for a given depth k, _runImage fetches + appends.
+let _imgK = 120, _imgUrlFn = null;
 async function searchImage(path){
   if (_busy) return;
-  if(_searchAbort) _searchAbort.abort();
-  _searchAbort = new AbortController();
-  $("#empty").style.display="none";
   $("#q").value = ""; $("#neg").value = "";
   closeCompose();
   toast(`Searching by image: ${path.split("/").pop()}`);
-  _mode="image"; _lastKey=""; _rendered=0; _hasMore=false; showSkeletons(12);   // image-similar: fixed top-N, no scroll-load
-  let r;
   // Optional DINOv2 space: when the Explore "space" toggle is set to DINOv2,
   // Similar ranks in the stored DINOv2 space too (additive; SigLIP is default).
   const sp = (window._simSpace==="dinov2") ? "&space=dinov2" : "";
-  try { r = await (await fetch(`/api/search-image?path=${enc(path)}&k=120${sp}`, {signal:_searchAbort.signal})).json(); }
-  catch(e){ if(e.name==="AbortError") return; throw e; }
+  _imgUrlFn = (k) => `/api/search-image?path=${enc(path)}&k=${k}${sp}`;
+  _imgK = 120;
+  return _runImage(false);
+}
+function loadMoreImage(){ if(!_imgUrlFn) return; _imgK += K_STEP; _runImage(true); }
+async function _runImage(append){
+  if (_busy || !_imgUrlFn) return;
+  if(_searchAbort) _searchAbort.abort();
+  _searchAbort = new AbortController();
+  $("#empty").style.display="none";
+  _mode="image"; _lastKey="";
+  if(!append){ _rendered=0; showSkeletons(12); }
+  _loading = true;
+  let r;
+  try { r = await (await fetch(_imgUrlFn(_imgK), {signal:_searchAbort.signal})).json(); }
+  catch(e){ _loading=false; if(e.name==="AbortError") return; throw e; }
   _renderHits(r);
+  // A near-full top-N back ⇒ a deeper page exists. Margin absorbs dedup/hide-filter
+  // shrinkage (the server can return a handful fewer than the requested k).
+  _hasMore = (r.results||[]).length >= _imgK - 24;
+  _loading = false;
+  if(!append) window.scrollTo({top:0});
+  maybeLoadMore();                              // tall window → keep filling
 }
 
 // ---- Composed Image Retrieval: q = α·embed(img) + β·embed(text) ----
@@ -4779,86 +4836,109 @@ function applyGridSettings(){
   // Image-card grids (not the cluster mosaic / run grids) can switch to masonry.
   const CARD_GRIDS = "#results,#scoreGrid,#reviewGrid,#aiGrid,#colorGrid";
   if (s.masonry){
-    // Masonry = CSS multi-column flow: cards keep their natural aspect ratio and
-    // pack by height (Pinterest-style). Reuses the same knobs — items-per-row →
-    // column-count, auto → column-width from thumbnail size. The square-crop
-    // thumb is relaxed to natural aspect only while masonry is on.
-    const colRule = s.cols > 0 ? `column-count:${s.cols}` : `column-width:${s.thumb}px`;
-    // `>.card` must be appended PER grid — a comma list only binds the suffix to
-    // its last term, so build the per-card selectors explicitly.
-    const gridList = CARD_GRIDS.split(",");
-    const items  = gridList.map(g => `${g}>.card`).join(",");
-    const labels = gridList.map(g => `${g}>.card .meta,${g}>.card .foot`).join(",");
+    // Pinterest/Cosmos-style masonry. Tiles are absolutely positioned by a JS
+    // layout pass (layoutMasonry) into the shortest column, so appending a page
+    // never reshuffles what's already on screen (CSS multi-column can't do that
+    // — it re-balances on every append). Labels hidden → pure image wall; the
+    // thumb fills the JS-computed tile height (object-fit:cover). Thumbs are
+    // fetched aspect-preserving (fit=contain) so dims-known tiles never crop.
+    const labels = CARD_GRIDS.split(",").map(g => `${g}>.card .meta,${g}>.card .foot`).join(",");
     style.textContent =
-      `${CARD_GRIDS}{display:block !important;${colRule};column-gap:14px;}` +
-      `${items}{display:inline-block;width:100%;margin:0 0 14px;` +
-        `break-inside:avoid;-webkit-column-break-inside:avoid;animation:none;}` +
-      // pure image tiles in masonry — drop filename + action labels, even gaps
+      `${CARD_GRIDS}{display:block !important;position:relative;}` +
       `${labels}{display:none;}` +
-      // relax the square crop; _tuneCard sets each thumb's true aspect-ratio
-      // inline (from result dims) so space is reserved before the image loads →
-      // no pop-in. No !important so the inline aspect-ratio can override.
-      `.card .thumb{aspect-ratio:auto;}` +
-      `.card .thumb img{height:auto;}`;
+      `.card .thumb{aspect-ratio:auto;height:100%;}`;
+    _retuneThumbs(true);
+    layoutMasonry(true);
   } else {
     // cols 0 → auto-fill with the thumb size as min track; cols N → exactly N columns.
     const cols = s.cols > 0
       ? `repeat(${s.cols}, 1fr)`
       : `repeat(auto-fill, minmax(${s.thumb}px, 1fr))`;
     style.textContent = `.grid { grid-template-columns:${cols} !important; }`;
+    _clearMasonryLayout();
+    _retuneThumbs(false);
   }
-  // Thumbnails are square smart-crops by default; masonry needs aspect-preserving
-  // (`fit=contain`) thumbs so tiles pack by true proportions. Retune what's on the
-  // page now and keep an observer running so paginated cards get the same fit.
-  _retuneThumbs(!!s.masonry);
-  _setMasonryObserver(!!s.masonry);
 }
 
-// ---- masonry thumbnail fit (aspect-preserving src rewrite) ----
+// ---- masonry: aspect-preserving thumbs + JS column layout (append-only) ----
 const _MASONRY_GRIDS = "#results,#scoreGrid,#reviewGrid,#aiGrid,#colorGrid";
+const _MASONRY_GAP = 14;
+function _masonryOn(){ try { return !!_dbgLoad().masonry; } catch { return false; } }
 function _thumbFitSrc(src, contain){
   if (!src || src.indexOf("/api/thumb") < 0) return src;
   src = src.replace(/&fit=contain/g, "");
   return contain ? src + "&fit=contain" : src;
 }
+// Swap a card's thumb to aspect-preserving (contain) or square (cover).
 function _tuneCard(card, contain){
-  // 1) swap the thumb src to aspect-preserving (contain) or square (cover)
   const img = card.querySelector(".thumb img");
-  if (img){
-    const cur = img.getAttribute("src");
-    const next = _thumbFitSrc(cur, contain);
-    if (next && next !== cur) img.setAttribute("src", next);
-  }
-  // 2) reserve the tile's aspect-ratio from the result's known dims so the
-  //    column layout is stable before the image loads (kills pop-in). Cleared
-  //    when leaving masonry so the square grid crop returns.
-  const thumb = card.querySelector(".thumb");
-  if (thumb){
-    const w = +card.dataset.w, h = +card.dataset.h;
-    thumb.style.aspectRatio = (contain && w > 0 && h > 0) ? (w + " / " + h) : "";
-  }
+  if (!img) return;
+  const cur = img.getAttribute("src");
+  const next = _thumbFitSrc(cur, contain);
+  if (next && next !== cur) img.setAttribute("src", next);
 }
 function _retuneThumbs(contain){
   const sels = _MASONRY_GRIDS.split(",").map(g => g + " .card").join(",");
   document.querySelectorAll(sels).forEach(card => _tuneCard(card, contain));
 }
-let _masonryObserver = null;
-function _setMasonryObserver(on){
-  if (_masonryObserver){ _masonryObserver.disconnect(); _masonryObserver = null; }
-  if (!on) return;
-  _masonryObserver = new MutationObserver(muts => {
-    for (const m of muts) for (const n of m.addedNodes){
-      if (n.nodeType !== 1) continue;
-      const cards = n.matches && n.matches(".card") ? [n]
-                  : (n.querySelectorAll ? n.querySelectorAll(".card") : []);
-      cards.forEach(c => _tuneCard(c, true));
+// Lay out ONE grid's cards into N shortest-first columns. reset=false positions
+// only the cards added since the last pass (append-only → existing tiles never
+// move); column heights persist on the element so pagination just continues.
+// Tile heights come from the result's known dims (data-w/h) → no wait-for-load,
+// no pop-in; dims-less cards fall back to natural size or square.
+function _layoutGrid(grid, reset){
+  if (!grid) return;
+  const W = grid.clientWidth;
+  if (!W) return;                                   // hidden / zero-width → skip
+  const s = _dbgLoad();
+  const target = s.thumb || 230;
+  const cols = s.cols > 0 ? s.cols
+             : Math.max(1, Math.floor((W + _MASONRY_GAP) / (target + _MASONRY_GAP)));
+  const colW = (W - (cols - 1) * _MASONRY_GAP) / cols;
+  let heights = grid._mHeights;
+  if (reset || !heights || heights.length !== cols){ heights = new Array(cols).fill(0); grid._mLaidOut = 0; }
+  const cards = Array.prototype.filter.call(grid.children, n => n.classList && n.classList.contains("card"));
+  for (let i = grid._mLaidOut || 0; i < cards.length; i++){
+    const card = cards[i];
+    let w = +card.dataset.w, h = +card.dataset.h;
+    if (!(w > 0 && h > 0)){
+      const im = card.querySelector(".thumb img");
+      if (im && im.naturalWidth){ w = im.naturalWidth; h = im.naturalHeight; } else { w = h = 1; }
     }
-  });
+    const tileH = colW * (h / w);
+    let c = 0; for (let j = 1; j < cols; j++) if (heights[j] < heights[c]) c = j;
+    card.style.position = "absolute";
+    card.style.width  = colW + "px";
+    card.style.height = tileH + "px";
+    card.style.left = (c * (colW + _MASONRY_GAP)) + "px";
+    card.style.top  = heights[c] + "px";
+    heights[c] += tileH + _MASONRY_GAP;
+  }
+  grid._mHeights = heights;
+  grid._mLaidOut = cards.length;
+  grid.style.position = "relative";
+  grid.style.height = Math.max(0, ...heights) + "px";
+}
+function layoutMasonry(reset){
+  if (!_masonryOn()) return;
+  _MASONRY_GRIDS.split(",").forEach(sel => _layoutGrid(document.querySelector(sel), reset));
+}
+function _clearMasonryLayout(){
   _MASONRY_GRIDS.split(",").forEach(sel => {
-    const g = document.querySelector(sel);
-    if (g) _masonryObserver.observe(g, { childList:true, subtree:true });
+    const g = document.querySelector(sel); if (!g) return;
+    g.style.position = ""; g.style.height = ""; g._mHeights = null; g._mLaidOut = 0;
+    Array.prototype.forEach.call(g.children, c => {
+      if (c.classList && c.classList.contains("card")){
+        c.style.position = c.style.width = c.style.height = c.style.left = c.style.top = "";
+      }
+    });
   });
 }
+let _mResizeT = null;
+window.addEventListener("resize", () => {
+  if (!_masonryOn()) return;
+  clearTimeout(_mResizeT); _mResizeT = setTimeout(() => layoutMasonry(true), 120);
+});
 function isTypingTarget(t){
   if (!t) return false;
   const tag = (t.tagName||"").toLowerCase();
