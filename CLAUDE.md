@@ -2,6 +2,13 @@
 
 Local-first semantic image search with a built-in retrieval-eval harness, plus a
 fal.ai **generate** pipeline (text/image→image, 3D, LoRA) layered on the cart.
+**Scope of "local/offline/$0":** the *core* — embedding, index, search, color, dedup,
+on-disk captions — is genuinely local, offline, and free (no keys, no network). Two
+things are NOT: the **generate pipeline** (Nano Banana / ChatGPT-image / 3D / LoRA) is a
+fal.ai/OpenAI cloud add-on that needs network + `FAL_KEY`/`OPENAI_API_KEY` and costs
+money; and the **3D viewer (`<model-viewer>`) + Explore point-cloud viz** load three.js /
+model-viewer from CDNs, so they need internet to *render* (both degrade gracefully offline
+— model-viewer → download link, viz → hidden). Captioning also calls OpenAI when run.
 **Python 3.12 + uv.** A TypeScript MCP ext-app lives in `mcp-ts/` — a thin HTTP
 client of the embedded service (`muser serve`) that renders results in an
 interactive gallery UI inside Claude Desktop. It loads no model and never touches
@@ -126,7 +133,9 @@ See `REQUIREMENTS.md` for scope/decisions.
   LanceDB table, PCA-projects to 3D via **numpy SVD** (no sklearn), colors each point by
   its HDBSCAN cluster (golden-angle palette, pure fn of cluster id), and skips hidden
   paths via the service's `_hidden` predicate. Service caches the payload keyed by
-  (n, folder, db-mtime, clusters-mtime).
+  (n, folder, db-mtime, clusters-mtime). **Render is not offline:** the Explore tab loads
+  three.js from a CDN (`ajax.googleapis.com`/`cdn.jsdelivr.net`), so the viz is hidden when
+  there's no internet (the projection JSON itself is computed locally).
 - `muser/facets.py` — shared sidecar scaffolding for **per-image precomputed facets**
   (the c2pa.py cache pattern factored out): a `~/.muser/<name>.json` keyed by path with
   `m`(mtime_ns)+`s`(size) for incremental skip, a thread-pool `scan(paths, compute)`, and a
@@ -155,9 +164,11 @@ See `REQUIREMENTS.md` for scope/decisions.
 
 Single-file frontend. Beyond Search, the tabs/controls added this session:
 
-- **Generate (checkout, `mode=generate`).** Cart → fal pipeline; a Results tab renders
-  outputs incl. `<model-viewer>` 3D (wireframe toggle) for `.glb`, with a post-hoc
-  "make 3D" button per image (POST /api/pipeline/{id}/threed, `multi_angle`).
+- **Generate (checkout, `mode=generate`).** Cart → fal pipeline (cloud, needs network +
+  `FAL_KEY`/`OPENAI_API_KEY`, costs money); a Results tab renders outputs incl.
+  `<model-viewer>` 3D (wireframe toggle) for `.glb`, with a post-hoc "make 3D" button per
+  image (POST /api/pipeline/{id}/threed, `multi_angle`). `<model-viewer>` loads from a CDN,
+  so 3D needs internet to render and falls back to a download link offline.
 - **Explore** — the /api/projection 3D point cloud, cluster-colored.
 - **Sort blend** — a segmented allocation-bar slider that re-ranks search hits client-side
   by a weighted sum of per-result aesthetic metrics (`_SORT_BLEND_METRICS`: aesthetic_v2,

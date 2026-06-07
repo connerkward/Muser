@@ -47,6 +47,17 @@
   header #spinnerLabel { flex:0 1 auto; min-width:0;
                    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
+  /* Narrow viewports: the desktop header is flex-wrap:nowrap with a growing .sp
+     spacer, which pushes Cart / Index folder / model off the right edge with no
+     way to reach them. Below 720px let the header wrap to multiple rows and
+     collapse the spacer so every control — crucially the Cart button — stays on
+     screen. Desktop (>720px) layout is untouched. */
+  @media (max-width:720px) {
+    header { flex-wrap:wrap; gap:12px 16px; padding:9px 16px; }
+    header .sp { flex:0 0 0; min-width:0; }      /* don't eat the row */
+    header #status { max-width:100%; }
+  }
+
   .nav { background:transparent; border:0; padding:2px 0; color:var(--mut);
          font-size:13px; cursor:pointer; border-bottom:1px solid transparent; }
   .nav:hover { color:var(--fg); }
@@ -3951,6 +3962,11 @@ function _tabEnsureSentinel(tab){
 function _tabMaybeLoadMore(tab){
   const cfg = _tabFeed[tab];
   const s = document.getElementById(cfg.sentinelId);
+  // Never auto-paginate a grid in a hidden (display:none) panel: a sentinel in a
+  // hidden panel reports getBoundingClientRect().top ≈ 0 (always "in view"), which
+  // would page the entire corpus on load for non-active tabs. offsetParent is null
+  // when any ancestor is display:none, so this gates paging to the visible tab.
+  if(s && s.offsetParent === null) return;
   if(s && s.getBoundingClientRect().top < innerHeight + SCROLL_BUFFER){
     if(tab === "ai") _aiLoadMore(); else loadMoreScores(tab);
   }
@@ -4235,7 +4251,11 @@ async function _ensureCaptionsLoaded(){
     for(const tab of Object.keys(_tabFilterCfg)){
       const g = $(_tabFilterCfg[tab].grid);
       if(!g) continue;
-      g.querySelectorAll(".card").forEach(c => {
+      const cards = g.querySelectorAll(".card");
+      // Nothing rendered yet (tab never opened) → no filtertext to backfill, and
+      // re-running applyTabFilter would needlessly load a page into a hidden grid.
+      if(!cards.length) continue;
+      cards.forEach(c => {
         const path = c.dataset.path || "";
         const name = (c.querySelector(".name")||{}).textContent || "";
         if(path) c.dataset.filtertext = _filterText(path, name);
@@ -4473,7 +4493,9 @@ async function loadProjectionViz(){
   // window-scoped flag (not a module `let`) so an early boot-time call from
   // showView can't hit the temporal-dead-zone before this block initializes.
   if (window.__vizLoaded) return;
-  window.__vizLoaded = true;
+  // Don't set __vizLoaded until the cloud actually mounts: a transient first-load
+  // failure (empty points, fetch error, three.js CDN not ready) must leave the flag
+  // false so a later Explore visit retries instead of permanently giving up.
   const box = $("#vizBox");
   let data;
   try { data = await (await fetch("/api/projection?n=2000")).json(); }
@@ -4484,6 +4506,7 @@ async function loadProjectionViz(){
   if (!three) { box.classList.add("empty"); return; }
   box.classList.remove("empty");
   mountPointCloud(three, box, data);
+  window.__vizLoaded = true;                                  // mounted OK → don't re-mount
 }
 
 function mountPointCloud(three, box, data){
@@ -4788,6 +4811,9 @@ function refreshActiveView(){
 }
 // global keybind — 'd' toggles, only when NOT typing; Esc closes
 document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && $("#cartModal").classList.contains("show")){
+    $("#cartModal").classList.remove("show"); return;   // match × / backdrop close
+  }
   if (e.key === "Escape" && _dbgPanel){ toggleDebugPanel(); return; }
   if (e.key !== "d" && e.key !== "D") return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;         // don't hijack ⌘D etc.

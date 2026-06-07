@@ -759,7 +759,11 @@ def create_app(model: str = DEFAULT_MODEL):
     # `nsfw` carries the NSFW hidden-path set (built in the same parse pass —
     # one disk read, not a second sidecar). A path is in `nsfw` when its
     # nsfw_consensus (fallback nsfw) exceeds NSFW_HIDE_THRESHOLD.
-    _scores_cache: dict = {"mtime": -1.0, "map": {}, "rep_of": {}, "groups": {}, "nsfw": set()}
+    # `full` carries the entire parsed scores.json dict (metrics/canonical/scores/
+    # dupes) so endpoints that need more than `map`/`rep_of`/`nsfw` (e.g. /api/score,
+    # image-detail, _scores_for) can read it from the same mtime-cached parse instead
+    # of re-`json.loads`-ing the 15 MB file per request.
+    _scores_cache: dict = {"mtime": -1.0, "map": {}, "rep_of": {}, "groups": {}, "nsfw": set(), "full": {}}
     _scores_lock = threading.Lock()
 
     def _refresh_scores_cache():
@@ -790,12 +794,14 @@ def create_app(model: str = DEFAULT_MODEL):
                 _scores_cache["rep_of"] = rep_of
                 _scores_cache["groups"] = groups
                 _scores_cache["nsfw"] = nsfw
+                _scores_cache["full"] = s
                 _scores_cache["mtime"] = mt
             except Exception:
                 _scores_cache["map"] = {}
                 _scores_cache["rep_of"] = {}
                 _scores_cache["groups"] = {}
                 _scores_cache["nsfw"] = set()
+                _scores_cache["full"] = {}
                 _scores_cache["mtime"] = mt
         return _scores_cache
 
@@ -1139,11 +1145,9 @@ def create_app(model: str = DEFAULT_MODEL):
             # the filter ships one row per representative when multiple of its
             # dupes land in the filtered set. Falls back to "no dedup" when
             # scores.json hasn't been built — better than failing silently.
-            scores_path = Path.home() / ".muser" / "scores.json"
-            try:
-                canonical_meta = json.loads(scores_path.read_text()) if scores_path.exists() else None
-            except Exception:
-                canonical_meta = None
+            # mtime-cached parse (shared with /api/search, /api/score) — avoids a
+            # per-filter-request 15 MB json.loads of scores.json.
+            canonical_meta = _refresh_scores_cache()["full"] or None
             canon_set: set[str] | None = None
             dup_to_canon: dict[str, str] = {}
             if canonical_meta:
@@ -1693,11 +1697,14 @@ def create_app(model: str = DEFAULT_MODEL):
             except Exception:
                 pass
 
-        # Append to run.json (re-read to avoid clobbering concurrent writes).
-        fresh = _pipeline.read_run(run_id) or run
-        fresh.setdefault("outputs", []).extend(view_outputs)
-        fresh["outputs"].append(o3d)
-        _pipeline._write_run(run_id, fresh)
+        # Append to run.json under the per-run lock so a concurrent threed call
+        # (e.g. a double-click) can't read-modify-write over our output and lose
+        # it. _lock_for is an RLock, so _write_run re-acquiring it is fine.
+        with _pipeline._lock_for(run_id):
+            fresh = _pipeline.read_run(run_id) or run
+            fresh.setdefault("outputs", []).extend(view_outputs)
+            fresh["outputs"].append(o3d)
+            _pipeline._write_run(run_id, fresh)
 
         return {
             "glb_url": _pipeline_file_url(run_id, o3d["glb_file"]),
@@ -1759,13 +1766,59 @@ def create_app(model: str = DEFAULT_MODEL):
     THUMB_CACHE.mkdir(parents=True, exist_ok=True)
     THUMB_KEY_VERSION = "v2-smartcrop"
 
+    # ---- File-serving jail (path traversal / secret-file leak guard) ---------
+    # /api/image|thumb|upscale serve files named by a `?path=` query param. Without
+    # a guard, `?path=/Users/.../central/.env` or `~/.ssh/id_rsa` leaks any local
+    # file. Restrict the served path to live under one of the INDEXED folder roots:
+    # the parent directory of every indexed image is an allowed root (a path is
+    # allowed iff it equals or is under one). That's exact for indexed images (their
+    # own dir is always a root) and tolerant for thumbnails / upscales of those same
+    # files. Cached by (model, row-count) so we rebuild only when the index changes,
+    # not per request (the thumb path is hot).
+    _allowed_roots: dict = {"key": None, "roots": []}
+    _allowed_roots_lock = threading.Lock()
+
+    def _serve_roots() -> list[str]:
+        key = (state.model_name, state.index.count(state.model_name))
+        with _allowed_roots_lock:
+            if _allowed_roots["key"] != key:
+                roots: set[str] = set()
+                for p in state.index.paths(state.model_name):
+                    d = os.path.dirname(os.path.realpath(p))
+                    if d:
+                        roots.add(d)
+                # Drop any root that is a descendant of another (keep the shallowest)
+                # so membership checks stay against a minimal set.
+                srt = sorted(roots, key=len)
+                minimal: list[str] = []
+                for r in srt:
+                    rsep = r + os.sep
+                    if not any(rsep.startswith(m + os.sep) for m in minimal):
+                        minimal.append(r)
+                _allowed_roots["roots"] = minimal
+                _allowed_roots["key"] = key
+            return _allowed_roots["roots"]
+
+    def _serve_allowed(path: str) -> bool:
+        """True iff `path` resolves to a file under an indexed folder root."""
+        try:
+            rp = os.path.realpath(path)
+        except OSError:
+            return False
+        if not os.path.isfile(rp):
+            return False
+        for root in _serve_roots():
+            if rp == root or rp.startswith(root + os.sep):
+                return True
+        return False
+
     @app.get("/api/thumb")
     def thumb(path: str, size: int = 540):
         # Frontend asks for size=Math.round(280*devicePixelRatio); 540 is the
         # safe default for DPR=2. The thumb is a smart-cropped *square* (focal
         # window picked by edge energy), so the card's `object-fit: cover` is
         # already a no-op and ultra-wide / tall sources don't get squashed.
-        if not os.path.isfile(path):
+        if not _serve_allowed(path):
             raise HTTPException(404, "not found")
         try:
             mtime = int(os.path.getmtime(path))
@@ -1799,7 +1852,7 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.get("/api/image")
     def image(path: str):
-        if not os.path.isfile(path):
+        if not _serve_allowed(path):
             raise HTTPException(404, "not found")
         return FileResponse(path)
 
@@ -1862,7 +1915,7 @@ def create_app(model: str = DEFAULT_MODEL):
         # shows a spinner. upscale_4x() caches to ~/.muser/upscale_cache; we ALSO
         # mirror the JPEG to a transient /tmp path so repeat calls reuse it and the
         # OS can reclaim it. Lazy import keeps spandrel/torch out of the warm path.
-        if not os.path.isfile(path):
+        if not _serve_allowed(path):
             raise HTTPException(404, "not found")
         import time as _time
 
@@ -2053,7 +2106,10 @@ def create_app(model: str = DEFAULT_MODEL):
         # A whole cluster is hidden when its representative caption / label
         # matches a HIDDEN_CLUSTER_MATCHERS substring (same rule that builds the
         # hidden-path set). Keeps these clusters out of the Explore grid too, not
-        # just their members out of search.
+        # just their members out of search. Only active when demo-mode "hide" is on
+        # (off → show everything, matching the search/_hidden behavior).
+        if not _DEMO["hide"]:
+            return False
         if not HIDDEN_CLUSTER_MATCHERS:
             return False
         hay = " ".join(
@@ -2069,12 +2125,24 @@ def create_app(model: str = DEFAULT_MODEL):
         if not c or method not in c["methods"]:
             return {"built": False, "clusters": []}
         m = c["methods"][method]
+        members_by_id = m.get("members", {})
+
+        def _live_size(cl: dict) -> int:
+            # Demo-mode off → show the raw cluster size (only dead-file drift,
+            # out of scope). Demo-mode on → exclude hidden (NSFW) members so the
+            # count matches what the grid actually shows. The full-member walk is
+            # only paid in demo mode, which the user opted into.
+            if not _DEMO["hide"]:
+                return cl["size"]
+            mem = members_by_id.get(str(cl["id"]), [])
+            return sum(1 for p in mem if not _hidden(p))
+
         return {
             "built": True, "method": method, "methods": list(c["methods"].keys()), "n": c["n"],
             "clusters": [
                 {
                     "id": cl["id"], "label": cl["label"], "sublabel": cl["sublabel"],
-                    "size": cl["size"],
+                    "size": _live_size(cl),
                     # reps is a list of path strings; promote to {path, uid} objects
                     # so the UI can use uid as a stable React-style key. Hidden
                     # (dead / NSFW) reps are dropped so a hidden image can't
@@ -2211,10 +2279,11 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.get("/api/caption")
     def caption(path: str):
+        # Absent caption returns 200 with caption:null (not 404) — the cart fires
+        # one GET per item, so a 404 for every uncaptioned image floods the console
+        # with errors. null is the honest "no caption yet" signal.
         cap = _load_captions().get(path)
-        if not cap:
-            raise HTTPException(404, "no caption for this path")
-        return {"path": path, "uid": uid_for(path), "caption": cap}
+        return {"path": path, "uid": uid_for(path), "caption": cap or None}
 
     @app.get("/api/captions")
     def captions_bulk():
@@ -2347,8 +2416,8 @@ def create_app(model: str = DEFAULT_MODEL):
         # contains the substring 'car'" (which used to false-match Carlos, Carver, etc).
         if not SCORES.exists():
             return {"built": False, "items": []}
-        s = json.loads(SCORES.read_text())
-        if metric not in s["metrics"]:
+        s = _refresh_scores_cache()["full"]
+        if not s or metric not in s.get("metrics", {}):
             return {"built": False, "items": []}
         canon = s.get("canonical") or list(s["scores"].keys())  # deduped reps (fallback for old files)
         if q and q.strip():
@@ -2369,15 +2438,11 @@ def create_app(model: str = DEFAULT_MODEL):
         # past `offset+limit` if needed, but stop once we have `limit` live
         # items, so the cost stays bounded by the number of dead files seen.
         items = []
-        i = 0
-        skipped = 0
         for p in ranked[offset:]:
-            i += 1
             # Centralized hide policy: skip dead / NSFW / hidden-cluster reps.
             # (Dead-file purge runs lazily via the search/filter endpoints; here
             # we just skip so the Interesting page stays clean.)
             if _hidden(p):
-                skipped += 1
                 continue
             d = [dp for dp in dupes.get(p, [p]) if not _hidden(dp)] or [p]
             items.append({
@@ -2387,8 +2452,13 @@ def create_app(model: str = DEFAULT_MODEL):
             })
             if len(items) >= limit:
                 break
+        # `total` = count of all live (non-hidden, on-disk) ranked entries, so the
+        # paginator's last page lines up. Walk the whole ranked list once (O(n) over
+        # ~deduped reps; _hidden is O(1) set/dict lookups + one stat). Cheap relative
+        # to the per-request scores parse this endpoint used to do.
+        total = sum(1 for p in ranked if not _hidden(p))
         return {"built": True, "metric": metric, "metrics": s["metrics"],
-                "total": len(ranked) - skipped if skipped else len(ranked),
+                "total": total,
                 "items": items, "coverage": _metric_coverage(metric, len(canon))}
 
     # ---- per-image detail page (uid → everything we know about that file) ----
@@ -2434,9 +2504,8 @@ def create_app(model: str = DEFAULT_MODEL):
         # whose scores live under a different canonical rep.
         if not SCORES.exists():
             return {}, [path]
-        try:
-            s = json.loads(SCORES.read_text())
-        except Exception:
+        s = _refresh_scores_cache()["full"]
+        if not s:
             return {}, [path]
         if path in s.get("scores", {}):
             return s["scores"][path], s.get("dupes", {}).get(path, [path])
