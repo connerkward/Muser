@@ -38,9 +38,12 @@ See `REQUIREMENTS.md` for scope/decisions.
   (`muser/web/app.html`). Warm search ≈ 40 ms (precomputed dedup, see below).
   Endpoints: /api/search, /api/search-upload (multipart image→image), /api/search-color
   (multi-hex CSV + `mode=all|any`), /api/search-image, /api/search-compose, /api/filter,
-  /api/index, /api/thumb (PIL), /api/image, /api/upscale (4× → cached + /tmp mirror, for
-  the photo before/after slider), /api/projection (3D PCA cloud), /api/contact-sheet
+  /api/index, /api/thumb (PIL; `fit=cover` square smart-crop default | `fit=contain`
+  aspect-preserving for masonry), /api/image, /api/upscale (4× → cached + /tmp mirror, for
+  the photo before/after slider), /api/projection (3D PCA cloud; `space=dinov2` + `method=
+  hdbscan|kmeans`), /api/clusters & /api/cluster (`space=dinov2`), /api/contact-sheet
   (numbered montage for the MCP→LLM), /api/reveal (open -R), /api/model, /api/status,
+  /api/jobs (foreground task + background jobs + recent pipeline runs, for the Jobs page),
   /api/folders, /api/c2pa, /api/ai, /api/ai/scan, /api/color[/scan], GET|POST
   /api/demo-mode. **Generate pipeline:** POST /api/checkout (`mode=zip|generate`),
   /api/checkout/status, /api/checkout/zip, /api/pipelines, /api/pipeline/{id},
@@ -118,6 +121,11 @@ See `REQUIREMENTS.md` for scope/decisions.
   `image_to_3d_multiview` (Hunyuan3D v3, accepts L/B/R extra views — `EP_MULTIVIEW_3D`),
   `generate_views` (3 concurrent nano_banana edits → L/B/R product shots feeding the
   multiview path), `train_lora`/`flux_lora_generate` (FLUX LoRA, expensive route).
+  **fal queue API (opt-in):** a thread-local **status sink** (`set_status_sink`) makes
+  `fal_run` route through the QUEUE endpoint (`fal_run_queued`: submit → poll status →
+  fetch `response_url`, same payload as sync) and emit `{request_id, status,
+  queue_position}` per poll. No sink set → plain sync POST (unchanged for every non-pipeline
+  caller). The pipeline uses this to surface real fal-side progress on the Jobs page.
 - `muser/pipeline.py` — generate-mode **checkout pipeline orchestrator**
   (`run_pipeline`), spawned in a daemon thread by `POST /api/checkout {mode:"generate"}`.
   Staged + resilient (a single failed prompt/image records a stage error, never aborts):
@@ -127,7 +135,19 @@ See `REQUIREMENTS.md` for scope/decisions.
   optional 3d (per generated image; `multi_angle` → synth L/B/R views + multiview recon).
   Persists to `~/.muser/pipelines/<run_id>/run.json` (atomic write under a per-run lock)
   + `outputs/<files>`, with a newest-first `index.json` of run summaries. Final status
-  `done` iff ≥1 image materialized, else `error`.
+  `done` iff ≥1 image materialized, else `error`. Each cloud stage runs inside a
+  `_fal_stage(name)` context manager that installs the fal status sink, so the stage's
+  `note`/`request` fields carry live fal queue status (`fal: queued · pos N` / `running on
+  GPU` / `completed`) + the fal request id — visible on the Jobs page.
+- `muser/dinov2.py` — **opt-in DINOv2 space** for Explore + Similar (additive; SigLIP stays
+  default). Pure-numpy, no model load — reuses precomputed DINOv2-large vectors
+  (`~/.muser/dinov3_canon.npz`, ~17.6k canonical; file named `dinov3_*` for historical
+  reasons but the vectors are DINOv2). `similar(path,k)` = cosine kNN; `clusters()` reads
+  `dinov3_clusters.json` (217 clusters vs SigLIP's 89 — finer visual grouping). Surfaced via
+  `space=dinov2` on `/api/search-image`, `/api/clusters`, `/api/cluster`, `/api/projection`;
+  falls back to SigLIP when a sidecar/path is missing. **Cluster names** are baked into
+  `dinov3_clusters.json` as a `label` per cluster (a one-off gpt-4o-mini pass over each
+  cluster's rep images — "bmw logo", "car interior", "modern architecture").
 - `muser/projection.py` — `/api/projection` 3D point cloud for the **Explore** tab:
   pulls a stride-sampled (≤`MAX_N=5000`) set of (path, vector) rows from the model's
   LanceDB table, PCA-projects to 3D via **numpy SVD** (no sklearn), colors each point by
@@ -169,7 +189,25 @@ Single-file frontend. Beyond Search, the tabs/controls added this session:
   `<model-viewer>` 3D (wireframe toggle) for `.glb`, with a post-hoc "make 3D" button per
   image (POST /api/pipeline/{id}/threed, `multi_angle`). `<model-viewer>` loads from a CDN,
   so 3D needs internet to render and falls back to a download link offline.
-- **Explore** — the /api/projection 3D point cloud, cluster-colored.
+- **Explore** — the /api/projection 3D point cloud, cluster-colored; tracks the
+  space (SigLIP/DINOv2) + method (HDBSCAN/K-means) pickers (re-projects + re-colors on
+  toggle, single canvas).
+- **Jobs** tab — polls /api/jobs (1.2s while open): foreground task progress, background
+  checkout/generate jobs with per-stage progress + **live fal status** (`fal: queued · pos
+  N` / `running on GPU`, fal request id on hover) + errors, and clickable recent
+  generate-run cards (→ Results). RAM-backed jobs evict after 1h/32 newer; persisted runs
+  survive restarts.
+- **Masonry** (debug-menu toggle, press `d`) — Pinterest/Cosmos image wall, **#results
+  only**. JS append-only layout (`layoutMasonry`): tiles absolute-positioned into the
+  shortest column, heights from each result's `data-w/h` so **no pop-in** and appending a
+  page never reshuffles existing tiles. Labels hidden, even 14px gaps. Uses `fit=contain`
+  thumbs (square smart-crops can't vary height). Per-page sort-blend re-rank is suppressed
+  in masonry (it would reshuffle the wall on scroll). The analytic grids
+  (Interesting/Review/AI/Color) are NOT masonry'd — they render through their own functions
+  and stay a normal square grid.
+- **Infinite scroll** now also covers the **homepage showcase** (pool 600/metric, shuffled,
+  paged 60/scroll) and **reverse-image/Similar** (deeper top-N, k += 120) — previously
+  fixed-size.
 - **Sort blend** — a segmented allocation-bar slider that re-ranks search hits client-side
   by a weighted sum of per-result aesthetic metrics (`_SORT_BLEND_METRICS`: aesthetic_v2,
   pickscore, aesthetic_v25, hps_v21, aesthetic) blended with relevance; metrics are inlined
@@ -177,8 +215,9 @@ Single-file frontend. Beyond Search, the tabs/controls added this session:
 - **Image-upload search** (drag/drop or picker → /api/search-upload) and **multi-color
   search** (multiple swatches + all/any mode → /api/search-color).
 - **Random-aesthetic homepage**, **debug menu** (press `d`: thumb size / columns +
-  demo-mode toggle), **photo before/after upscale slider** (/api/upscale) with a grain
-  overlay, and the NSFW("Review") tab hidden.
+  masonry toggle + demo-mode toggle), **photo before/after upscale slider** (/api/upscale)
+  with a grain overlay. The NSFW **Review** tab is shown in normal mode and hidden only in
+  demo mode (`syncNsfwNav` on boot + `applyNsfwNav` on demo toggle).
 
 ## Reverse-image search (web UI)
 
@@ -279,10 +318,16 @@ working and verified. Color facet search shipped (`color.py`). Skin-tone search 
 built then removed (archived at tag `skintone-v4-archived`, see `reports/skintone-archive/`).
 **Generate pipeline shipped** (`generators.py`/`pipeline.py`): cart → fal.ai image
 gen (nano_banana / gpt-image / both / LoRA), BiRefNet cutout, prompt expansion, and
-image→3D (Meshy 6, or Hunyuan3D multiview with synthesized L/B/R views). **Explore 3D
-projection** (`projection.py`) and the restyled MCP gallery (contact-sheet to the LLM)
-shipped. Global demo-mode hide-filter (dead/NSFW/people clusters) on by default.
-Always-on daemon shipped as a macOS LaunchAgent
+image→3D (Meshy 6, or Hunyuan3D multiview with synthesized L/B/R views). The generate
+pipeline drives fal via the **queue API** with live per-stage fal status on the Jobs page.
+**Explore 3D projection** (`projection.py`, space+method aware) and the restyled MCP gallery
+(contact-sheet to the LLM) shipped. **Opt-in DINOv2 space** (`dinov2.py`) for Explore +
+Similar (217 named clusters). **Jobs page** (`/api/jobs`) for in-flight work. **Masonry**
+(Pinterest/Cosmos, `#results`, JS append-only) + infinite scroll on homepage/Similar.
+Global demo-mode hide-filter (dead/NSFW/people clusters) on by default; NSFW Review tab
+shown in normal mode. Always-on daemon shipped as a macOS LaunchAgent
 (`~/Library/LaunchAgents/com.muser.serve.plist`, documented in central per-machine
-doc). Next: wire `jina-v4` run (7.5GB download), add Qwen3-VL, VLM-generated ground
-truth for the user's own folders.
+doc). Benchmarks in `reports/` (latest: siglip2-b vs Cohere Embed v4 on abstract queries —
+siglip marginally ahead, Cohere not worth adopting for a photo library). Next: wire
+`jina-v4` run (7.5GB download), add Qwen3-VL, VLM-generated ground truth for the user's own
+folders; optional per-request fal tracking for concurrent "both"-mode generate.
