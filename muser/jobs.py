@@ -154,20 +154,24 @@ class JobRegistry:
 
 
 def public(job: dict) -> dict:
-    """Status payload for ``/api/checkout/status`` — never includes raw zip bytes."""
-    return {
-        "id": job["id"],
-        "status": job["status"],
-        "caption": dict(job["caption"]),
-        "upscale": dict(job["upscale"]),
-        "stages": [dict(s) for s in job.get("stages", [])],
-        "errors": list(job["errors"]),
-        "captioned": job["captioned"],
-        "upscaled": job["upscaled"],
-        "captions_missing": job["captions_missing"],
-        "zip_ready": job["zip_ready"],
-        "error": job["error"],
-    }
+    """Status payload for ``/api/checkout/status`` — never includes raw zip bytes.
+
+    Snapshots under the registry lock so a worker thread mutating
+    ``stages``/``errors`` (set_stage/add_error) can't change a list mid-copy."""
+    with REGISTRY._lock:
+        return {
+            "id": job["id"],
+            "status": job["status"],
+            "caption": dict(job["caption"]),
+            "upscale": dict(job["upscale"]),
+            "stages": [dict(s) for s in job.get("stages", [])],
+            "errors": list(job["errors"]),
+            "captioned": job["captioned"],
+            "upscaled": job["upscaled"],
+            "captions_missing": job["captions_missing"],
+            "zip_ready": job["zip_ready"],
+            "error": job["error"],
+        }
 
 
 # Module singleton — the service imports REGISTRY directly.

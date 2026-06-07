@@ -1587,7 +1587,10 @@ def create_app(model: str = DEFAULT_MODEL):
         from fastapi.responses import FileResponse
         from . import pipeline as _pipeline
 
-        base = _pipeline.run_dir(run_id).resolve()
+        try:
+            base = _pipeline.run_dir(run_id).resolve()
+        except ValueError:
+            raise HTTPException(404, "not found")  # run_id like ".." rejected
         target = (base / path).resolve()
         # Path-traversal guard: target must stay under the run dir.
         if base != target and base not in target.parents:

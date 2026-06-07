@@ -33,6 +33,7 @@ from __future__ import annotations
 import concurrent.futures as cf
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -52,12 +53,21 @@ def _lock_for(run_id: str) -> threading.Lock:
     with _locks_guard:
         lk = _locks.get(run_id)
         if lk is None:
-            lk = threading.Lock()
+            lk = threading.RLock()  # reentrant: _write_run re-acquires under add_output/stage
             _locks[run_id] = lk
         return lk
 
 
+_RUNID_RE = re.compile(r"^[0-9a-f]{16}$")  # secrets.token_hex(8)
+
+
 def run_dir(run_id: str) -> Path:
+    # Validate before joining: an attacker-controlled run_id like ".." would let
+    # the /api/pipeline/{run_id}/file/{path} endpoint escape the pipelines jail
+    # and read ~/.muser/* (scores.json, captions.jsonl, …). Run ids are always
+    # 16 hex chars; reject anything else.
+    if not _RUNID_RE.match(run_id or ""):
+        raise ValueError("invalid run_id")
     return PIPELINES_DIR / run_id
 
 
@@ -74,7 +84,10 @@ def _write_run(run_id: str, run: dict) -> None:
 
 
 def read_run(run_id: str) -> dict | None:
-    p = run_dir(run_id) / "run.json"
+    try:
+        p = run_dir(run_id) / "run.json"
+    except ValueError:
+        return None
     if not p.is_file():
         return None
     try:
@@ -179,20 +192,26 @@ def run_pipeline(run_id: str, config: dict, registry, services) -> dict:
     def stage(name, status=None, done=None, total=None):
         registry.set_stage(run_id, name, status=status, done=done, total=total)
         # Mirror the registry's stage list into run.json so a /api/pipeline read
-        # (which doesn't see the in-RAM job) still shows progress.
-        job = registry.get(run_id)
-        if job is not None:
-            run["stages"] = [dict(s) for s in job.get("stages", [])]
-        _write_run(run_id, run)
+        # (which doesn't see the in-RAM job) still shows progress. The run-lock
+        # guards the shared run dict against concurrent worker mutations (else
+        # json.dumps can hit "list changed size during iteration").
+        with _lock_for(run_id):
+            job = registry.get(run_id)
+            if job is not None:
+                run["stages"] = [dict(s) for s in job.get("stages", [])]
+            _write_run(run_id, run)
 
     def stage_error(name, msg):
         registry.add_error(run_id, "", name, msg)
         stage(name, status="error")
 
     def add_output(o: dict):
-        run["outputs"].append(o)
-        _write_run(run_id, run)
-        _update_index(_index_entry(run))
+        # Worker threads (nano/chatgpt/both pool) call this concurrently; guard
+        # the shared run dict so append + json.dumps don't race.
+        with _lock_for(run_id):
+            run["outputs"].append(o)
+            _write_run(run_id, run)
+            _update_index(_index_entry(run))
 
     caption_paths = services["caption_paths"]
     upscale_4x = services["upscale_4x"]
