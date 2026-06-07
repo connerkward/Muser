@@ -2993,6 +2993,9 @@ function _renderHits(r){
     const uid=h.uid||"";
     const c=document.createElement("div"); c.className="card";
     c.dataset.uid=uid;
+    // dims (when known) let masonry reserve each tile's aspect-ratio → no pop-in
+    if(h.width)  c.dataset.w=h.width;
+    if(h.height) c.dataset.h=h.height;
     c.innerHTML=`
       <div class="thumb"><span class="scoreb" title="${scoreTitle}">${pct}</span>${badge}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}&size=${THUMB}" title="${h.name} · uid:${uid}"></div>
       <div class="meta"><div class="name" title="${h.path}${uid?' · uid:'+uid:''}">${h.name}</div>
@@ -4781,12 +4784,22 @@ function applyGridSettings(){
     // column-count, auto → column-width from thumbnail size. The square-crop
     // thumb is relaxed to natural aspect only while masonry is on.
     const colRule = s.cols > 0 ? `column-count:${s.cols}` : `column-width:${s.thumb}px`;
+    // `>.card` must be appended PER grid — a comma list only binds the suffix to
+    // its last term, so build the per-card selectors explicitly.
+    const gridList = CARD_GRIDS.split(",");
+    const items  = gridList.map(g => `${g}>.card`).join(",");
+    const labels = gridList.map(g => `${g}>.card .meta,${g}>.card .foot`).join(",");
     style.textContent =
-      `${CARD_GRIDS}{display:block !important;${colRule};column-gap:16px;}` +
-      `${CARD_GRIDS}>.card{display:inline-block;width:100%;margin:0 0 22px;` +
-        `break-inside:avoid;-webkit-column-break-inside:avoid;}` +
-      `.card .thumb{aspect-ratio:auto !important;}` +
-      `.card .thumb img{height:auto !important;}`;
+      `${CARD_GRIDS}{display:block !important;${colRule};column-gap:14px;}` +
+      `${items}{display:inline-block;width:100%;margin:0 0 14px;` +
+        `break-inside:avoid;-webkit-column-break-inside:avoid;animation:none;}` +
+      // pure image tiles in masonry — drop filename + action labels, even gaps
+      `${labels}{display:none;}` +
+      // relax the square crop; _tuneCard sets each thumb's true aspect-ratio
+      // inline (from result dims) so space is reserved before the image loads →
+      // no pop-in. No !important so the inline aspect-ratio can override.
+      `.card .thumb{aspect-ratio:auto;}` +
+      `.card .thumb img{height:auto;}`;
   } else {
     // cols 0 → auto-fill with the thumb size as min track; cols N → exactly N columns.
     const cols = s.cols > 0
@@ -4808,12 +4821,26 @@ function _thumbFitSrc(src, contain){
   src = src.replace(/&fit=contain/g, "");
   return contain ? src + "&fit=contain" : src;
 }
-function _retuneThumbs(contain){
-  document.querySelectorAll(_MASONRY_GRIDS.split(",").map(g=>g+" img").join(",")).forEach(im => {
-    const cur = im.getAttribute("src");
+function _tuneCard(card, contain){
+  // 1) swap the thumb src to aspect-preserving (contain) or square (cover)
+  const img = card.querySelector(".thumb img");
+  if (img){
+    const cur = img.getAttribute("src");
     const next = _thumbFitSrc(cur, contain);
-    if (next && next !== cur) im.setAttribute("src", next);
-  });
+    if (next && next !== cur) img.setAttribute("src", next);
+  }
+  // 2) reserve the tile's aspect-ratio from the result's known dims so the
+  //    column layout is stable before the image loads (kills pop-in). Cleared
+  //    when leaving masonry so the square grid crop returns.
+  const thumb = card.querySelector(".thumb");
+  if (thumb){
+    const w = +card.dataset.w, h = +card.dataset.h;
+    thumb.style.aspectRatio = (contain && w > 0 && h > 0) ? (w + " / " + h) : "";
+  }
+}
+function _retuneThumbs(contain){
+  const sels = _MASONRY_GRIDS.split(",").map(g => g + " .card").join(",");
+  document.querySelectorAll(sels).forEach(card => _tuneCard(card, contain));
 }
 let _masonryObserver = null;
 function _setMasonryObserver(on){
@@ -4822,12 +4849,9 @@ function _setMasonryObserver(on){
   _masonryObserver = new MutationObserver(muts => {
     for (const m of muts) for (const n of m.addedNodes){
       if (n.nodeType !== 1) continue;
-      const imgs = n.matches && n.matches("img") ? [n]
-                 : (n.querySelectorAll ? n.querySelectorAll("img") : []);
-      imgs.forEach(im => {
-        const next = _thumbFitSrc(im.getAttribute("src"), true);
-        if (next && next !== im.getAttribute("src")) im.setAttribute("src", next);
-      });
+      const cards = n.matches && n.matches(".card") ? [n]
+                  : (n.querySelectorAll ? n.querySelectorAll(".card") : []);
+      cards.forEach(c => _tuneCard(c, true));
     }
   });
   _MASONRY_GRIDS.split(",").forEach(sel => {
