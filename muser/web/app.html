@@ -693,6 +693,7 @@
   .jbar { flex:1; height:4px; background:var(--line); border-radius:2px; overflow:hidden; }
   .jbar i { display:block; height:100%; background:var(--fg); transition:width 240ms ease; }
   .jpct { font-size:11px; color:var(--mut); font-variant-numeric:tabular-nums; min-width:42px; text-align:right; }
+  .jnote { font-size:11px; color:#caa468; font-style:italic; margin-left:auto; white-space:nowrap; }
   .jerr { font-size:11px; color:#c0573f; margin-top:7px; }
   .jpipe { display:flex; align-items:center; gap:10px; margin-top:9px; }
   .jpipe img { width:48px; height:48px; object-fit:cover; border-radius:3px; flex:0 0 auto; }
@@ -3776,8 +3777,9 @@ function _pbar(done, total){
 function _stageRow(s){
   const icon = s.status==="done" ? "✓" : s.status==="error" ? "✕" : "◌";
   const cls = s.status==="done" ? "done" : s.status==="error" ? "err" : "run";
+  const note = s.note ? `<span class="jnote" ${s.request?`title="fal request ${s.request}"`:""}>${s.note}</span>` : "";
   return `<div class="jstage ${cls}"><span class="jsi">${icon}</span><span class="jsn">${s.name}</span>
-          ${s.total>0?_pbar(s.done,s.total):""}</div>`;
+          ${s.total>0?_pbar(s.done,s.total):""}${note}</div>`;
 }
 function _jobCard(j){
   const stages = (j.stages||[]).map(_stageRow).join("");

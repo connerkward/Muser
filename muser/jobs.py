@@ -107,12 +107,16 @@ class JobRegistry:
         status: str | None = None,
         done: int | None = None,
         total: int | None = None,
+        note: str | None = None,
+        request: str | None = None,
     ) -> None:
         """Upsert a generic ``stages`` entry by ``name``.
 
         Creates the stage on first reference; subsequent calls patch only the
-        supplied fields (``status`` / ``done`` / ``total``). Used by the
-        generate-mode pipeline to publish ordered, named progress without
+        supplied fields (``status`` / ``done`` / ``total`` / ``note`` /
+        ``request``). ``note`` is a short human string (e.g. fal queue status)
+        and ``request`` the fal request id, surfaced on the Jobs page. Used by
+        the generate-mode pipeline to publish ordered, named progress without
         touching the legacy ``caption``/``upscale`` slots.
         """
         with self._lock:
@@ -130,6 +134,10 @@ class JobRegistry:
                 entry["done"] = int(done)
             if total is not None:
                 entry["total"] = int(total)
+            if note is not None:
+                entry["note"] = note
+            if request is not None:
+                entry["request"] = request
 
     def add_error(self, jid: str, path: str, stage: str, msg: str) -> None:
         with self._lock:

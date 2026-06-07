@@ -36,6 +36,7 @@ import os
 import re
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import generators as gen
@@ -213,6 +214,31 @@ def run_pipeline(run_id: str, config: dict, registry, services) -> dict:
             _write_run(run_id, run)
             _update_index(_index_entry(run))
 
+    @contextmanager
+    def _fal_stage(stage_name):
+        """Route fal calls in this block through the queue API and mirror the
+        fal-side status (queue position / running / completed) + request id onto
+        ``stage_name``'s note, so the Jobs page shows real cloud progress. The
+        sink is thread-local, so concurrent generate workers each report their
+        own request independently (last writer wins on the shared note)."""
+        def _sink(ev):
+            status = (ev.get("status") or "").upper()
+            pos = ev.get("queue_position")
+            if status == "IN_QUEUE":
+                note = "fal: queued" + (f" · pos {pos}" if pos not in (None, "") else "")
+            elif status == "IN_PROGRESS":
+                note = "fal: running on GPU"
+            elif status == "COMPLETED":
+                note = "fal: completed"
+            else:
+                note = ("fal: " + status.lower()) if status else "fal"
+            registry.set_stage(run_id, stage_name, note=note, request=ev.get("request_id"))
+        gen.set_status_sink(_sink)
+        try:
+            yield
+        finally:
+            gen.clear_status_sink()
+
     caption_paths = services["caption_paths"]
     upscale_4x = services["upscale_4x"]
     load_captions = services["load_captions"]
@@ -257,7 +283,8 @@ def run_pipeline(run_id: str, config: dict, registry, services) -> dict:
             cut_urls: list[str] = []
             for i, url in enumerate(ref_urls):
                 try:
-                    png = gen.cutout(url)
+                    with _fal_stage("cutout"):
+                        png = gen.cutout(url)
                     rel = f"cutout_{i:03d}.png"
                     (out_dir / rel).write_bytes(png)
                     new_url = gen.fal_upload_bytes(png, rel, "image/png")
@@ -283,7 +310,8 @@ def run_pipeline(run_id: str, config: dict, registry, services) -> dict:
             prompts = list(gen_prompts)
         elif config.get("expand_prompts", True):
             try:
-                prompts = gen.expand_prompts(brief, n_outputs, ref_urls)
+                with _fal_stage("prompts"):
+                    prompts = gen.expand_prompts(brief, n_outputs, ref_urls)
             except Exception as e:
                 registry.add_error(run_id, "", "prompts", f"{type(e).__name__}: {e}")
                 prompts = [brief] * n_outputs
@@ -324,7 +352,8 @@ def run_pipeline(run_id: str, config: dict, registry, services) -> dict:
         ref_paths = list(paths)  # cart image paths for the gpt-image (edits) route
 
         def _gen_nano(prompt: str):
-            urls = gen.nano_banana(ref_urls, prompt, n=1)
+            with _fal_stage("generate"):
+                urls = gen.nano_banana(ref_urls, prompt, n=1)
             if urls:
                 _record_image(urls[0], prompt, "nano_banana")
             else:
@@ -346,7 +375,8 @@ def run_pipeline(run_id: str, config: dict, registry, services) -> dict:
                 stage("train", status="running", total=1)
                 trigger = (config.get("lora_type") or "concept").replace(" ", "_")
                 is_style = (config.get("lora_type") or "").lower() == "style"
-                lora_url = gen.train_lora(zip_url, trigger, is_style)
+                with _fal_stage("train"):
+                    lora_url = gen.train_lora(zip_url, trigger, is_style)
                 stage("train", status="done", done=1)
             except Exception as e:
                 stage_error("train", f"{type(e).__name__}: {e}")
@@ -355,7 +385,8 @@ def run_pipeline(run_id: str, config: dict, registry, services) -> dict:
             if lora_url:
                 for prompt in prompts:
                     try:
-                        urls = gen.flux_lora_generate(lora_url, prompt, n=1)
+                        with _fal_stage("generate"):
+                            urls = gen.flux_lora_generate(lora_url, prompt, n=1)
                         if urls:
                             _record_image(urls[0], prompt, "lora")
                     except Exception as e:
@@ -437,14 +468,16 @@ def run_pipeline(run_id: str, config: dict, registry, services) -> dict:
                                 })
                             except Exception as e:
                                 registry.add_error(run_id, "", "3d", f"view {label}: {type(e).__name__}: {e}")
-                        res = gen.image_to_3d_multiview(
-                            front_url,
-                            (views or {}).get("left"),
-                            (views or {}).get("back"),
-                            (views or {}).get("right"),
-                        )
+                        with _fal_stage("3d"):
+                            res = gen.image_to_3d_multiview(
+                                front_url,
+                                (views or {}).get("left"),
+                                (views or {}).get("back"),
+                                (views or {}).get("right"),
+                            )
                     else:
-                        res = gen.image_to_3d(front_url)
+                        with _fal_stage("3d"):
+                            res = gen.image_to_3d(front_url)
 
                     glb = gen.download(res["glb"])
                     glb_rel = f"model_{i:03d}.glb"

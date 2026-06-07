@@ -26,6 +26,7 @@ from __future__ import annotations
 import concurrent.futures as cf
 import json
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -44,6 +45,7 @@ EP_LORA_TRAIN = "fal-ai/flux-lora-fast-training"
 EP_LORA_GEN = "fal-ai/flux-lora"
 
 _FAL_RUN = "https://fal.run/"
+_FAL_QUEUE = "https://queue.fal.run/"
 _FAL_STORAGE_INITIATE = "https://rest.alpha.fal.ai/storage/upload/initiate"
 
 # OpenAI image-edits endpoint (gpt-image-1) — the ChatGPT image generator route.
@@ -144,8 +146,93 @@ def _retry(call, *, label: str):
     raise RuntimeError(f"{label}: retries exhausted: {last!r}")
 
 
+# ---- fal-side progress reporting (queue API) --------------------------------
+# A per-thread "status sink": when set (via set_status_sink), fal_run routes
+# through the QUEUE API (submit → poll status → fetch result) instead of the sync
+# endpoint, and reports each {request_id, status, queue_position} to the sink so
+# callers (the generate pipeline) can surface real fal-side progress. When no
+# sink is set the call stays synchronous — unchanged behavior for every other
+# caller. Thread-local so concurrent generate workers each report independently.
+_status_sink = threading.local()
+
+
+def set_status_sink(fn) -> None:
+    """Install a per-thread status callback ``fn(event: dict)`` (or None to clear)."""
+    _status_sink.fn = fn
+
+
+def clear_status_sink() -> None:
+    _status_sink.fn = None
+
+
+def _emit_status(ev: dict) -> None:
+    fn = getattr(_status_sink, "fn", None)
+    if fn:
+        try:
+            fn(ev)
+        except Exception:
+            pass  # progress reporting must never break a generation
+
+
+def fal_run_queued(endpoint_id: str, body: dict, timeout: float = 600, poll: float = 1.5) -> dict:
+    """Queue-API variant of :func:`fal_run`: submit the job, poll its status
+    (emitting each transition to the active status sink), then fetch the result.
+    Same return shape as the sync endpoint — fal's ``response_url`` returns the
+    identical payload. ``timeout`` bounds the total queue+run wait.
+    """
+    key = fal_key()
+    hdr = {"Authorization": f"Key {key}", "Content-Type": "application/json"}
+
+    def _submit():
+        req = urllib.request.Request(
+            _FAL_QUEUE + endpoint_id, data=json.dumps(body).encode("utf-8"), headers=hdr
+        )
+        return _request_json(req, 60)
+
+    sub = _retry(_submit, label=f"fal-queue:{endpoint_id}")
+    req_id = sub.get("request_id") or ""
+    status_url = sub.get("status_url")
+    response_url = sub.get("response_url")
+    if not status_url or not response_url:
+        raise RuntimeError(f"fal-queue:{endpoint_id}: no status/response url in {sub!r}")
+    _emit_status({"request_id": req_id, "status": "IN_QUEUE", "queue_position": sub.get("queue_position")})
+
+    deadline = time.monotonic() + max(30.0, float(timeout))
+    last = None
+    while True:
+        def _stat():
+            req = urllib.request.Request(status_url, headers={"Authorization": f"Key {key}"})
+            return _request_json(req, 30)
+
+        st = _retry(_stat, label=f"fal-queue-status:{endpoint_id}")
+        status = st.get("status") or ""
+        # Emit on every IN_QUEUE poll (queue_position moves) and on transitions.
+        if status != last or status == "IN_QUEUE":
+            _emit_status({"request_id": req_id, "status": status, "queue_position": st.get("queue_position")})
+            last = status
+        if status == "COMPLETED":
+            break
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"fal-queue:{endpoint_id}: timeout after {timeout}s (req {req_id})")
+        time.sleep(poll)
+
+    def _result():
+        req = urllib.request.Request(response_url, headers={"Authorization": f"Key {key}"})
+        return _request_json(req, timeout=300)
+
+    return _retry(_result, label=f"fal-queue-result:{endpoint_id}")
+
+
 def fal_run(endpoint_id: str, body: dict, timeout: float = 300) -> dict:
-    """POST ``body`` to ``https://fal.run/<endpoint_id>`` (sync) and return JSON."""
+    """POST ``body`` to fal and return JSON.
+
+    When a status sink is active in this thread, routes through the QUEUE API so
+    fal-side request id + queue position can be surfaced; otherwise a plain sync
+    POST to ``https://fal.run/<endpoint_id>`` (unchanged for all other callers).
+    """
+    if getattr(_status_sink, "fn", None) is not None:
+        return fal_run_queued(endpoint_id, body, timeout=max(float(timeout), 600.0))
+
     key = fal_key()
 
     def _call():
