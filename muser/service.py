@@ -2181,13 +2181,15 @@ def create_app(model: str = DEFAULT_MODEL):
             members = [p for p in _dino.cluster_members(cid_int) if not _hidden(p)]
             size = cl.get("size", len(members))
             total += size
-            # Label = caption of the first resolvable sample image, else "cluster N".
-            label = None
-            for p in members:
-                cap = caps.get(p)
-                if cap:
-                    label = cap
-                    break
+            # Label precedence: precomputed VLM label baked into the sidecar
+            # (muser/scripts label pass) → representative caption → "cluster N".
+            label = (cl.get("label") or "").strip() or None
+            if not label:
+                for p in members:
+                    cap = caps.get(p)
+                    if cap:
+                        label = cap
+                        break
             if not label:
                 label = f"cluster {cid_int}"
             out_clusters.append({
@@ -2276,25 +2278,42 @@ def create_app(model: str = DEFAULT_MODEL):
     _projection_lock = threading.Lock()
 
     @app.get("/api/projection")
-    def projection(n: int = 2000, folder: str | None = None):
+    def projection(
+        n: int = 2000,
+        folder: str | None = None,
+        space: str | None = None,
+        method: str = "hdbscan",
+    ):
+        from . import dinov2 as _dino
         from . import projection as _proj
 
-        key = _proj.cache_key(n, folder, state.index.db_path, CLUSTERS)
+        is_dino = space == "dinov2"
+        # Cache key tracks space + method so toggling either re-projects/re-colors.
+        # DINOv2 keys on its own clusters sidecar mtime (folder scoping N/A there).
+        clusters_path = _dino.CLUSTERS if is_dino else CLUSTERS
+        key = _proj.cache_key(
+            n, (None if is_dino else folder), state.index.db_path, clusters_path,
+            space=("dinov2" if is_dino else ""), method=("" if is_dino else method),
+        )
         with _projection_lock:
             if _projection_cache["key"] == key and _projection_cache["payload"] is not None:
                 return _projection_cache["payload"]
         # Compute outside the lock (SVD can take a few hundred ms) so a slow
         # build doesn't serialize unrelated requests; last writer wins, which is
         # fine since the key fully determines the payload.
-        payload = _proj.compute_projection(
-            index=state.index,
-            model=state.model_name,
-            clusters=_clusters(),
-            n=n,
-            folder=folder,
-            is_hidden=_hidden,
-            total_indexed=state.index.count(state.model_name),
-        )
+        if is_dino:
+            payload = _proj.compute_projection_dinov2(n=n, is_hidden=_hidden)
+        else:
+            payload = _proj.compute_projection(
+                index=state.index,
+                model=state.model_name,
+                clusters=_clusters(),
+                n=n,
+                folder=folder,
+                is_hidden=_hidden,
+                total_indexed=state.index.count(state.model_name),
+                method=method,
+            )
         with _projection_lock:
             _projection_cache["key"] = key
             _projection_cache["payload"] = payload

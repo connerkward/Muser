@@ -135,6 +135,9 @@
   .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr));
           gap:26px 16px; }
   .card { background:transparent; border:0; display:flex; flex-direction:column;
+          min-width:0;   /* grid item default min-width is min-content; without this a
+                            long filename / no-wrap content blows the 1fr tracks uneven
+                            (esp. when the debug panel forces repeat(N,1fr)). */
           animation:card-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both; }
   @keyframes card-in {
     from { opacity:0; transform:translateY(4px); }
@@ -938,7 +941,7 @@
     <button class="nav" data-view="search">Search</button>
     <button class="nav" data-view="explore">Explore</button>
     <button class="nav" data-view="interesting">Interesting</button>
-    <!-- Review = NSFW-review tab; hidden in normal mode per user request (unhide on ask) -->
+    <!-- Review = NSFW tab; visible in normal mode, hidden in demo mode (syncNsfwNav) -->
     <button class="nav" data-view="review" style="display:none">Review</button>
     <button class="nav" data-view="ai">AI</button>
     <button class="nav" data-view="results">Results</button>
@@ -952,7 +955,7 @@
   <button class="nav on" id="navSearch">Search</button>
   <button class="nav" id="navExplore">Explore</button>
   <button class="nav" id="navInteresting">Interesting</button>
-  <!-- Review = NSFW-review tab; hidden in normal mode per user request (unhide on ask) -->
+  <!-- Review = NSFW tab; visible in normal mode, hidden in demo mode (syncNsfwNav) -->
   <button class="nav" id="navReview" style="display:none">Review</button>
   <button class="nav" id="navColor">Color</button>
   <button class="nav" id="navAI">AI</button>
@@ -4358,13 +4361,14 @@ _ensureCaptionsLoaded();
 // "" = SigLIP (default, unchanged); "dinov2" = stored DINOv2 vectors (no model
 // load). Persisted on window so searchImage() can read it from any tab.
 window._simSpace = "";
-$("#cmethod").onchange=()=>loadClusters();
+$("#cmethod").onchange=()=>{ loadClusters(); loadProjectionViz(true); };
 $("#cspace").onchange=()=>{
   window._simSpace = $("#cspace").value;
   // DINOv2 ships a single HDBSCAN clustering; disable the method picker there
   // so the (SigLIP-only) method options don't imply a choice that's ignored.
   $("#cmethod").disabled = (window._simSpace==="dinov2");
   loadClusters();
+  loadProjectionViz(true);   // re-project + re-color the cloud for the new space
 };
 // Hide the cluster-detail view and show the cluster grid. Does NOT touch
 // history — call sites decide whether to also pop/replace the URL.
@@ -4493,7 +4497,7 @@ $("#indexPick").onclick = async () => {
   } catch (e) { toast("index failed (check path)"); }
 };
 
-pollStatus(); loadFolders(); loadClusterChips();
+pollStatus(); loadFolders(); loadClusterChips(); syncNsfwNav();
 // Initial route: respect #/<view> (or #/image/<uid>) in the URL so deep-links
 // / reload land on the right tab. Use replaceState (via the suppress flag +
 // explicit replace) so we don't leave an empty entry behind the first real navigation.
@@ -4540,24 +4544,39 @@ function ensureThree(){
   return window.__threeLoading;
 }
 
-async function loadProjectionViz(){
-  // window-scoped flag (not a module `let`) so an early boot-time call from
-  // showView can't hit the temporal-dead-zone before this block initializes.
-  if (window.__vizLoaded) return;
+async function loadProjectionViz(force){
+  // The point cloud tracks the Explore space (SigLIP/DINOv2) + clustering method,
+  // so its data + coloring always match the pickers above the grid. A plain
+  // Explore re-entry (same space+method) skips the re-mount; a toggle passes
+  // force=true to tear down + re-project. window-scoped flags (not module `let`s)
+  // so an early boot-time call from showView can't hit the temporal dead zone.
+  const box = $("#vizBox");
+  const space  = (window._simSpace==="dinov2") ? "dinov2" : "";
+  const method = $("#cmethod") ? $("#cmethod").value : "hdbscan";
+  const vizKey = space ? "dinov2" : ("siglip|"+method);   // dinov2 ignores method
+  if (!force && window.__vizLoaded && window.__vizKey===vizKey) return;
   // Don't set __vizLoaded until the cloud actually mounts: a transient first-load
   // failure (empty points, fetch error, three.js CDN not ready) must leave the flag
   // false so a later Explore visit retries instead of permanently giving up.
-  const box = $("#vizBox");
+  const url = "/api/projection?n=2000"
+    + (space ? "&space=dinov2" : ("&method=" + encodeURIComponent(method)));
   let data;
-  try { data = await (await fetch("/api/projection?n=2000")).json(); }
+  try { data = await (await fetch(url)).json(); }
   catch { box.classList.add("empty"); return; }
   const pts = (data && data.points) || [];
   if (!pts.length) { box.classList.add("empty"); return; }   // nothing indexed → hide viz
   const three = await ensureThree();
   if (!three) { box.classList.add("empty"); return; }
+  // Tear down any prior cloud (toggle re-render) before mounting the new one.
+  if (window.__vizState && window.__vizState.dispose){
+    try { window.__vizState.dispose(); } catch(e){}
+    const oldCanvas = box.querySelector("canvas");
+    if (oldCanvas) oldCanvas.remove();
+  }
   box.classList.remove("empty");
   mountPointCloud(three, box, data);
-  window.__vizLoaded = true;                                  // mounted OK → don't re-mount
+  window.__vizLoaded = true;                                  // mounted OK
+  window.__vizKey = vizKey;                                   // remember what's shown
 }
 
 function mountPointCloud(three, box, data){
@@ -4827,11 +4846,23 @@ function toggleDebugPanel(){
       });
       const j = await r.json();
       demo.checked = !!j.hide;          // pin to server truth
+      applyNsfwNav(!!j.hide);           // show/hide the Review (NSFW) tab to match
       refreshActiveView();              // re-render so the change is visible now
     } catch(e){ console.warn("demo-mode toggle failed", e); }
     finally { demo.disabled = false; }
   });
 }
+// NSFW "Review" tab visibility: shown in normal mode, hidden only in demo mode.
+// Both nav bars (mini + header) carry a Review button; toggle them together.
+function applyNsfwNav(hide){
+  document.querySelectorAll('[data-view="review"], #navReview').forEach(b=>{
+    b.style.display = hide ? "none" : "";
+  });
+}
+function syncNsfwNav(){
+  fetch("/api/demo-mode").then(r=>r.json()).then(j=>applyNsfwNav(!!j.hide)).catch(()=>{});
+}
+
 // Re-run whatever view is currently showing so a server-side data change
 // (e.g. demo-mode toggle) is reflected immediately. Mirrors showView's loader
 // dispatch but forces a fresh fetch (invalidating the showcase cache).

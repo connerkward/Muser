@@ -50,19 +50,26 @@ def _palette_color(cid: int) -> str:
     return f"#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}"
 
 
-def _path_to_cluster(clusters: dict | None) -> tuple[dict[str, int], dict[int, dict]]:
+def _path_to_cluster(
+    clusters: dict | None, method: str | None = None
+) -> tuple[dict[str, int], dict[int, dict]]:
     """From a loaded clusters.json, build:
-      - path -> cluster_id  (from the HDBSCAN ``members`` map)
+      - path -> cluster_id  (from the chosen method's ``members`` map)
       - cluster_id -> {id, label, color}  (from ``clusters``)
-    Falls back to the first available method if HDBSCAN is absent. Empty maps
-    when clusters.json is missing/malformed (every point then becomes id -1).
+    Honors ``method`` ("hdbscan" | "kmeans") so the point-cloud coloring tracks
+    the Explore method picker. Falls back to HDBSCAN, then the first available
+    method. Empty maps when clusters.json is missing/malformed (every point then
+    becomes id -1).
     """
     p2c: dict[str, int] = {}
     meta: dict[int, dict] = {}
     if not clusters:
         return p2c, meta
     methods = clusters.get("methods", {})
-    m_name = "hdbscan" if "hdbscan" in methods else (next(iter(methods)) if methods else None)
+    if method and method in methods:
+        m_name = method
+    else:
+        m_name = "hdbscan" if "hdbscan" in methods else (next(iter(methods)) if methods else None)
     if not m_name:
         return p2c, meta
     m = methods[m_name]
@@ -143,9 +150,11 @@ def compute_projection(
     folder: str | None,
     is_hidden,
     total_indexed: int,
+    method: str | None = None,
 ) -> dict:
     """Build the projection payload. ``is_hidden(path) -> bool`` is the service's
     unified hide predicate; ``total_indexed`` is the model's full row count.
+    ``method`` ("hdbscan" | "kmeans") selects which clustering colors the cloud.
 
     Response shape::
 
@@ -154,7 +163,7 @@ def compute_projection(
          "total_indexed": int, "sampled": int}
     """
     n = max(1, min(int(n), MAX_N))
-    p2c, meta = _path_to_cluster(clusters)
+    p2c, meta = _path_to_cluster(clusters, method)
 
     sample = _sample_rows(index, model, n, folder, is_hidden)
     if not sample:
@@ -199,11 +208,19 @@ def compute_projection(
     }
 
 
-def cache_key(n: int, folder: str | None, db_path: Path, clusters_path: Path) -> tuple:
+def cache_key(
+    n: int,
+    folder: str | None,
+    db_path: Path,
+    clusters_path: Path,
+    space: str = "",
+    method: str = "",
+) -> tuple:
     """Cache key = (clamped n, normalized folder, index-table mtime, clusters
-    mtime). Either file changing (re-index or re-cluster) invalidates the entry.
-    Index mtime uses the LanceDB dir's mtime as a cheap proxy for "table
-    changed" (a new fragment/version file bumps the directory mtime).
+    mtime, space, method). Any file changing (re-index or re-cluster) or a
+    space/method toggle invalidates the entry. Index mtime uses the LanceDB
+    dir's mtime as a cheap proxy for "table changed" (a new fragment/version
+    file bumps the directory mtime).
     """
     def _mtime(p: Path) -> float:
         try:
@@ -213,4 +230,91 @@ def cache_key(n: int, folder: str | None, db_path: Path, clusters_path: Path) ->
 
     n = max(1, min(int(n), MAX_N))
     folder_norm = str(Path(folder).expanduser().resolve()) if folder else ""
-    return (n, folder_norm, _mtime(db_path), _mtime(clusters_path))
+    return (n, folder_norm, _mtime(db_path), _mtime(clusters_path), space or "", method or "")
+
+
+def compute_projection_dinov2(n: int, is_hidden) -> dict:
+    """DINOv2-space point cloud: PCA-3 of a sample of the precomputed DINOv2
+    vectors (``~/.muser/dinov3_canon.npz``), colored by the DINOv2 clustering
+    (``dinov3_clusters.json``).
+
+    That sidecar only stores a handful of *representative* basenames per cluster
+    (not full membership), so points are colored by nearest-representative in
+    DINOv2 space (1-NN to the union of cluster reps) — an approximation that
+    nonetheless makes the cloud track the DINOv2 clusters + their labels. Folder
+    scoping doesn't apply (the npz is the whole canonical set). Degrades to an
+    empty cloud when the npz is absent.
+    """
+    from . import dinov2 as _dino
+
+    store = _dino._load()
+    if store is None:
+        return {"points": [], "clusters": [], "total_indexed": 0, "sampled": 0}
+    paths_all = store["paths"]
+    X_all = store["X"]  # already L2-normalized
+    total = len(paths_all)
+
+    # Live (non-hidden) rows, then an even stride sample to n.
+    live_idx = [i for i in range(total) if not is_hidden(str(paths_all[i]))]
+    n = max(1, min(int(n), MAX_N))
+    if len(live_idx) > n:
+        sel = np.linspace(0, len(live_idx) - 1, num=n).round().astype(int)
+        live_idx = [live_idx[i] for i in sel]
+    if not live_idx:
+        return {"points": [], "clusters": [], "total_indexed": total, "sampled": 0}
+    sample_paths = [str(paths_all[i]) for i in live_idx]
+    Xs = X_all[live_idx]
+    coords = _pca3(Xs)
+
+    # Build cluster meta (id -> label/color) + a reference matrix of cluster reps
+    # for 1-NN coloring.
+    data = _dino.clusters() or {}
+    byname = _dino._basename_index()
+    meta: dict[int, dict] = {}
+    ref_vecs: list[np.ndarray] = []
+    ref_cids: list[int] = []
+    row_of = store["idx"]
+    for cid_str, cl in (data.get("clusters", {}) or {}).items():
+        try:
+            cid = int(cid_str)
+        except (TypeError, ValueError):
+            continue
+        if cid < 0:
+            continue
+        label = (cl.get("label") or "").strip() or f"cluster {cid}"
+        meta[cid] = {"id": cid, "label": label, "color": _palette_color(cid)}
+        for bn in cl.get("sample", []):
+            p = byname.get(bn)
+            r = row_of.get(p) if p else None
+            if r is not None:
+                ref_vecs.append(X_all[r])
+                ref_cids.append(cid)
+
+    if ref_vecs:
+        R = np.stack(ref_vecs)              # (M, D) unit vectors
+        nn = np.argmax(Xs @ R.T, axis=1)    # nearest rep per sampled point (cosine)
+        point_cids = [ref_cids[j] for j in nn]
+    else:
+        point_cids = [-1] * len(sample_paths)
+
+    points = []
+    counts: dict[int, int] = {}
+    for path, (x, y, z), cid in zip(sample_paths, coords, point_cids):
+        counts[cid] = counts.get(cid, 0) + 1
+        points.append({
+            "x": round(float(x), 3), "y": round(float(y), 3), "z": round(float(z), 3),
+            "c": int(cid), "uid": uid_for(path),
+        })
+
+    cluster_legend = []
+    for cid, cnt in sorted(counts.items(), key=lambda kv: (kv[0] < 0, -kv[1], kv[0])):
+        info = meta.get(cid) or {
+            "id": cid, "label": "unclustered" if cid < 0 else f"cluster {cid}",
+            "color": _palette_color(cid),
+        }
+        cluster_legend.append({**info, "count": cnt})
+
+    return {
+        "points": points, "clusters": cluster_legend,
+        "total_indexed": total, "sampled": len(points),
+    }
