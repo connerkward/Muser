@@ -1850,20 +1850,23 @@ def create_app(model: str = DEFAULT_MODEL):
         return False
 
     @app.get("/api/thumb")
-    def thumb(path: str, size: int = 540):
+    def thumb(path: str, size: int = 540, fit: str = "cover"):
         # Frontend asks for size=Math.round(280*devicePixelRatio); 540 is the
-        # safe default for DPR=2. The thumb is a smart-cropped *square* (focal
-        # window picked by edge energy), so the card's `object-fit: cover` is
-        # already a no-op and ultra-wide / tall sources don't get squashed.
+        # safe default for DPR=2. Default `fit=cover` is a smart-cropped *square*
+        # (focal window picked by edge energy), so the card's `object-fit: cover`
+        # is a no-op and ultra-wide / tall sources don't get squashed.
+        # `fit=contain` preserves aspect (longest side = size) — used by the
+        # masonry layout so tiles pack by their true proportions.
         if not _serve_allowed(path):
             raise HTTPException(404, "not found")
+        fit = "contain" if fit == "contain" else "cover"
         try:
             mtime = int(os.path.getmtime(path))
         except OSError:
             raise HTTPException(404, "stat failed")
         import hashlib
         key = hashlib.blake2b(
-            f"{THUMB_KEY_VERSION}|{path}|{mtime}|{size}".encode(),
+            f"{THUMB_KEY_VERSION}|{path}|{mtime}|{size}|{fit}".encode(),
             digest_size=12,
         ).hexdigest()
         cached = THUMB_CACHE / f"{key}.jpg"
@@ -1879,7 +1882,12 @@ def create_app(model: str = DEFAULT_MODEL):
             # most aspect ratios; ultra-wide (e.g. 16:1) would still benefit
             # but the bandwidth cost of decoding the original is prohibitive.
             img = _load_rgb(path, max_side=max(size * 2, 1024))
-            sq = _smart_crop_square(img, size)
+            if fit == "contain":
+                from PIL import Image  # not in this scope otherwise (imported per-fn)
+                sq = img.copy()
+                sq.thumbnail((size, size), Image.LANCZOS)  # aspect-preserving
+            else:
+                sq = _smart_crop_square(img, size)
             tmp = cached.with_suffix(".jpg.tmp")
             sq.save(tmp, "JPEG", quality=82, optimize=False)
             tmp.replace(cached)  # atomic swap so partial writes never serve

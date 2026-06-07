@@ -534,9 +534,9 @@
   .cluster .mos { display:grid; grid-template-columns:1fr 1fr; gap:1px; aspect-ratio:1;
                   background:var(--paper); }
   .cluster .mos img { width:100%; height:100%; object-fit:cover; }
-  .cluster .lab { font-size:13px; color:var(--fg); padding:9px 0 0;
+  .cluster .lab { font-size:15px; font-weight:600; color:var(--fg); padding:9px 0 0;
                   text-transform:capitalize; border-bottom:1px solid transparent;
-                  align-self:flex-start; }
+                  align-self:flex-start; letter-spacing:.004em; }
   .cluster:hover .lab { border-bottom-color:var(--fg); }
   .cluster .sub { font:italic 400 12px/1.4 var(--serif); color:var(--mut); padding:3px 0 0;
                   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -4763,7 +4763,7 @@ function manualOrbit(camera, el){
    ========================================================================== */
 const DBG_KEY = "muser.debug.grid";
 let _dbgPanel = null;
-const _dbgDefaults = { thumb: 230, cols: 0 };            // cols 0 = auto-fill (default)
+const _dbgDefaults = { thumb: 230, cols: 0, masonry: false };  // cols 0 = auto-fill; masonry off = square grid
 function _dbgLoad(){
   try { return Object.assign({}, _dbgDefaults, JSON.parse(localStorage.getItem(DBG_KEY)||"{}")); }
   catch { return Object.assign({}, _dbgDefaults); }
@@ -4773,11 +4773,67 @@ function applyGridSettings(){
   const s = _dbgLoad();
   let style = document.getElementById("dbgStyle");
   if (!style){ style = document.createElement("style"); style.id="dbgStyle"; document.head.appendChild(style); }
-  // cols 0 → auto-fill with the thumb size as min track; cols N → exactly N columns.
-  const cols = s.cols > 0
-    ? `repeat(${s.cols}, 1fr)`
-    : `repeat(auto-fill, minmax(${s.thumb}px, 1fr))`;
-  style.textContent = `.grid { grid-template-columns:${cols} !important; }`;
+  // Image-card grids (not the cluster mosaic / run grids) can switch to masonry.
+  const CARD_GRIDS = "#results,#scoreGrid,#reviewGrid,#aiGrid,#colorGrid";
+  if (s.masonry){
+    // Masonry = CSS multi-column flow: cards keep their natural aspect ratio and
+    // pack by height (Pinterest-style). Reuses the same knobs — items-per-row →
+    // column-count, auto → column-width from thumbnail size. The square-crop
+    // thumb is relaxed to natural aspect only while masonry is on.
+    const colRule = s.cols > 0 ? `column-count:${s.cols}` : `column-width:${s.thumb}px`;
+    style.textContent =
+      `${CARD_GRIDS}{display:block !important;${colRule};column-gap:16px;}` +
+      `${CARD_GRIDS}>.card{display:inline-block;width:100%;margin:0 0 22px;` +
+        `break-inside:avoid;-webkit-column-break-inside:avoid;}` +
+      `.card .thumb{aspect-ratio:auto !important;}` +
+      `.card .thumb img{height:auto !important;}`;
+  } else {
+    // cols 0 → auto-fill with the thumb size as min track; cols N → exactly N columns.
+    const cols = s.cols > 0
+      ? `repeat(${s.cols}, 1fr)`
+      : `repeat(auto-fill, minmax(${s.thumb}px, 1fr))`;
+    style.textContent = `.grid { grid-template-columns:${cols} !important; }`;
+  }
+  // Thumbnails are square smart-crops by default; masonry needs aspect-preserving
+  // (`fit=contain`) thumbs so tiles pack by true proportions. Retune what's on the
+  // page now and keep an observer running so paginated cards get the same fit.
+  _retuneThumbs(!!s.masonry);
+  _setMasonryObserver(!!s.masonry);
+}
+
+// ---- masonry thumbnail fit (aspect-preserving src rewrite) ----
+const _MASONRY_GRIDS = "#results,#scoreGrid,#reviewGrid,#aiGrid,#colorGrid";
+function _thumbFitSrc(src, contain){
+  if (!src || src.indexOf("/api/thumb") < 0) return src;
+  src = src.replace(/&fit=contain/g, "");
+  return contain ? src + "&fit=contain" : src;
+}
+function _retuneThumbs(contain){
+  document.querySelectorAll(_MASONRY_GRIDS.split(",").map(g=>g+" img").join(",")).forEach(im => {
+    const cur = im.getAttribute("src");
+    const next = _thumbFitSrc(cur, contain);
+    if (next && next !== cur) im.setAttribute("src", next);
+  });
+}
+let _masonryObserver = null;
+function _setMasonryObserver(on){
+  if (_masonryObserver){ _masonryObserver.disconnect(); _masonryObserver = null; }
+  if (!on) return;
+  _masonryObserver = new MutationObserver(muts => {
+    for (const m of muts) for (const n of m.addedNodes){
+      if (n.nodeType !== 1) continue;
+      const imgs = n.matches && n.matches("img") ? [n]
+                 : (n.querySelectorAll ? n.querySelectorAll("img") : []);
+      imgs.forEach(im => {
+        const next = _thumbFitSrc(im.getAttribute("src"), true);
+        if (next && next !== im.getAttribute("src")) im.setAttribute("src", next);
+      });
+    }
+  });
+  _MASONRY_GRIDS.split(",").forEach(sel => {
+    const g = document.querySelector(sel);
+    if (g) _masonryObserver.observe(g, { childList:true, subtree:true });
+  });
 }
 function isTypingTarget(t){
   if (!t) return false;
@@ -4798,6 +4854,11 @@ function toggleDebugPanel(){
       <label>items per row <b id="dbgColsV">${s.cols>0?s.cols:"auto"}</b></label>
       <input type="range" id="dbgCols" min="0" max="12" step="1" value="${s.cols}">
     </div>
+    <label class="dbg-switch" for="dbgMasonry">
+      <input type="checkbox" id="dbgMasonry" ${s.masonry?"checked":""}>
+      <span class="track"></span>
+      <span class="lab">Masonry layout — natural aspect, packed by height</span>
+    </label>
     <button id="dbgReset" type="button">reset</button>
     <div id="dbgHint">thumbnail size auto-fits the grid · items per row (0 = auto) overrides it · saved locally</div>
     <label class="dbg-switch" for="dbgDemo">
@@ -4821,16 +4882,18 @@ function toggleDebugPanel(){
     tv.textContent = fixed ? "— rows fixed" : (+thumb.value)+"px";
     cv.textContent = fixed ? (+cols.value) : "auto";
   };
+  const masonry = el.querySelector("#dbgMasonry");
   const persist = () => {
-    _dbgSave({ thumb: +thumb.value, cols: +cols.value });
+    _dbgSave({ thumb: +thumb.value, cols: +cols.value, masonry: masonry.checked });
     syncEnabled(); applyGridSettings();
   };
   thumb.addEventListener("input", persist);
   cols.addEventListener("input", persist);
+  masonry.addEventListener("change", persist);
   syncEnabled();
   el.querySelector("#dbgReset").onclick = () => {
     _dbgSave(Object.assign({}, _dbgDefaults));
-    thumb.value=_dbgDefaults.thumb; cols.value=_dbgDefaults.cols;
+    thumb.value=_dbgDefaults.thumb; cols.value=_dbgDefaults.cols; masonry.checked=_dbgDefaults.masonry;
     syncEnabled(); applyGridSettings();
   };
   // ---- demo-mode toggle: server-side flag (NSFW + people clusters hidden) ----
