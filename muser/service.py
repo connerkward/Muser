@@ -458,6 +458,13 @@ def create_app(model: str = DEFAULT_MODEL):
         f = Path(__file__).resolve().parent / "web" / "weights-cloud-split.html"
         return f.read_text() if f.exists() else "<h1>split cloud proto not found</h1>"
 
+    @app.get("/proto/weights-recommended", response_class=HTMLResponse)
+    def proto_weights_recommended():
+        # The recommended design: split find/exclude token chips with a length-based
+        # weight slider (not font-size), with the design rationale on the page.
+        f = Path(__file__).resolve().parent / "web" / "weights-recommended.html"
+        return f.read_text() if f.exists() else "<h1>recommended proto not found</h1>"
+
     # SVG favicon: solid-fill knockout mark — italic lowercase 'm' carved
     # out of a charcoal square. Single-character favicons need the solid
     # field to carry weight at 16px; an outlined glyph alone reads as a

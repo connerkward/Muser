@@ -1,0 +1,148 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Concept weighting — recommended design</title>
+<style>
+  :root{ --bg:#f4efe3; --fg:#1a1813; --mut:#8a8270; --line:#d8d0bd;
+         --pos:#2f7d52; --neg:#b4452f; --serif:'Iowan Old Style',Georgia,serif; --mono:ui-monospace,'SF Mono',Menlo,monospace; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--fg); font:15px/1.55 var(--serif);
+        -webkit-font-smoothing:antialiased; padding:30px clamp(16px,5vw,60px) 64px; }
+  h1{ font-size:20px; font-weight:600; margin:0 0 14px; }
+
+  /* rationale panel */
+  .why{ border:1px solid var(--line); background:#fbf8f0; padding:14px 18px; margin-bottom:22px; max-width:80ch; }
+  .why h2{ font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--mut); margin:0 0 8px; }
+  .why ul{ margin:0; padding-left:18px; } .why li{ margin:5px 0; font-size:13.5px; }
+  .why b{ color:var(--fg); } .why .gp{ color:var(--pos); } .why .gn{ color:var(--neg); }
+  .why code{ font:12px var(--mono); background:#0001; padding:1px 4px; }
+
+  .controls{ display:flex; align-items:center; gap:12px; margin-bottom:10px; font-size:13px; color:var(--mut); }
+  .seg{ display:inline-flex; border:1px solid var(--line); }
+  .seg button{ background:transparent; border:0; border-right:1px solid var(--line); padding:5px 12px; font:12px var(--serif); color:var(--mut); cursor:pointer; }
+  .seg button:last-child{ border-right:0; } .seg button.on{ background:var(--fg); color:var(--bg); }
+
+  .zone{ position:relative; display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-height:54px;
+         padding:10px 14px 10px 70px; border:1px solid var(--line); background:#fffc; cursor:text; }
+  .zone+.zone{ border-top:0; } .zone.p{ --zc:var(--pos); } .zone.n{ --zc:var(--neg); background:#b4452f08; }
+  .zone:focus-within{ border-color:var(--zc); }
+  .zone .tag{ position:absolute; left:14px; top:50%; transform:translateY(-50%); font-size:9px; letter-spacing:.09em; text-transform:uppercase; color:var(--zc); }
+
+  /* token chip: readable word + a length weight-slider (the encoding) */
+  .chip{ display:inline-flex; align-items:center; gap:8px; padding:5px 8px 5px 10px; border:1px solid var(--zc); background:#fff; }
+  .chip .lab{ font-size:14px; color:var(--fg); cursor:text; }
+  .chip .slider{ position:relative; width:64px; height:7px; background:var(--line); cursor:ew-resize; touch-action:none; }
+  .chip .slider .fill{ position:absolute; left:0; top:0; height:100%; background:var(--zc); width:100%; }
+  .chip .slider .knob{ position:absolute; top:50%; width:11px; height:11px; margin:-6px 0 0 -6px; border-radius:50%; background:var(--zc); border:2px solid #fff; }
+  .chip .pct{ font:11px var(--mono); color:var(--zc); min-width:30px; text-align:right; }
+  .chip .x{ font:13px var(--mono); color:var(--mut); cursor:pointer; padding:0 2px; }
+  .chip .x:hover{ color:var(--neg); }
+  .entry{ flex:1; min-width:120px; border:0; outline:0; background:none; font:16px var(--serif); color:var(--fg); padding:4px 2px; }
+
+  .qline{ font:12.5px var(--mono); margin:18px 2px 4px; } .qline b{ color:var(--mut); font-style:italic; font-family:var(--serif); margin-right:6px; }
+  .meta{ color:var(--mut); font-size:12px; }
+  .results{ display:grid; grid-template-columns:repeat(auto-fill,minmax(116px,1fr)); gap:8px; margin-top:16px; }
+  .results .c{ aspect-ratio:1; background:#0001; overflow:hidden; position:relative; }
+  .results img{ width:100%; height:100%; object-fit:cover; display:block; }
+  .results .s{ position:absolute; top:4px; left:4px; background:#000a; color:#fff; font:10px var(--mono); padding:1px 5px; }
+</style></head><body>
+<h1>Concept weighting — recommended design</h1>
+
+<div class="why">
+  <h2>Why this, not the word cloud</h2>
+  <ul>
+    <li><b>Weight is a <u>length</u>, not font size.</b> Cleveland &amp; McGill: people judge position/length far more
+      accurately than area — which is why tag clouds read poorly. Each concept keeps a constant, readable size; the
+      little bar is the quantity you compare and set.</li>
+    <li><b>Split <span class="gp">Find</span> / <span class="gn">Exclude</span> zones.</b> Polarity comes from which
+      box you type into, so a <b>click stays free for editing the word</b> — the single-bar "click to toggle" broke
+      that (it looked like a text field but wasn't).</li>
+    <li><b>The bar <i>is</i> a slider.</b> It advertises its own affordance — the one thing the cloud's invisible
+      drag-to-resize gesture never did. Drag it; everything starts at <b>100%</b> and only comes down (de-emphasis).</li>
+    <li><b>Honest precision.</b> Weighted CLIP blending is approximate, so a smooth 0–100% implies control the math
+      can't honor. Try <b>3 steps</b> below (low / normal / high) — coarser, but truer to what the model actually resolves.</li>
+    <li><b>Earns its place only when needed.</b> In the real UI this stays hidden until you have 2+ concepts — a plain
+      single-word search pays none of this complexity.</li>
+  </ul>
+</div>
+
+<div class="controls">
+  <span>Granularity:</span>
+  <span class="seg" id="modeSeg"><button data-m="cont" class="on">Continuous %</button><button data-m="step">3 steps</button></span>
+  <span class="meta">— the same control, different precision</span>
+</div>
+
+<div class="zone p" id="zoneP"><span class="tag">Find</span><input class="entry" id="entryP" placeholder="type what to find…" autocomplete="off" spellcheck="false"></div>
+<div class="zone n" id="zoneN"><span class="tag">Exclude</span><input class="entry" id="entryN" placeholder="type what to push away…" autocomplete="off" spellcheck="false"></div>
+
+<div class="qline"><b>query →</b><span id="qstr"></span> <span class="meta" id="status"></span></div>
+<div class="results" id="results"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+let POS=[], NEG=[];           // [{t,w}], w 0..1 (100% default, down-only)
+let MODE="cont";              // "cont" | "step"
+const STEPS=[ {v:0.34,l:"low"}, {v:0.67,l:"normal"}, {v:1.0,l:"high"} ];
+const snap=w=> STEPS.reduce((b,s)=>Math.abs(s.v-w)<Math.abs(b.v-w)?s:b, STEPS[2]);
+const pctText=w=> MODE==="step" ? snap(w).l : Math.round(w*100)+"%";
+
+function buildQuery(){
+  const part=(arr,sign)=>arr.filter(c=>c.w>0.04).map(c=>`${sign}${c.t}${Math.abs(c.w-1)<0.04?"":":"+c.w.toFixed(2)}`);
+  return [...part(POS,""), ...part(NEG,"-")].join(", ");
+}
+function refresh(){ $("#qstr").textContent=buildQuery()||"(empty)"; scheduleSearch(); }
+
+function chip(c, arr, zone, entry){
+  const el=document.createElement("span"); el.className="chip";
+  el.innerHTML=`<span class="lab" title="double-click to edit">${c.t}</span>`+
+    `<span class="slider"><i class="fill"></i><span class="knob"></span></span>`+
+    `<span class="pct"></span><span class="x" title="remove">×</span>`;
+  const fill=el.querySelector(".fill"), knob=el.querySelector(".knob"), pct=el.querySelector(".pct"), slider=el.querySelector(".slider");
+  const paint=()=>{ const w=c.w; fill.style.width=(w*100)+"%"; knob.style.left=(w*100)+"%"; pct.textContent=pctText(w); };
+  paint(); el._paint=paint;
+  const setFromX=clientX=>{ const r=slider.getBoundingClientRect(); let w=clamp((clientX-r.left)/r.width,0,1);
+    if(MODE==="step") w=snap(w).v; c.w=w; paint(); refresh(); };
+  let drag=false;
+  slider.addEventListener("pointerdown",e=>{ drag=true; slider.setPointerCapture(e.pointerId); setFromX(e.clientX); e.preventDefault(); });
+  slider.addEventListener("pointermove",e=>{ if(drag) setFromX(e.clientX); });
+  slider.addEventListener("pointerup",()=>drag=false);
+  el.querySelector(".x").addEventListener("click",e=>{ e.stopPropagation(); const i=arr.indexOf(c); if(i>=0)arr.splice(i,1); render(); refresh(); });
+  el.querySelector(".lab").addEventListener("dblclick",()=>{ const i=arr.indexOf(c); if(i>=0)arr.splice(i,1); entry.value=c.t; entry.focus(); render(); refresh(); });
+  return el;
+}
+function renderZone(zone, arr, entry){
+  [...zone.querySelectorAll(".chip")].forEach(n=>n.remove());
+  arr.forEach(c=> zone.insertBefore(chip(c,arr,zone,entry), entry));
+}
+function render(){ renderZone($("#zoneP"),POS,$("#entryP")); renderZone($("#zoneN"),NEG,$("#entryN")); refresh(); }
+
+function wire(entryId, arr){
+  const entry=$("#"+entryId);
+  entry.addEventListener("keydown",e=>{
+    if(e.key===","||e.key==="Enter"){ e.preventDefault(); let v=entry.value.trim(); if(v[0]==="-"||v[0]==="+")v=v.slice(1).trim();
+      if(v){ arr.push({t:v.toLowerCase(),w:1}); } entry.value=""; render(); }
+    else if(e.key==="Backspace" && !entry.value && arr.length){ arr.pop(); render(); } });
+}
+wire("entryP",POS); wire("entryN",NEG);
+$("#zoneP").addEventListener("click",e=>{ if(e.target.id==="zoneP"||e.target.classList.contains("tag")) $("#entryP").focus(); });
+$("#zoneN").addEventListener("click",e=>{ if(e.target.id==="zoneN"||e.target.classList.contains("tag")) $("#entryN").focus(); });
+$("#modeSeg").addEventListener("click",e=>{ const b=e.target.closest("button[data-m]"); if(!b)return; MODE=b.dataset.m;
+  $("#modeSeg").querySelectorAll("button").forEach(x=>x.classList.toggle("on",x===b));
+  if(MODE==="step"){ [...POS,...NEG].forEach(c=>c.w=snap(c.w).v); }
+  render(); });
+
+let _t=null; function scheduleSearch(){ clearTimeout(_t); _t=setTimeout(runSearch,250); }
+async function runSearch(){
+  const q=buildQuery(); if(!q){ $("#results").innerHTML=""; $("#status").textContent=""; return; }
+  $("#status").textContent="· searching…";
+  try{ const r=await (await fetch(`/api/search?q=${encodeURIComponent(q)}&k=24`)).json();
+    const g=$("#results"); g.innerHTML="";
+    (r.results||[]).forEach(h=>{ const c=document.createElement("div"); c.className="c";
+      const p=Math.round((h.prob??h.score)*100);
+      c.innerHTML=`<span class="s">${p}</span><img loading="lazy" src="/api/thumb?path=${encodeURIComponent(h.path)}&size=240">`; g.appendChild(c); });
+    $("#status").textContent=`· ${(r.results||[]).length} results`;
+  }catch(e){ $("#status").textContent="· error: "+e.message; }
+}
+["car","snow","sunset"].forEach(t=>POS.push({t,w:1})); NEG.push({t:"person",w:1});
+render();
+</script></body></html>
