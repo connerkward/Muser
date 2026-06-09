@@ -3,232 +3,253 @@
 <title>Per-concept weighting — component spread</title>
 <style>
   :root{ --bg:#f4efe3; --card:#fbf8f0; --fg:#1a1813; --mut:#8a8270; --line:#ddd5c2;
-         --pos:#2f7d52; --neg:#b4452f; --serif:'Iowan Old Style',Georgia,serif; --mono:ui-monospace,'SF Mono',Menlo,monospace; }
+         --pos:#2f7d52; --neg:#b4452f; --posbg:#2f7d5218; --negbg:#b4452f18;
+         --serif:'Iowan Old Style',Georgia,serif; --mono:ui-monospace,'SF Mono',Menlo,monospace; }
   *{ box-sizing:border-box; }
   body{ margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 var(--serif);
         -webkit-font-smoothing:antialiased; padding:26px clamp(16px,4vw,52px) 60px; }
   h1{ font-size:21px; font-weight:600; margin:0 0 2px; }
-  .sub{ color:var(--mut); font-size:13px; margin-bottom:18px; max-width:74ch; }
+  .sub{ color:var(--mut); font-size:13px; margin-bottom:18px; max-width:78ch; }
   .sub code{ font-family:var(--mono); font-size:12px; background:#0001; padding:1px 4px; }
-  .bar{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:10px; }
-  input#concepts{ flex:1; min-width:260px; font:14px var(--mono); padding:8px 11px; border:1px solid var(--line); background:#fff8; }
-  .qline{ font-family:var(--mono); font-size:12.5px; color:var(--fg); }
+  .sub .gp{ color:var(--pos); } .sub .gn{ color:var(--neg); }
+  /* two polarity input boxes */
+  .boxes{ display:flex; gap:14px; flex-wrap:wrap; margin-bottom:10px; }
+  .box{ flex:1; min-width:240px; }
+  .box label{ display:block; font-size:11px; letter-spacing:.06em; text-transform:uppercase; margin-bottom:4px; }
+  .box.p label{ color:var(--pos); } .box.n label{ color:var(--neg); }
+  .box input{ width:100%; font:14px var(--mono); padding:8px 11px; border:1px solid var(--line); background:#fff8; }
+  .box.p input{ border-left:3px solid var(--pos); } .box.n input{ border-left:3px solid var(--neg); }
+  .qline{ font-family:var(--mono); font-size:12.5px; }
   .qline b{ color:var(--mut); font-weight:400; font-family:var(--serif); font-style:italic; margin-right:6px; }
-  .strip{ display:flex; gap:6px; overflow-x:auto; padding:10px 0 4px; margin-bottom:8px; min-height:96px; }
-  .strip .c{ flex:0 0 88px; height:88px; background:#0001; overflow:hidden; position:relative; }
+  .strip{ display:flex; gap:6px; overflow-x:auto; padding:10px 0 4px; margin:6px 0 8px; min-height:96px; }
+  .strip .c{ flex:0 0 88px; height:88px; background:#0001; overflow:hidden; }
   .strip img{ width:100%; height:100%; object-fit:cover; display:block; }
   .meta{ color:var(--mut); font-size:12px; }
-  .grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:16px; margin-top:6px; }
+  .grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(310px,1fr)); gap:16px; margin-top:6px; }
   .panel{ background:var(--card); border:1px solid var(--line); padding:14px 15px 16px; }
   .panel h2{ font-size:14px; font-weight:600; margin:0 0 1px; }
-  .panel .d{ color:var(--mut); font-size:11.5px; font-style:italic; margin-bottom:14px; min-height:28px; }
-  .panel .stage{ min-height:150px; display:flex; align-items:center; justify-content:center; }
+  .panel .d{ color:var(--mut); font-size:11.5px; font-style:italic; margin-bottom:14px; min-height:30px; }
+  .gtag{ font-size:9px; letter-spacing:.08em; text-transform:uppercase; color:var(--mut); margin:0 0 6px; }
+  .gtag.p{ color:var(--pos); } .gtag.n{ color:var(--neg); }
+  .empty{ color:var(--mut); font-size:11px; font-style:italic; }
+  .stage{ min-height:150px; }
 
   /* faders */
-  .faders{ display:flex; gap:18px; align-items:flex-end; }
-  .fader{ display:flex; flex-direction:column; align-items:center; width:52px; }
-  .fader .slot{ position:relative; height:118px; width:28px; display:flex; justify-content:center; }
-  .fader input{ -webkit-appearance:slider-vertical; appearance:slider-vertical; writing-mode:vertical-lr; direction:rtl; width:28px; height:118px; margin:0; }
-  .fader .zero{ position:absolute; top:50%; left:-6px; right:-6px; height:1px; background:var(--line); }
-  .fader .lbl{ margin-top:7px; font-size:11px; max-width:54px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-  .fader .v{ font:11px var(--mono); }
-  .v.p{ color:var(--pos); } .v.n{ color:var(--neg); } .v.z{ color:var(--mut); }
+  .faders{ display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap; }
+  .fgroup{ display:flex; gap:14px; align-items:flex-end; padding:0 12px 0 0; }
+  .fgroup+.fgroup{ border-left:1px solid var(--line); padding-left:14px; }
+  .fader{ display:flex; flex-direction:column; align-items:center; width:46px; }
+  .fader .slot{ height:104px; width:24px; display:flex; justify-content:center; }
+  .fader input{ -webkit-appearance:slider-vertical; appearance:slider-vertical; writing-mode:vertical-lr; width:24px; height:104px; margin:0; accent-color:var(--ac); }
+  .fader .lbl{ margin-top:6px; font-size:11px; max-width:46px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; color:var(--ac); }
+  .fader .v{ font:11px var(--mono); color:var(--ac); }
 
   /* scrub chips */
-  .chips{ display:flex; gap:10px; flex-wrap:wrap; }
-  .chip{ position:relative; cursor:ew-resize; padding:9px 14px; border:1px solid var(--line); background:#fff8; overflow:hidden; touch-action:none; user-select:none; }
-  .chip .fill{ position:absolute; inset:0 auto 0 0; width:0; background:var(--pos); opacity:.14; }
-  .chip.neg .fill{ background:var(--neg); }
-  .chip .t{ position:relative; font-size:14px; } .chip .w{ position:relative; font:11px var(--mono); color:var(--mut); margin-left:7px; }
+  .chips{ display:flex; gap:9px; flex-wrap:wrap; }
+  .chip{ position:relative; cursor:ew-resize; padding:8px 13px; border:1px solid var(--ac); background:#fff8; overflow:hidden; touch-action:none; user-select:none; }
+  .chip .fill{ position:absolute; inset:0 auto 0 0; width:0; background:var(--ac); opacity:.15; }
+  .chip .t{ position:relative; font-size:13px; } .chip .w{ position:relative; font:11px var(--mono); color:var(--ac); margin-left:6px; }
 
-  /* budget bar */
-  .budget{ width:100%; }
-  .budget .track{ display:flex; height:46px; border:1px solid var(--line); overflow:hidden; user-select:none; }
-  .budget .seg{ position:relative; display:flex; align-items:center; justify-content:center; color:#fff; font-size:12px; overflow:hidden; white-space:nowrap; min-width:0; }
+  /* budget bars */
+  .budget .glab{ font-size:10px; color:var(--mut); margin:8px 0 3px; }
+  .budget .track{ display:flex; height:38px; border:1px solid var(--line); overflow:hidden; user-select:none; }
+  .budget .seg{ position:relative; display:flex; align-items:center; justify-content:center; color:#fff; font-size:11px; overflow:hidden; white-space:nowrap; min-width:0; }
   .budget .grip{ position:absolute; top:0; right:-4px; width:9px; height:100%; cursor:col-resize; z-index:2; }
 
-  /* orbit (magnets) */
-  .orbit{ position:relative; width:230px; height:160px; touch-action:none; }
-  .orbit .core{ position:absolute; left:50%; top:50%; width:12px; height:12px; margin:-6px; border-radius:50%; background:var(--fg); }
-  .orbit .ring{ position:absolute; left:50%; top:50%; border:1px dashed var(--line); border-radius:50%; transform:translate(-50%,-50%); }
-  .orbit .node{ position:absolute; transform:translate(-50%,-50%); padding:3px 8px; border:1px solid var(--line); background:#fff; font-size:11px; cursor:grab; white-space:nowrap; }
-  .orbit .node .nw{ font:10px var(--mono); color:var(--mut); margin-left:4px; }
+  /* orbit */
+  .orbit{ position:relative; width:240px; height:170px; margin:0 auto; touch-action:none; }
+  .orbit .core{ position:absolute; left:50%; top:50%; width:34px; height:34px; margin:-17px; border-radius:50%; background:#0000000d; border:1px solid var(--line); display:flex; align-items:center; justify-content:center; font-size:9px; color:var(--mut); }
+  .orbit .node{ position:absolute; transform:translate(-50%,-50%); padding:3px 8px; border:1px solid var(--ac); background:#fff; color:var(--ac); font-size:11px; cursor:grab; white-space:nowrap; }
+  .orbit .node .nw{ font:10px var(--mono); margin-left:4px; opacity:.8; }
 
   /* knobs */
-  .knobs{ display:flex; gap:18px; flex-wrap:wrap; }
-  .knob{ width:62px; text-align:center; user-select:none; }
-  .knob svg{ cursor:grab; touch-action:none; }
-  .knob .lbl{ font-size:11px; margin-top:4px; max-width:62px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-  .knob .v{ font:11px var(--mono); }
+  .knobs{ display:flex; gap:16px; flex-wrap:wrap; }
+  .knob{ width:56px; text-align:center; user-select:none; }
+  .knob svg{ cursor:grab; touch-action:none; } .knob .lbl{ font-size:11px; margin-top:3px; color:var(--ac); max-width:56px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .knob .v{ font:11px var(--mono); color:var(--ac); }
 
   /* word cloud */
-  .cloud{ display:flex; flex-wrap:wrap; gap:4px 14px; align-items:baseline; padding:6px; }
-  .cloud .word{ cursor:ns-resize; line-height:1; user-select:none; touch-action:none; transition:color .1s; white-space:nowrap; }
-  .cloud .word .cw{ font:10px var(--mono); color:var(--mut); vertical-align:super; margin-left:2px; }
+  .cloud{ display:flex; flex-wrap:wrap; gap:4px 12px; align-items:baseline; }
+  .cloud .word{ cursor:ns-resize; line-height:1.1; user-select:none; touch-action:none; white-space:nowrap; color:var(--ac); }
+  .cloud .word .cw{ font:10px var(--mono); vertical-align:super; margin-left:2px; opacity:.7; }
 </style></head><body>
 <h1>Per-concept weighting — component spread</h1>
-<div class="sub">Six divergent controls for the same job: dialing how hard each concept pulls the search. They all
-share one set of weights — tweak any one and the others move with it, and the strip below re-ranks live.
-The query they build (<code>concept:weight</code>, leading <code>−</code> subtracts) is shown under the strip.
-Which <i>interaction</i> feels best?</div>
+<div class="sub">Two boxes set <i>polarity</i>: the <span class="gp">positive</span> box is what to find, the
+<span class="gn">negative</span> box is what to push away. Each control only sets <b>how much</b> each concept
+counts (its magnitude) — the box decides the sign, shown in <span class="gp">green</span> / <span class="gn">red</span>.
+They all share one weight set, and the strip re-ranks live. Query syntax: <code>concept:weight</code>,
+negatives as <code>-concept:weight</code>.</div>
 
-<div class="bar">
-  <input id="concepts" value="car, snow, sunset, neon" spellcheck="false" autocomplete="off">
-  <span class="meta" id="status"></span>
+<div class="boxes">
+  <div class="box p"><label>Positive — find</label><input id="pos" value="car, snow, sunset" spellcheck="false" autocomplete="off"></div>
+  <div class="box n"><label>Negative — exclude</label><input id="neg" value="person, blurry" spellcheck="false" autocomplete="off"></div>
 </div>
+<div class="qline"><b>query →</b><span id="qstr"></span> <span class="meta" id="status"></span></div>
 <div class="strip" id="strip"></div>
-<div class="qline"><b>query →</b><span id="qstr"></span></div>
 
 <div class="grid" id="grid"></div>
 
 <script>
 const $=s=>document.querySelector(s);
-let STATE=[];           // [{t, w}]  shared across all controls
-const cards=[];         // [{update}]
+let STATE=[];           // [{t, w, s}]  s=+1 pull / -1 push, w = magnitude 0..2
+const cards=[];
 const PAL=["#3a6ea5","#b4452f","#2f7d52","#8a5fb0","#c08a2e","#46817e","#a8567f"];
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const POS=()=>STATE.filter(c=>c.s>0), NEG=()=>STATE.filter(c=>c.s<0);
 
-function parseConcepts(){
-  const cur=Object.fromEntries(STATE.map(c=>[c.t,c.w]));
-  STATE=$("#concepts").value.split(",").map(s=>s.trim()).filter(Boolean).map(raw=>{
-    let t=raw,w=1; if(t[0]==="-"){w=-1;t=t.slice(1).trim();}
-    const m=t.match(/^(.*?):\s*([-\d.]+)\s*$/); if(m){t=m[1].trim();w=parseFloat(m[2]);}
-    return {t, w:(t in cur?cur[t]:w)};
+function parse(){
+  const cur=Object.fromEntries(STATE.map(c=>[c.s+"|"+c.t,c.w]));
+  const mk=(str,s)=>str.split(",").map(x=>x.trim()).filter(Boolean).map(raw=>{
+    let t=raw,w=1; const m=t.match(/^(.*?):\s*([\d.]+)\s*$/); if(m){t=m[1].trim();w=parseFloat(m[2]);}
+    t=t.toLowerCase(); const k=s+"|"+t; return {t,s,w:(k in cur?cur[k]:Math.abs(w))};
   }).filter(c=>c.t);
+  STATE=[...mk($("#pos").value,1), ...mk($("#neg").value,-1)];
   buildAll();
 }
 function buildQuery(){
-  return STATE.filter(c=>Math.abs(c.w)>0.04).map(c=>{
-    const sign=c.w<0?"-":"", mag=Math.abs(c.w);
+  return STATE.filter(c=>c.w>0.04).map(c=>{
+    const sign=c.s<0?"-":"", mag=c.w;
     return `${sign}${c.t}${Math.abs(mag-1)<0.04?"":":"+mag.toFixed(2)}`;
   }).join(", ");
 }
-// a control changed STATE → repaint every OTHER control, refresh query + results
 function commit(src){ cards.forEach(c=>{ if(c.src!==src) c.update(); }); refresh(); }
 function refresh(){ $("#qstr").textContent=buildQuery()||"(empty)"; scheduleSearch(); }
+const AC=c=>c.s<0?"var(--neg)":"var(--pos)";
 
-/* ───── control builders: each returns {el, update, src} ───── */
+/* a tiny helper: render two polarity groups via a per-item builder */
+function groups(el, itemFn){
+  el.innerHTML="";
+  [["p","find",POS()],["n","exclude",NEG()]].forEach(([cls,tag,arr])=>{
+    if(!arr.length) return;
+    const wrap=document.createElement("div"); wrap.className="ggroup "+cls;
+    const t=document.createElement("div"); t.className="gtag "+cls; t.textContent=tag; wrap.appendChild(t);
+    const host=document.createElement("div"); host.className="ghost"; wrap.appendChild(host);
+    arr.forEach(c=>host.appendChild(itemFn(c)));
+    el.appendChild(wrap);
+  });
+  if(!STATE.length){ el.innerHTML='<div class="empty">add concepts above</div>'; }
+}
+
+/* ───── controls (magnitude 0..2, polarity by color) ───── */
 function ctlFaders(){
-  const el=document.createElement("div"); el.className="faders";
-  function build(){ el.innerHTML="";
-    STATE.forEach(c=>{ const f=document.createElement("div"); f.className="fader";
-      f.innerHTML=`<div class="v"></div><div class="slot"><div class="zero"></div><input type="range" min="-2" max="2" step="0.05"></div><div class="lbl" title="${c.t}">${c.t}</div>`;
-      const inp=f.querySelector("input"),v=f.querySelector(".v");
-      const paint=()=>{ inp.value=c.w; v.textContent=(c.w>0?"+":"")+c.w.toFixed(2); v.className="v "+(c.w>0.04?"p":c.w<-0.04?"n":"z"); };
-      paint(); inp.addEventListener("input",()=>{ c.w=parseFloat(inp.value); paint(); commit(api); }); el.appendChild(f);
+  const el=document.createElement("div");
+  function build(){ el.className="faders"; el.innerHTML="";
+    [["find",POS()],["exclude",NEG()]].forEach(([tag,arr])=>{ if(!arr.length)return;
+      const g=document.createElement("div"); g.className="fgroup";
+      arr.forEach(c=>{ const f=document.createElement("div"); f.className="fader"; f.style.setProperty("--ac",AC(c));
+        f.innerHTML=`<div class="v"></div><div class="slot"><input type="range" min="0" max="2" step="0.05"></div><div class="lbl" title="${c.t}">${c.t}</div>`;
+        const inp=f.querySelector("input"),v=f.querySelector(".v");
+        const paint=()=>{ inp.value=c.w; v.textContent=(c.s<0?"−":"")+c.w.toFixed(2); };
+        paint(); inp.addEventListener("input",()=>{ c.w=parseFloat(inp.value); paint(); commit(api); }); g.appendChild(f);
+      }); el.appendChild(g);
     });
+    if(!STATE.length) el.innerHTML='<div class="empty">add concepts above</div>';
   }
-  const api={el,src:0,update:build}; api.src=api; build(); return api;
+  const api={el,update:build}; api.src=api; build(); return api;
 }
 function ctlChips(){
   const el=document.createElement("div"); el.className="chips";
-  function build(){ el.innerHTML="";
-    STATE.forEach(c=>{ const chip=document.createElement("div"); chip.className="chip";
+  function build(){ groups(el,c=>{ const chip=document.createElement("div"); chip.className="chip"; chip.style.setProperty("--ac",AC(c));
       chip.innerHTML=`<span class="fill"></span><span class="t">${c.t}</span><span class="w"></span>`;
       const fill=chip.querySelector(".fill"),w=chip.querySelector(".w");
-      const paint=()=>{ chip.classList.toggle("neg",c.w<-0.04); fill.style.width=clamp(Math.abs(c.w)/2*100,0,100)+"%"; w.textContent=(c.w<0?"−":"")+"×"+Math.abs(c.w).toFixed(2); };
-      paint(); chip._paint=paint;
-      let d=null;
+      const paint=()=>{ fill.style.width=clamp(c.w/2*100,0,100)+"%"; w.textContent=(c.s<0?"−":"")+"×"+c.w.toFixed(2); };
+      paint(); let d=null;
       chip.addEventListener("pointerdown",e=>{ d={x:e.clientX,w0:c.w}; chip.setPointerCapture(e.pointerId); });
-      chip.addEventListener("pointermove",e=>{ if(!d)return; c.w=clamp(d.w0+(e.clientX-d.x)*0.012,-2,2); paint(); commit(api); });
+      chip.addEventListener("pointermove",e=>{ if(!d)return; c.w=clamp(d.w0+(e.clientX-d.x)*0.012,0,2); paint(); commit(api); });
       chip.addEventListener("pointerup",()=>d=null); chip.addEventListener("dblclick",()=>{ c.w=1; paint(); commit(api); });
-      el.appendChild(chip);
-    });
+      return chip; });
+    // groups() helper renders .ggroup>.ghost — flatten ghost to flex
+    el.querySelectorAll(".ghost").forEach(h=>{ h.style.display="flex"; h.style.flexWrap="wrap"; h.style.gap="9px"; });
+    el.querySelectorAll(".ggroup").forEach(g=>{ g.style.marginBottom="10px"; });
   }
-  const api={el,src:0,update:build}; api.src=api; build(); return api;
+  const api={el,update:build}; api.src=api; build(); return api;
 }
 function ctlBudget(){
   const el=document.createElement("div"); el.className="budget";
-  const track=document.createElement("div"); track.className="track"; el.appendChild(track);
-  function build(){ STATE.forEach(c=>{ if(c.w<=0)c.w=0.5; }); track.innerHTML="";
-    const segs=[]; const tot=()=>STATE.reduce((a,c)=>a+c.w,0)||1;
-    STATE.forEach((c,i)=>{ const s=document.createElement("div"); s.className="seg"; s.style.background=PAL[i%PAL.length];
-      s.innerHTML=`<span class="cap"></span>`+(i<STATE.length-1?`<span class="grip"></span>`:""); track.appendChild(s); segs.push(s); });
-    const paint=()=>{ const T=tot(); STATE.forEach((c,i)=>{ segs[i].style.flexBasis=(c.w/T*100)+"%"; segs[i].querySelector(".cap").textContent=`${c.t} ${(c.w/T*100).toFixed(0)}%`; }); };
-    paint(); track._paint=paint;
+  function bar(arr,label){
+    if(!arr.length) return null;
+    const box=document.createElement("div");
+    box.innerHTML=`<div class="glab">${label}</div>`;
+    const track=document.createElement("div"); track.className="track"; box.appendChild(track);
+    const tot=()=>arr.reduce((a,c)=>a+Math.max(0.05,c.w),0)||1; const segs=[];
+    arr.forEach((c,i)=>{ if(c.w<=0)c.w=0.5; const s=document.createElement("div"); s.className="seg";
+      s.style.background= c.s<0?"var(--neg)":PAL[i%PAL.length];
+      s.innerHTML=`<span class="cap"></span>`+(i<arr.length-1?`<span class="grip"></span>`:""); track.appendChild(s); segs.push(s); });
+    const paint=()=>{ const T=tot(); arr.forEach((c,i)=>{ segs[i].style.flexBasis=(Math.max(0.05,c.w)/T*100)+"%"; segs[i].querySelector(".cap").textContent=`${c.t} ${(c.w/T*100).toFixed(0)}%`; }); };
+    paint();
     segs.forEach((s,i)=>{ const g=s.querySelector(".grip"); if(!g)return; let d=null;
-      g.addEventListener("pointerdown",e=>{ e.preventDefault(); d={x:e.clientX,a:STATE[i].w,b:STATE[i+1].w,bw:track.clientWidth,T:tot()}; g.setPointerCapture(e.pointerId); });
-      g.addEventListener("pointermove",e=>{ if(!d)return; const dv=(e.clientX-d.x)/d.bw*d.T; STATE[i].w=Math.max(0.05,d.a+dv); STATE[i+1].w=Math.max(0.05,d.b-dv); paint(); commit(api); });
-      g.addEventListener("pointerup",()=>d=null);
-    });
+      g.addEventListener("pointerdown",e=>{ e.preventDefault(); d={x:e.clientX,a:arr[i].w,b:arr[i+1].w,bw:track.clientWidth,T:tot()}; g.setPointerCapture(e.pointerId); });
+      g.addEventListener("pointermove",e=>{ if(!d)return; const dv=(e.clientX-d.x)/d.bw*d.T; arr[i].w=Math.max(0.05,d.a+dv); arr[i+1].w=Math.max(0.05,d.b-dv); paint(); commit(api); });
+      g.addEventListener("pointerup",()=>d=null); });
+    return box;
   }
-  const api={el,src:0,update:()=>{ if(track.firstChild&&track.children.length===STATE.length){ track._paint&&track._paint(); } else build(); }};
-  api.src=api; build(); return api;
+  function build(){ el.innerHTML=""; const p=bar(POS(),"pull mix"); const n=bar(NEG(),"push mix");
+    if(p)el.appendChild(p); if(n)el.appendChild(n); if(!STATE.length) el.innerHTML='<div class="empty">add concepts above</div>'; }
+  const api={el,update:build}; api.src=api; build(); return api;
 }
 function ctlOrbit(){
   const el=document.createElement("div"); el.className="orbit";
-  const R=70; el.innerHTML=`<div class="ring" style="width:${R*2}px;height:${R*2}px"></div><div class="core"></div>`;
-  function build(){ [...el.querySelectorAll(".node")].forEach(n=>n.remove());
-    STATE.forEach((c,i)=>{ const ang=-Math.PI/2 + i/STATE.length*2*Math.PI;
-      const node=document.createElement("div"); node.className="node";
-      node.innerHTML=`${c.t}<span class="nw"></span>`; el.appendChild(node);
+  function build(){ el.innerHTML=`<div class="core">query</div>`; const R=72;
+    STATE.forEach((c,i)=>{ const ang=-Math.PI/2 + i/Math.max(1,STATE.length)*2*Math.PI;
+      const node=document.createElement("div"); node.className="node"; node.style.setProperty("--ac",AC(c));
+      node.innerHTML=`${c.s<0?"⊘ ":""}${c.t}<span class="nw"></span>`; el.appendChild(node);
       const nw=node.querySelector(".nw");
-      const place=()=>{ const r=clamp(Math.abs(c.w),0,2)/2*R; const cx=el.clientWidth/2,cy=el.clientHeight/2;
-        node.style.left=(cx+Math.cos(ang)*r)+"px"; node.style.top=(cy+Math.sin(ang)*r)+"px";
-        node.style.borderColor=c.w<0?"var(--neg)":"var(--line)"; nw.textContent=(c.w<0?"−":"")+Math.abs(c.w).toFixed(2); };
-      place(); node._place=place;
-      let drag=false;
+      const place=()=>{ const r=clamp(c.w,0,2)/2*R; const cx=el.clientWidth/2,cy=el.clientHeight/2;
+        node.style.left=(cx+Math.cos(ang)*(r+17))+"px"; node.style.top=(cy+Math.sin(ang)*(r+17))+"px"; nw.textContent=c.w.toFixed(2); };
+      place(); let drag=false;
       node.addEventListener("pointerdown",e=>{ drag=true; node.setPointerCapture(e.pointerId); e.preventDefault(); });
       node.addEventListener("pointermove",e=>{ if(!drag)return; const r=el.getBoundingClientRect();
         const dx=e.clientX-r.left-r.width/2, dy=e.clientY-r.top-r.height/2;
-        // project onto this node's radial axis → distance = weight (sign by side of center)
-        const proj=(dx*Math.cos(ang)+dy*Math.sin(ang));
-        c.w=clamp(proj/R*2,-2,2); place(); commit(api); });
+        c.w=clamp((Math.hypot(dx,dy)-17)/R*2,0,2); place(); commit(api); });
       node.addEventListener("pointerup",()=>drag=false);
     });
+    if(!STATE.length) el.innerHTML='<div class="empty">add concepts above</div>';
   }
-  const api={el,src:0,update:()=>{ const ns=el.querySelectorAll(".node"); if(ns.length===STATE.length){ ns.forEach(n=>n._place&&n._place()); } else build(); }};
-  api.src=api; requestAnimationFrame(build); return api;
+  const api={el,update:build}; api.src=api; requestAnimationFrame(build); return api;
 }
 function ctlKnobs(){
   const el=document.createElement("div"); el.className="knobs";
-  function build(){ el.innerHTML="";
-    STATE.forEach(c=>{ const k=document.createElement("div"); k.className="knob";
-      k.innerHTML=`<svg width="52" height="52" viewBox="0 0 52 52"><circle cx="26" cy="26" r="20" fill="none" stroke="var(--line)" stroke-width="3"/><path class="arc" fill="none" stroke="var(--fg)" stroke-width="3"/><line class="ind" x1="26" y1="26" x2="26" y2="9" stroke="var(--fg)" stroke-width="2"/></svg><div class="lbl" title="${c.t}">${c.t}</div><div class="v"></div>`;
+  function build(){ groups(el,c=>{ const k=document.createElement("div"); k.className="knob"; k.style.setProperty("--ac",AC(c));
+      k.innerHTML=`<svg width="48" height="48" viewBox="0 0 48 48"><circle cx="24" cy="24" r="18" fill="none" stroke="var(--line)" stroke-width="3"/><path class="arc" fill="none" stroke="${AC(c)}" stroke-width="3"/><line class="ind" x1="24" y1="24" x2="24" y2="9" stroke="${AC(c)}" stroke-width="2"/></svg><div class="lbl" title="${c.t}">${c.t}</div><div class="v"></div>`;
       const svg=k.querySelector("svg"),arc=k.querySelector(".arc"),ind=k.querySelector(".ind"),v=k.querySelector(".v");
-      const A=Math.PI*0.75; // ±135° sweep maps to ±2
-      const paint=()=>{ const ang=clamp(c.w/2,-1,1)*A; const x=26+Math.sin(ang)*17,y=26-Math.cos(ang)*17;
+      const A=Math.PI*0.78;
+      const paint=()=>{ const ang=-A + clamp(c.w/2,0,1)*2*A; const x=24+Math.sin(ang)*15,y=24-Math.cos(ang)*15;
         ind.setAttribute("x2",x); ind.setAttribute("y2",y);
-        const a0=-A, a1=ang, large=Math.abs(a1-a0)>Math.PI?1:0;
-        arc.setAttribute("d",`M ${26+Math.sin(a0)*20} ${26-Math.cos(a0)*20} A 20 20 0 ${large} 1 ${26+Math.sin(a1)*20} ${26-Math.cos(a1)*20}`);
-        arc.setAttribute("stroke", c.w<0?"var(--neg)":"var(--pos)");
-        v.textContent=(c.w>0?"+":"")+c.w.toFixed(2); };
-      paint(); k._paint=paint;
-      let d=null;
+        const x0=24+Math.sin(-A)*18,y0=24-Math.cos(-A)*18, x1=24+Math.sin(ang)*18,y1=24-Math.cos(ang)*18, lg=(ang- -A)>Math.PI?1:0;
+        arc.setAttribute("d",`M ${x0} ${y0} A 18 18 0 ${lg} 1 ${x1} ${y1}`); v.textContent=(c.s<0?"−":"")+c.w.toFixed(2); };
+      paint(); let d=null;
       svg.addEventListener("pointerdown",e=>{ d={y:e.clientY,w0:c.w}; svg.setPointerCapture(e.pointerId); });
-      svg.addEventListener("pointermove",e=>{ if(!d)return; c.w=clamp(d.w0-(e.clientY-d.y)*0.02,-2,2); paint(); commit(api); });
+      svg.addEventListener("pointermove",e=>{ if(!d)return; c.w=clamp(d.w0-(e.clientY-d.y)*0.02,0,2); paint(); commit(api); });
       svg.addEventListener("pointerup",()=>d=null);
-      el.appendChild(k);
-    });
+      return k; });
+    el.querySelectorAll(".ghost").forEach(h=>{ h.style.display="flex"; h.style.flexWrap="wrap"; h.style.gap="14px"; });
+    el.querySelectorAll(".ggroup").forEach(g=>{ g.style.marginBottom="10px"; });
   }
-  const api={el,src:0,update:build}; api.src=api; build(); return api;
+  const api={el,update:build}; api.src=api; build(); return api;
 }
 function ctlCloud(){
   const el=document.createElement("div"); el.className="cloud";
   function build(){ el.innerHTML="";
-    STATE.forEach(c=>{ const wd=document.createElement("span"); wd.className="word";
-      wd.innerHTML=`${c.t}<span class="cw"></span>`; const cw=wd.querySelector(".cw");
-      const paint=()=>{ const sz=clamp(13+c.w*9,9,34); wd.style.fontSize=sz+"px";
-        wd.style.color=c.w<-0.04?"var(--neg)":c.w>0.04?"var(--fg)":"var(--mut)";
-        wd.style.opacity=clamp(0.45+Math.abs(c.w)/2*0.55,.3,1); cw.textContent=(c.w<0?"−":"")+Math.abs(c.w).toFixed(1); };
-      paint(); wd._paint=paint;
-      let d=null;
+    STATE.forEach(c=>{ const wd=document.createElement("span"); wd.className="word"; wd.style.setProperty("--ac",AC(c));
+      wd.innerHTML=`${c.s<0?"−":""}${c.t}<span class="cw"></span>`; const cw=wd.querySelector(".cw");
+      const paint=()=>{ wd.style.fontSize=clamp(12+c.w*9,11,32)+"px"; wd.style.opacity=clamp(.45+c.w/2*.55,.3,1); cw.textContent=c.w.toFixed(1); };
+      paint(); let d=null;
       wd.addEventListener("pointerdown",e=>{ d={y:e.clientY,w0:c.w}; wd.setPointerCapture(e.pointerId); e.preventDefault(); });
-      wd.addEventListener("pointermove",e=>{ if(!d)return; c.w=clamp(d.w0-(e.clientY-d.y)*0.015,-2,2); paint(); commit(api); });
-      wd.addEventListener("pointerup",()=>d=null);
-      el.appendChild(wd);
+      wd.addEventListener("pointermove",e=>{ if(!d)return; c.w=clamp(d.w0-(e.clientY-d.y)*0.015,0,2); paint(); commit(api); });
+      wd.addEventListener("pointerup",()=>d=null); el.appendChild(wd);
     });
+    if(!STATE.length) el.innerHTML='<div class="empty">add concepts above</div>';
   }
-  const api={el,src:0,update:build}; api.src=api; build(); return api;
+  const api={el,update:build}; api.src=api; build(); return api;
 }
 
 const SPEC=[
-  ["Mixer faders","Audio-desk metaphor: drag a fader up to emphasize, down past the center line to subtract. Familiar, precise, scales to many concepts.",ctlFaders],
-  ["Scrub chips","Drag a pill left/right like a number field; fill shows magnitude, red = subtract. Compact, lives inline with the query. Double-click resets.",ctlChips],
-  ["Budget bar","One fixed budget split across concepts — drag a divider to rob one and pay its neighbor. Great for relative emphasis; positive-only.",ctlBudget],
-  ["Orbit (magnets)","Concepts as magnets around the query; drag a node out for a stronger pull, across the center to repel. Spatial, playful, weak on precision.",ctlOrbit],
-  ["Knobs","Rotary dials — twist up for more, left of center to subtract. Dense and tactile; rotation is less legible than a linear track.",ctlKnobs],
-  ["Weighted word cloud","The query IS the control: each word's size is its weight — drag a word up/down to grow or shrink it. Most direct, least exact.",ctlCloud],
+  ["Mixer faders","Two banks split by a divider — pull on the left, push on the right. Each fader is a magnitude 0–2; the box already fixed the sign.",ctlFaders],
+  ["Scrub chips","Green pull chips and red push chips; scrub a pill to set its strength. Compact and sits right beside the two query boxes.",ctlChips],
+  ["Budget bars","Two budgets: a green 'pull mix' and a red 'push mix', each split by dragging dividers. Pure relative emphasis within a polarity.",ctlBudget],
+  ["Orbit","Concepts ring the query; drag a node out to pull harder. Push concepts (⊘, red) sit in the same ring — distance is just strength.",ctlOrbit],
+  ["Knobs","Twist up for more. Arc colored green (pull) or red (push). Dense; grouped by polarity.",ctlKnobs],
+  ["Weighted word cloud","The two queries ARE the control: word size = strength, red = exclude. Drag a word up/down to grow or shrink it.",ctlCloud],
 ];
 function buildAll(){
   const grid=$("#grid"); grid.innerHTML=""; cards.length=0;
@@ -241,19 +262,18 @@ function buildAll(){
   refresh();
 }
 
-/* live search */
 let _t=null;
 function scheduleSearch(){ clearTimeout(_t); _t=setTimeout(runSearch,260); }
 async function runSearch(){
   const q=buildQuery(); if(!q){ $("#strip").innerHTML=""; $("#status").textContent=""; return; }
-  $("#status").textContent="searching…";
+  $("#status").textContent="· searching…";
   try{ const r=await (await fetch(`/api/search?q=${encodeURIComponent(q)}&k=18`)).json();
     const s=$("#strip"); s.innerHTML="";
     (r.results||[]).forEach(h=>{ const c=document.createElement("div"); c.className="c";
       c.innerHTML=`<img loading="lazy" src="/api/thumb?path=${encodeURIComponent(h.path)}&size=200">`; s.appendChild(c); });
-    $("#status").textContent=`${(r.results||[]).length} results`;
-  }catch(e){ $("#status").textContent="error: "+e.message; }
+    $("#status").textContent=`· ${(r.results||[]).length} results`;
+  }catch(e){ $("#status").textContent="· error: "+e.message; }
 }
-$("#concepts").addEventListener("input",parseConcepts);
-parseConcepts();
+$("#pos").addEventListener("input",parse); $("#neg").addEventListener("input",parse);
+parse();
 </script></body></html>
