@@ -2156,11 +2156,44 @@ def create_app(model: str = DEFAULT_MODEL):
         except Exception:
             raise HTTPException(404, "thumb failed")
 
+    # Formats browsers render natively — served raw (fast FileResponse path).
+    # Anything else (TIFF/BMP/…) is transcoded to a browser-safe image on the
+    # fly, because <img>/window.open can't display e.g. image/tiff.
+    _WEB_IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".svg"}
+
     @app.get("/api/image")
     def image(path: str):
         if not _serve_allowed(path):
             raise HTTPException(404, "not found")
-        return FileResponse(path)
+        ext = os.path.splitext(path)[1].lower()
+        if ext in _WEB_IMG_EXT:
+            return FileResponse(path)
+        # Non-web formats (tiff/tif/bmp/…): decode with PIL and re-encode to a
+        # format the browser can show. PNG when the source has alpha (preserve
+        # transparency), JPEG otherwise (smaller for opaque photos). No downscale
+        # for the full-detail view — cap only pathological dimensions like the
+        # thumb path does, so huge multi-hundred-MP TIFFs don't OOM the encoder.
+        from PIL import Image
+        import io
+
+        Image.MAX_IMAGE_PIXELS = None  # trusted local files
+        try:
+            img = Image.open(path)
+            has_alpha = img.mode in ("RGBA", "LA", "PA") or (
+                img.mode == "P" and "transparency" in img.info
+            )
+            if max(img.size) > 8192:
+                img.thumbnail((8192, 8192), Image.LANCZOS)
+            buf = io.BytesIO()
+            if has_alpha:
+                img.convert("RGBA").save(buf, "PNG", optimize=False)
+                media = "image/png"
+            else:
+                img.convert("RGB").save(buf, "JPEG", quality=90, optimize=False)
+                media = "image/jpeg"
+        except Exception:
+            raise HTTPException(404, "decode failed")
+        return Response(content=buf.getvalue(), media_type=media)
 
     @app.get("/api/demo-mode")
     def demo_mode_get():
