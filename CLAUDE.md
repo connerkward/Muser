@@ -25,13 +25,13 @@ See `REQUIREMENTS.md` for scope/decisions.
   Backends: `SentenceTransformerEmbedder` (CLIP/SigLIP baselines) and
   `JinaV4Embedder` (2026 frontier default). Heavy deps lazy-imported.
 - `muser/registry.py` — `name -> (tier, factory)` model registry. Add a model
-  once → it appears in CLI, index, and benchmark. `DEFAULT_MODEL = "jina-v4"`.
+  once → it appears in CLI, index, and benchmark. `DEFAULT_MODEL = "siglip2-b"`.
 - `muser/index.py` — `MuserIndex`: one embedded LanceDB at `~/.muser/db`, one
   table per model (`img__<model>`), cosine over L2-normalized vectors.
   Incremental by mtime; skips corrupt files.
 - `muser/cli.py` — `muser` entrypoint (typer): `index`, `reindex-metadata`, `search`,
-  `bench`, `models`, `cluster`, `score`, `caption`, `detect`, `color`, `serve`, `web`,
-  `uid`. `detect` runs the C2PA library scan headless (writes `~/.muser/c2pa.json`; same
+  `bench`, `models`, `cluster`, `score`, `caption`, `detect`, `aiscore`, `color`, `serve`,
+  `web`, `uid`. `detect` runs the C2PA library scan headless (writes `~/.muser/c2pa.json`; same
   data the web "AI" tab uses). The generate pipeline is web/MCP-only (no CLI command).
 - `muser/service.py` — **embedded service** (`muser serve`): FastAPI app that warms
   the model once and owns the index; serves JSON API + the web search UI
