@@ -10,8 +10,9 @@ that index as the substrate for two adjacent jobs: (1) **finding source assets**
 generative work — image-to-image search, the selection cart, reverse-image lookup,
 NSFW / C2PA-provenance filters — and (2) **curating training sets** for personal
 LoRAs and aesthetic models — cluster exploration, aesthetic ranking via LAION-V2
-and PickScore, selection/export. Everything runs on-device: no API keys, no cloud
-round-trip, no telemetry. The same SigLIP embeddings power semantic search and
+and PickScore, selection/export. The **core** runs entirely on-device — no API keys, no
+cloud round-trip, no telemetry; the optional **generate** and **caption** paths are the
+only network reach (see below). The same SigLIP embeddings power semantic search and
 feed downstream scoring/curation so there's no second model pass for any of it.
 
 Search with a text query like _"a dog on a beach at sunset"_ and get back the
@@ -19,10 +20,46 @@ closest-matching photos.
 
 Three surfaces over one core (a warm local service that owns the model + index):
 
-- **`muser`** — a CLI to index, search, benchmark.
+- **`muser`** — a CLI to index, search, score, caption, cluster, benchmark.
 - **`muser serve`** — the embedded service + a browser **search UI** at `http://127.0.0.1:7777`.
 - **`muser-mcp`** — an [MCP](https://modelcontextprotocol.io) server (an _MCP App_) that
   searches and renders matches in an interactive gallery inside the host (e.g. Claude Desktop).
+
+## What's local vs. what's cloud
+
+The **core is genuinely local, offline, and $0** — embedding, indexing, semantic search,
+color search, dedup, AI-likelihood scoring, on-disk captions read-back. No keys, no
+network, no telemetry.
+
+Two things reach the network and are **opt-in**:
+
+- **Captioning** (`muser caption`) calls **OpenAI** GPT-4o-mini (~$0.001–0.005/image).
+- **Generate** (the cart → image/3D/LoRA pipeline) calls **fal.ai** / OpenAI image models
+  and costs money. Needs `FAL_KEY` / `OPENAI_API_KEY`.
+
+The **3D viewer** and the **Explore** point cloud load three.js / `<model-viewer>` from a
+CDN, so they need internet to *render* — both degrade gracefully offline (3D → download
+link, Explore viz → hidden; the data itself is still computed locally).
+
+## Features
+
+- **Semantic search** — text→image and image→image (drag/drop or picker) in one shared
+  SigLIP space; folder-scoped, multi-concept comma queries (`a, b, -c`) with blend or
+  intersection matching, lowercased for the case-sensitive tokenizer.
+- **Color search** — a separate local LAB-palette index; query by one or more hex swatches
+  (all/any mode). No model load, $0.
+- **AI-origin signals** — two independent surfaces: a hard **C2PA** verdict (reads signed
+  Content Credentials via optional `c2patool`; positive-only, a lower bound) and a soft
+  **AI-likelihood %** (Community Forensics pixel model). Filter `[All | Hide AI | Only AI]`.
+- **Curation** — aesthetic scoring (LAION-V2 / PickScore / HPS), cluster exploration, a
+  selection **cart**, and zip export — pointed at building LoRA / aesthetic training sets.
+- **Generate** (cloud add-on) — cart → fal.ai image generation (Nano Banana / gpt-image /
+  both / FLUX LoRA), BiRefNet cutout, prompt expansion, and image→3D (Meshy 6, or Hunyuan3D
+  multiview). Live per-stage progress on a Jobs page.
+- **Explore** — 3D PCA point cloud of the library, colored by HDBSCAN cluster; SigLIP or
+  opt-in DINOv2 space (finer, named clusters).
+- **Reverse-image lookup** — one-click, $0: copies the image to the clipboard and opens
+  Google Lens (source) or TinEye (provenance); nothing leaves the machine until you paste.
 
 ## How it works
 
@@ -52,20 +89,38 @@ First index/search downloads the model weights once (siglip2-b ≈ 1 GB).
 
 ```bash
 # Index a folder (recursive). Re-running is incremental (mtime-based; prunes deleted files).
+# Indexing also auto-runs the color, C2PA, and AI-likelihood scans over the new subtree.
 uv run muser index ~/Pictures/screenshots
 
-# Search the whole index, or scope to a folder
+# Search the whole index, or scope to a folder. Comma = multi-concept; leading - subtracts.
 uv run muser search "a login screen with a blue button"
 uv run muser search "sunset over water" --in ~/Pictures -k 5
+uv run muser search "a car, -people" --match all
+
+# Color search (local, $0). No --query → (re)build the palette index.
+uv run muser color --query "#1e90ff" --in ~/Pictures
+
+# Curation: aesthetic-score the index, explore clusters
+uv run muser score
+uv run muser cluster
+
+# AI-origin: C2PA scan (needs c2patool) and soft AI-likelihood scan (torch+timm)
+uv run muser detect --in ~/Pictures
+uv run muser aiscore --in ~/Pictures        # or: aiscore -q <one-image>
+
+# Captions for LoRA training sets (OpenAI, opt-in, costs money) → ~/.muser/captions.jsonl
+uv run muser caption ~/Pictures/best
 
 # List models / run the retrieval-eval benchmark
 uv run muser models
 uv run muser bench
 
-# Launch the embedded service + web search UI (http://127.0.0.1:7777)
+# Launch the embedded service + web UI (http://127.0.0.1:7777), or the eval Gradio UI
 uv run muser serve
+uv run muser web
 ```
 
+Run `uv run muser --help` for the full command list (also: `reindex-metadata`, `uid`).
 Paths accept `~` (expands per-OS) and forward slashes on every platform.
 
 ## MCP usage
