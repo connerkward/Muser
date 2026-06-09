@@ -140,6 +140,13 @@ no path or runtime prefix is needed:
 { "mcpServers": { "muser": { "command": "muser-mcp" } } }
 ```
 
+`search_images` renders the interactive gallery as an _MCP App_ inside the host (sort
+slider, dedup badges, scope, reverse-image) — below, the gallery served to a real MCP
+host via the [`@modelcontextprotocol/ext-apps`](https://github.com/modelcontextprotocol/ext-apps)
+basic-host (the same component Claude Desktop renders):
+
+![Muser search_images gallery rendered as an MCP App in a host](docs/screenshots/mcp-gallery.jpg)
+
 | Tool            | Purpose                                                        |
 | --------------- | -------------------------------------------------------------- |
 | `index_folder`  | Index / re-index a folder of images.                           |
