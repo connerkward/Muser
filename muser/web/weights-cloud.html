@@ -3,7 +3,7 @@
 <title>Weighted word-cloud search bar</title>
 <style>
   :root{ --bg:#f4efe3; --fg:#1a1813; --mut:#8a8270; --line:#d8d0bd;
-         --pos:#1a1813; --neg:#b4452f; --serif:'Iowan Old Style',Georgia,serif; --mono:ui-monospace,'SF Mono',Menlo,monospace; }
+         --pos:#2f7d52; --neg:#b4452f; --serif:'Iowan Old Style',Georgia,serif; --mono:ui-monospace,'SF Mono',Menlo,monospace; }
   *{ box-sizing:border-box; }
   body{ margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 var(--serif);
         -webkit-font-smoothing:antialiased; padding:30px clamp(16px,5vw,60px) 60px; }
@@ -19,9 +19,12 @@
   .word{ position:relative; color:var(--c); cursor:ns-resize; user-select:none; touch-action:none;
          white-space:nowrap; transition:font-size .04s linear, opacity .1s; padding-top:3px; }
   .word .neg{ color:var(--neg); font-weight:600; }
-  .word .rm{ position:absolute; top:-7px; right:-9px; font-size:10px; color:var(--mut); opacity:0;
-             cursor:pointer; background:var(--bg); padding:0 2px; }
-  .word:hover .rm{ opacity:1; } .word .rm:hover{ color:var(--neg); }
+  /* always-visible remove badge: a small circled × top-right of each word */
+  .word .rm{ position:absolute; top:-9px; right:-11px; width:15px; height:15px; line-height:13px; text-align:center;
+             font:12px/13px var(--mono); color:var(--mut); background:var(--bg); border:1px solid var(--line);
+             border-radius:50%; cursor:pointer; opacity:.7; transition:opacity .1s,color .1s,border-color .1s; }
+  .word:hover .rm{ opacity:1; }
+  .word .rm:hover{ color:#fff; background:var(--neg); border-color:var(--neg); }
   .word.drag{ opacity:.7; }
   .entry{ flex:1; min-width:130px; border:0; outline:0; background:none; font:18px var(--serif); color:var(--fg); align-self:center; padding:4px 2px; }
 
