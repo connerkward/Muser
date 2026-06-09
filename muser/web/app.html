@@ -8,11 +8,13 @@
 <style>
   :root {
     --bg:#f5f1e8; --paper:#ece6d6; --fg:#1a1815; --mut:#7c7569; --line:#d6cebb;
+    --pos:#2f7d52; --neg-c:#b4452f;  /* concept-bar find (green) / exclude (red) */
     --serif: ui-serif, "Iowan Old Style", "Charter", Georgia, serif;
     --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#16140f; --paper:#1f1c16; --fg:#ece6d6; --mut:#80796b; --line:#2b2820; }
+    :root { --bg:#16140f; --paper:#1f1c16; --fg:#ece6d6; --mut:#80796b; --line:#2b2820;
+            --pos:#5fb585; --neg-c:#d6735a; }
   }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.55 var(--sans);
@@ -88,6 +90,40 @@
   .searchbar input { flex:1; font-size:15px; padding:11px 14px; }
   .searchbar .neg { flex:0 1 230px; }
   .searchbar .neg::placeholder { color:var(--mut); }
+
+  /* ---- Concept bar (debug-gated weighted word-cloud over the SAME search) ----
+     One line of typed-order tokens: green = find, red = exclude (-prefix), each
+     token's font-size = its weight (drag up/down, down-only from 100%). It only
+     BUILDS the `concept:weight` string and writes it into #q, then fires the
+     existing liveSearch() — every downstream behavior is unchanged. Shown only
+     when the debug "Concept bar" toggle is on (body.cbar-on); the plain #q row
+     is hidden in that mode. Mirrors the prototype at /proto/weights-1line. */
+  body.cbar-on .searchbar { display:none; }          /* hide plain input when concept bar is active */
+  .cbar { display:none; }
+  body.cbar-on .cbar { display:flex; }
+  .cbar { align-items:center; gap:4px 14px; min-height:46px; padding:8px 12px;
+          margin-bottom:4px; border:1px solid var(--line); border-radius:2px;
+          background:transparent; cursor:text; flex-wrap:nowrap; overflow-x:auto; }
+  .cbar:focus-within { border-color:var(--fg); }
+  .cbar::-webkit-scrollbar { height:6px; }
+  .cbar::-webkit-scrollbar-thumb { background:var(--line); }
+  .cword { position:relative; flex:0 0 auto; color:var(--cc); cursor:ns-resize;
+           user-select:none; touch-action:none; white-space:nowrap; padding-top:3px;
+           font-family:var(--serif); transition:font-size .04s linear, opacity .1s; }
+  .cword .cneg { color:inherit; }
+  .cword .ccw { font:10px/1 var(--mono, ui-monospace, Menlo, monospace); color:var(--mut);
+                vertical-align:super; margin-left:2px; }
+  .cword .crm { position:absolute; top:-9px; right:-11px; width:16px; height:16px;
+                line-height:14px; text-align:center; font:13px/14px ui-monospace,Menlo,monospace;
+                color:var(--fg); background:var(--bg); border:1px solid var(--fg);
+                border-radius:50%; cursor:pointer; opacity:0;
+                transition:opacity .1s,color .1s,background .1s,border-color .1s; }
+  .cword:hover .crm { opacity:1; }
+  .cword .crm:hover { color:#fff; background:var(--neg-c); border-color:var(--neg-c); }
+  .cword.cdrag { opacity:.7; }
+  .centry { flex:1 0 150px; border:0; outline:0; background:none; padding:4px 2px;
+            font:16px var(--serif); color:var(--fg); }
+  .centry::placeholder { color:var(--mut); }
 
   /* Single line, never wraps. Horizontal scroll for overflow with a soft
      right-edge fade so it reads as "more →" rather than a hard cut; text in
@@ -1041,6 +1077,11 @@
     <button class="imgbtn" id="uploadBtn" type="button" title="Search by uploading an image — find visually similar">🖼</button>
     <button class="primary" id="go">Search</button>
     <input type="file" id="uploadInput" accept="image/*" style="display:none" />
+  </div>
+  <!-- Concept bar (debug-gated): weighted word-cloud that BUILDS the #q query
+       string and reuses the existing search. Hidden unless body.cbar-on. -->
+  <div class="cbar" id="cbar">
+    <input class="centry" id="cbarEntry" placeholder="type a concept…  (- to exclude · drag to weight)" autocomplete="off" spellcheck="false" />
   </div>
   <div class="upchip" id="uploadChip">
     <img id="uploadThumb" alt="" />
@@ -5131,12 +5172,105 @@ function manualOrbit(camera, el){
    ========================================================================== */
 const DBG_KEY = "muser.debug.grid";
 let _dbgPanel = null;
-const _dbgDefaults = { thumb: 230, cols: 0, masonry: false };  // cols 0 = auto-fill; masonry off = square grid
+const _dbgDefaults = { thumb: 230, cols: 0, masonry: false, concept: false };  // cols 0 = auto-fill; masonry off = square grid; concept = weighted word-cloud search bar
 function _dbgLoad(){
   try { return Object.assign({}, _dbgDefaults, JSON.parse(localStorage.getItem(DBG_KEY)||"{}")); }
   catch { return Object.assign({}, _dbgDefaults); }
 }
 function _dbgSave(s){ try { localStorage.setItem(DBG_KEY, JSON.stringify(s)); } catch {} }
+
+/* ---- Concept bar: weighted word-cloud as a UI layer over the EXISTING search ----
+   Adapted from the prototype at /proto/weights-1line. TOK is the typed-order token
+   list; cbBuildQuery() emits muser's `concept, concept:0.60, -concept` syntax (which
+   /api/search already parses) and writes it into #q, then triggers the existing
+   liveSearch() — so folder scope, filters, sort, dedup, infinite scroll, rendering
+   all run unchanged. Off by default; toggled via the debug panel ("Concept bar"),
+   persisted alongside the other debug settings. When OFF the plain #q path is
+   byte-for-byte the same as before (this code never runs against #q while off). */
+let _CBTOK = [];   // [{t,w,s}]  s=+1 find / -1 exclude, w 0..1 (100% default, down-only)
+const _cbClamp = (v,a,b) => Math.max(a, Math.min(b, v));
+function cbConceptOn(){ try { return !!_dbgLoad().concept; } catch { return false; } }
+// Build the `concept, concept:0.60, -concept` string fed to muser's /api/search.
+function cbBuildQuery(){
+  const pos = _CBTOK.filter(c=>c.s>0), neg = _CBTOK.filter(c=>c.s<0);
+  const part = (arr, sign) => arr.filter(c=>c.w>0.04)
+    .map(c => `${sign}${c.t}${Math.abs(c.w-1)<0.04 ? "" : ":"+c.w.toFixed(2)}`);
+  return [...part(pos,""), ...part(neg,"-")].join(", ");
+}
+// Push the built query into the real search box and fire the existing pipeline.
+function cbApply(){
+  const q = cbBuildQuery();
+  const qin = $("#q");
+  qin.value = q;
+  if (q.trim().length >= 2) liveSearch();
+  else { _lastKey=""; _rendered=0; search(); }   // empty → showcase, same as clearing #q
+}
+function _cbMkWord(c){
+  const ac = c.s<0 ? "var(--neg-c)" : "var(--pos)";
+  const wd = document.createElement("span");
+  wd.className = "cword"; wd.style.setProperty("--cc", ac);
+  wd.innerHTML = `${c.s<0 ? '<span class="cneg">-</span>' : ''}${c.t}`
+    + `<span class="ccw"></span><span class="crm" title="remove">×</span>`;
+  const cw = wd.querySelector(".ccw");
+  const paint = () => { wd.style.fontSize = _cbClamp(15+c.w*15,15,30)+"px";
+    wd.style.opacity = _cbClamp(.5+c.w*.5,.4,1); cw.textContent = Math.round(c.w*100)+"%"; };
+  paint();
+  let st = null;
+  wd.addEventListener("pointerdown", e => { if (e.target.classList.contains("crm")) return;
+    st = {y:e.clientY, w0:c.w, moved:false}; wd.setPointerCapture(e.pointerId); e.preventDefault(); });
+  wd.addEventListener("pointermove", e => { if (!st) return; const dy = e.clientY - st.y;
+    if (Math.abs(dy) > 3){ st.moved = true; wd.classList.add("cdrag"); }
+    c.w = _cbClamp(st.w0 - dy*0.007, 0, 1); paint(); cbApply(); });
+  wd.addEventListener("pointerup", () => { if (st && !st.moved){ c.s *= -1; cbRender(); cbApply(); }  // tap = flip find/exclude
+    st = null; wd.classList.remove("cdrag"); });
+  wd.querySelector(".crm").addEventListener("click", e => { e.stopPropagation();
+    const i = _CBTOK.indexOf(c); if (i>=0) _CBTOK.splice(i,1); cbRender(); cbApply(); });
+  return wd;
+}
+function cbRender(){
+  const bar = $("#cbar"), entry = $("#cbarEntry");
+  if (!bar) return;
+  [...bar.querySelectorAll(".cword")].forEach(n => n.remove());
+  // Words stay in typed order — flipping polarity recolors in place, never reorders.
+  // (cbBuildQuery still emits pos-then-neg for the API.)
+  _CBTOK.forEach(c => bar.insertBefore(_cbMkWord(c), entry));
+}
+function _cbCommit(){
+  let v = $("#cbarEntry").value.trim(); if (!v) return; let s = 1;
+  if (v[0]==="-"){ s=-1; v=v.slice(1).trim(); } else if (v[0]==="+"){ v=v.slice(1).trim(); }
+  if (v) _CBTOK.push({ t:v.toLowerCase(), w:1, s });
+  $("#cbarEntry").value = ""; cbRender(); cbApply();
+}
+function _cbWire(){
+  const entry = $("#cbarEntry"), bar = $("#cbar");
+  if (!entry || entry._cbWired) return; entry._cbWired = true;
+  entry.addEventListener("keydown", e => {
+    if (e.key===","||e.key==="Enter"){ e.preventDefault(); _cbCommit(); }
+    else if (e.key==="Backspace" && !entry.value && _CBTOK.length){ _CBTOK.pop(); cbRender(); cbApply(); }
+  });
+  bar.addEventListener("click", e => { if (e.target.id==="cbar") entry.focus(); });
+}
+// Seed the bar from whatever is already in #q so toggling on mid-search keeps it,
+// then render. Toggling off leaves #q as-is (plain search continues untouched).
+function applyConceptBar(){
+  const on = cbConceptOn();
+  document.body.classList.toggle("cbar-on", on);
+  if (on){
+    _cbWire();
+    if (!_CBTOK.length){
+      // Parse an existing #q value into tokens (best-effort) so we don't lose it.
+      const cur = ($("#q").value||"").trim();
+      if (cur) _CBTOK = _conceptsOf(cur).map(tok => {
+        let s=1, t=tok; if (t[0]==="-"){ s=-1; t=t.slice(1).trim(); }
+        let w=1; const m=t.match(/:([0-9.]+)\s*$/); if (m){ w=parseFloat(m[1])||1; t=t.slice(0,m.index).trim(); }
+        return { t:t.toLowerCase(), w:_cbClamp(w,0,1), s };
+      }).filter(c=>c.t);
+    }
+    cbRender(); cbApply();
+    $("#cbarEntry").focus();
+  }
+}
+
 function applyGridSettings(){
   const s = _dbgLoad();
   let style = document.getElementById("dbgStyle");
@@ -5275,6 +5409,11 @@ function toggleDebugPanel(){
       <span class="track"></span>
       <span class="lab">Masonry layout — natural aspect, packed by height</span>
     </label>
+    <label class="dbg-switch" for="dbgConcept">
+      <input type="checkbox" id="dbgConcept" ${s.concept?"checked":""}>
+      <span class="track"></span>
+      <span class="lab">Concept bar — weighted word-cloud search (drag to weight, − to exclude)</span>
+    </label>
     <button id="dbgReset" type="button">reset</button>
     <div id="dbgHint">thumbnail size auto-fits the grid · items per row (0 = auto) overrides it · saved locally</div>
     <label class="dbg-switch" for="dbgDemo">
@@ -5299,18 +5438,21 @@ function toggleDebugPanel(){
     cv.textContent = fixed ? (+cols.value) : "auto";
   };
   const masonry = el.querySelector("#dbgMasonry");
+  const concept = el.querySelector("#dbgConcept");
   const persist = () => {
-    _dbgSave({ thumb: +thumb.value, cols: +cols.value, masonry: masonry.checked });
-    syncEnabled(); applyGridSettings();
+    _dbgSave({ thumb: +thumb.value, cols: +cols.value, masonry: masonry.checked, concept: concept.checked });
+    syncEnabled(); applyGridSettings(); applyConceptBar();
   };
   thumb.addEventListener("input", persist);
   cols.addEventListener("input", persist);
   masonry.addEventListener("change", persist);
+  concept.addEventListener("change", persist);
   syncEnabled();
   el.querySelector("#dbgReset").onclick = () => {
     _dbgSave(Object.assign({}, _dbgDefaults));
-    thumb.value=_dbgDefaults.thumb; cols.value=_dbgDefaults.cols; masonry.checked=_dbgDefaults.masonry;
-    syncEnabled(); applyGridSettings();
+    thumb.value=_dbgDefaults.thumb; cols.value=_dbgDefaults.cols;
+    masonry.checked=_dbgDefaults.masonry; concept.checked=_dbgDefaults.concept;
+    syncEnabled(); applyGridSettings(); applyConceptBar();
   };
   // ---- demo-mode toggle: server-side flag (NSFW + people clusters hidden) ----
   const demo = el.querySelector("#dbgDemo");
@@ -5383,6 +5525,7 @@ document.addEventListener("keydown", (e) => {
   toggleDebugPanel();
 });
 applyGridSettings();                                       // apply saved settings at boot
+applyConceptBar();                                         // restore concept-bar toggle at boot
 
 /* ============================================================================
    FEATURE 3 — Photo detail: run upscale + before/after slider
