@@ -424,6 +424,21 @@ def create_app(model: str = DEFAULT_MODEL):
     def home():
         return WEB.read_text()
 
+    @app.get("/proto/weights", response_class=HTMLResponse)
+    def proto_weights():
+        # Interactive prototype studio for per-concept weighting UX (same-origin so
+        # it can hit the live /api/search). Read per request so iterating the file
+        # needs no restart. Harmless if the file is absent.
+        f = Path(__file__).resolve().parent / "web" / "weights-proto.html"
+        return f.read_text() if f.exists() else "<h1>prototype not found</h1>"
+
+    @app.get("/proto/weights-spread", response_class=HTMLResponse)
+    def proto_weights_spread():
+        # Lookdev component spread: many divergent per-concept weighting controls,
+        # all bound to one shared concept set + live results.
+        f = Path(__file__).resolve().parent / "web" / "weights-spread.html"
+        return f.read_text() if f.exists() else "<h1>spread not found</h1>"
+
     # SVG favicon: solid-fill knockout mark — italic lowercase 'm' carved
     # out of a charcoal square. Single-character favicons need the solid
     # field to carry weight at 16px; an outlined glyph alone reads as a
@@ -836,23 +851,36 @@ def create_app(model: str = DEFAULT_MODEL):
             if t[0] in "+-":
                 sign = -1 if t[0] == "-" else 1
                 t = t[1:].strip()
+            weight = 1.0
+            # Optional trailing ":<number>" sets the concept's weight ("car:2",
+            # "snow:0.5") — how much it pulls the blend / how strongly it must match.
+            if ":" in t:
+                head, _, tail = t.rpartition(":")
+                try:
+                    weight = abs(float(tail.strip()))
+                    t = head.strip()
+                except ValueError:
+                    pass
             if t:
-                out.append((t.lower(), sign))
+                out.append((t.lower(), sign * weight))
         return out
 
     def _blend_vector(emb, pos, neg, neg_strength):
-        """Sum unit-normalized positive concept embeddings, subtract negatives
-        (weighted by neg_strength), renormalize → one query vector. This is prompt
-        ensembling: each concept contributes equally instead of one long string
-        letting the bag-of-words encoder fixate on whichever token dominates."""
+        """Weighted sum of positive concept embeddings minus weighted negatives,
+        renormalized → one query vector. pos/neg are (text, weight) lists. This is
+        prompt ensembling with per-concept weights: each concept pulls the blend in
+        proportion to its weight, instead of one long string letting the bag-of-words
+        encoder fixate on whichever token dominates."""
         import numpy as np
-        vecs = emb.embed_queries(pos + neg) if (pos or neg) else []
+        texts = [t for t, _ in pos] + [t for t, _ in neg]
+        vecs = emb.embed_queries(texts) if texts else []
         qv = None
-        for i, _t in enumerate(pos):
-            v = vecs[i]
-            qv = v.copy() if qv is None else qv + v
-        for j, _t in enumerate(neg):
-            qv = qv - neg_strength * vecs[len(pos) + j] if qv is not None else -neg_strength * vecs[len(pos) + j]
+        for i, (_t, w) in enumerate(pos):
+            c = w * vecs[i]
+            qv = c.copy() if qv is None else qv + c
+        for j, (_t, w) in enumerate(neg):
+            c = neg_strength * w * vecs[len(pos) + j]
+            qv = -c if qv is None else qv - c
         n = float(np.linalg.norm(qv)) if qv is not None else 0.0
         return qv / n if n > 0 else qv
 
@@ -862,10 +890,12 @@ def create_app(model: str = DEFAULT_MODEL):
         strongly present (true AND), unlike a blended centroid which rewards
         'a bit of each'. One kNN per concept (cheap), merged by min; a concept a
         result misses entirely is floored at that concept's weakest pooled hit so
-        it ranks below results present in all. Negatives subtract their similarity."""
+        it ranks below results present in all. Negatives subtract their similarity.
+        Weights (the `:N` suffix) don't apply here — min-of-similarities has no clean
+        weighting; they shape the blend mode instead. pos/neg are (text, weight)."""
         emb = state.warm()
-        pos_vecs = emb.embed_queries(pos)
-        neg_vecs = emb.embed_queries(neg) if neg else []
+        pos_vecs = emb.embed_queries([t for t, _ in pos])
+        neg_vecs = emb.embed_queries([t for t, _ in neg]) if neg else []
         pool = min(max(k * 12, 240), 2400)
         per = [dict(state.index.search(state.model_name, v, k=pool, folder=folder, meta=meta))
                for v in pos_vecs]
@@ -1173,18 +1203,18 @@ def create_app(model: str = DEFAULT_MODEL):
         # folded in as one more negative. With one concept and no neg this is the
         # plain single-vector path (lowercased — SigLIP/CLIP tokenizers are
         # case-sensitive and trained on lowercased alt-text).
-        concepts = _parse_concepts(q)
-        pos = [t for t, s in concepts if s > 0] or [q.lower()]
-        negs = [t for t, s in concepts if s < 0]
+        concepts = _parse_concepts(q)               # [(text, signed_weight), ...]
+        pos = [(t, w) for t, w in concepts if w > 0] or [(q.lower(), 1.0)]
+        negs = [(t, -w) for t, w in concepts if w < 0]   # positive magnitudes
         if neg and neg.strip():
-            negs.append(neg.lower())
+            negs.append((neg.lower(), 1.0))
         if match == "all" and len(pos) >= 2:
             # Match-all (intersection): each concept must be strongly present.
             results = _search_match_all(pos, negs, k, folder, meta, neg_strength, ai_min, ai_max, sort)
         else:
-            # Blend (default): sum the positive concept vectors, subtract negatives.
-            if len(pos) == 1 and not negs:
-                qv = emb.embed_queries([pos[0]])[0]
+            # Blend (default): weighted sum of positive concept vectors − negatives.
+            if len(pos) == 1 and not negs and pos[0][1] == 1.0:
+                qv = emb.embed_queries([pos[0][0]])[0]   # plain single-vector fast path
             else:
                 qv = _blend_vector(emb, pos, negs, neg_strength)
             results = _run_search(qv, k, dedup, method, folder, meta=meta, ai_min=ai_min, ai_max=ai_max, sort=sort)

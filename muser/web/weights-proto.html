@@ -1,0 +1,213 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Per-concept weighting — prototypes</title>
+<style>
+  :root{ --bg:#f4efe3; --fg:#1a1813; --mut:#8a8270; --line:#d8d0bd; --pos:#2f7d52; --neg:#b4452f;
+         --serif:'Iowan Old Style',Georgia,serif; --mono:ui-monospace,'SF Mono',Menlo,monospace; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 var(--serif);
+        -webkit-font-smoothing:antialiased; padding:28px clamp(16px,4vw,52px); }
+  h1{ font-size:21px; font-weight:600; margin:0 0 2px; letter-spacing:.01em; }
+  .sub{ color:var(--mut); font-size:13px; margin-bottom:22px; max-width:70ch; }
+  .sub code{ font-family:var(--mono); font-size:12px; background:#0001; padding:1px 4px; }
+  .row{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  input#concepts{ flex:1; min-width:260px; font:14px var(--mono); padding:8px 11px;
+        border:1px solid var(--line); background:#fff8; color:var(--fg); }
+  /* pattern switcher */
+  .tabs{ display:inline-flex; border:1px solid var(--line); margin:22px 0 14px; }
+  .tabs button{ background:transparent; border:0; border-right:1px solid var(--line); padding:7px 16px;
+        font:13px var(--serif); color:var(--mut); cursor:pointer; }
+  .tabs button:last-child{ border-right:0; }
+  .tabs button.on{ background:var(--fg); color:var(--bg); }
+  .stage{ min-height:150px; padding:20px 4px 8px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+  .hint{ color:var(--mut); font-size:12px; margin:6px 2px 0; font-style:italic; }
+  /* generated query readout */
+  .qline{ font-family:var(--mono); font-size:13px; margin:14px 2px 4px; color:var(--fg); }
+  .qline b{ color:var(--mut); font-weight:400; font-family:var(--serif); font-style:italic; margin-right:8px; }
+
+  /* ───────── Pattern 1: Faders (mixer) ───────── */
+  .faders{ display:flex; gap:26px; align-items:flex-end; padding:8px 6px; flex-wrap:wrap; }
+  .fader{ display:flex; flex-direction:column; align-items:center; width:62px; }
+  .fader .slot{ position:relative; height:120px; width:30px; display:flex; justify-content:center; }
+  .fader input[type=range]{ -webkit-appearance:slider-vertical; appearance:slider-vertical; writing-mode:vertical-lr;
+        direction:rtl; width:30px; height:120px; margin:0; }
+  .fader .zero{ position:absolute; top:50%; left:-7px; right:-7px; height:1px; background:var(--line); }
+  .fader .lbl{ margin-top:8px; font-size:12px; text-align:center; max-width:62px; overflow:hidden;
+        white-space:nowrap; text-overflow:ellipsis; }
+  .fader .val{ font-family:var(--mono); font-size:12px; }
+  .fader .val.p{ color:var(--pos); } .fader .val.n{ color:var(--neg); } .fader .val.z{ color:var(--mut); }
+
+  /* ───────── Pattern 2: Scrub chips ───────── */
+  .chips{ display:flex; gap:12px; flex-wrap:wrap; padding:8px 4px; }
+  .chip{ position:relative; user-select:none; cursor:ew-resize; padding:9px 15px; border:1px solid var(--line);
+        background:#fff8; overflow:hidden; min-width:96px; touch-action:none; }
+  .chip .bar{ position:absolute; inset:0 auto 0 0; background:var(--pos); opacity:.13; width:0; transition:width .04s linear; }
+  .chip.neg .bar{ background:var(--neg); }
+  .chip .t{ position:relative; font-size:14px; }
+  .chip .w{ position:relative; font-family:var(--mono); font-size:12px; color:var(--mut); margin-left:8px; }
+  .chip.neg .w{ color:var(--neg); } .chip.pos .w{ color:var(--pos); }
+
+  /* ───────── Pattern 3: Allocation bar ───────── */
+  .alloc{ display:flex; height:54px; border:1px solid var(--line); overflow:hidden; user-select:none; }
+  .alloc .seg{ position:relative; display:flex; align-items:center; justify-content:center; overflow:hidden;
+        color:#fff; font-size:13px; min-width:0; transition:flex-basis .05s linear; white-space:nowrap; }
+  .alloc .grip{ position:absolute; top:0; right:-4px; width:8px; height:100%; cursor:col-resize; z-index:2; }
+  .alloc .seg .cap{ padding:0 8px; overflow:hidden; text-overflow:ellipsis; }
+
+  /* results */
+  .results{ display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:8px; margin-top:20px; }
+  .results .c{ aspect-ratio:1; background:#0001; overflow:hidden; position:relative; }
+  .results img{ width:100%; height:100%; object-fit:cover; display:block; }
+  .results .c .s{ position:absolute; top:4px; left:4px; background:#000a; color:#fff; font:10px var(--mono); padding:1px 5px; }
+  .meta{ color:var(--mut); font-size:12px; margin:8px 2px; }
+</style></head><body>
+<h1>Per-concept weighting — interaction prototypes</h1>
+<div class="sub">Three ways to dial how much each concept pulls the search. All three drive the same weighted
+query (<code>concept:weight</code>, a leading <code>−</code> subtracts) and the live results below. Edit the concepts,
+then play with a control and watch the grid re-rank. This is a sandbox — pick the interaction that feels best.</div>
+
+<div class="row">
+  <input id="concepts" value="car, snow, sunset" spellcheck="false" autocomplete="off" />
+  <span class="meta" id="status"></span>
+</div>
+
+<div class="tabs" id="tabs">
+  <button data-p="faders" class="on">Faders</button>
+  <button data-p="chips">Scrub chips</button>
+  <button data-p="alloc">Allocation bar</button>
+</div>
+<div class="stage" id="stage"></div>
+<div class="hint" id="hint"></div>
+
+<div class="qline"><b>query →</b><span id="qstr"></span></div>
+<div class="results" id="results"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+// shared state: concepts with signed weights (−2..2; 0 = off). Faders/chips use sign;
+// allocation bar uses positive magnitudes only (relative split).
+let CONCEPTS=[];   // [{t, w}]
+let PATTERN="faders";
+
+function parseConcepts(){
+  const cur=Object.fromEntries(CONCEPTS.map(c=>[c.t,c.w]));
+  CONCEPTS = $("#concepts").value.split(",").map(s=>s.trim()).filter(Boolean).map(raw=>{
+    let t=raw, w=1; if(t[0]==="-"){ w=-1; t=t.slice(1).trim(); }
+    const m=t.match(/^(.*?):\s*([-\d.]+)\s*$/); if(m){ t=m[1].trim(); w=parseFloat(m[2]); }
+    return { t, w: (t in cur ? cur[t] : w) };   // keep existing weight when re-typing
+  }).filter(c=>c.t);
+  render();
+}
+const HINTS={
+  faders:"Mixer metaphor — drag a fader up to emphasize a concept, down past the center line to subtract it. Center = off.",
+  chips:"Scrub a pill left/right (like a number field) to set its weight; the fill shows magnitude, red = subtract. Double-click resets to 1.",
+  alloc:"One budget split across concepts — drag a divider to take weight from one and give it to its neighbor. Positive-only (relative emphasis).",
+};
+function buildQuery(){
+  if(PATTERN==="alloc"){
+    const tot=CONCEPTS.reduce((a,c)=>a+Math.max(0,c.w),0)||1;
+    return CONCEPTS.filter(c=>c.w>0).map(c=>`${c.t}:${(c.w/tot*CONCEPTS.length).toFixed(2)}`).join(", ");
+  }
+  return CONCEPTS.filter(c=>Math.abs(c.w)>0.04).map(c=>{
+    const w=c.w; const sign=w<0?"-":""; const mag=Math.abs(w);
+    return `${sign}${c.t}${Math.abs(mag-1)<0.04?"":":"+mag.toFixed(2)}`;
+  }).join(", ");
+}
+
+/* ---------- renderers per pattern ---------- */
+function render(){
+  $("#hint").textContent=HINTS[PATTERN];
+  const st=$("#stage"); st.innerHTML="";
+  if(PATTERN==="faders") renderFaders(st);
+  else if(PATTERN==="chips") renderChips(st);
+  else renderAlloc(st);
+  refreshQuery();
+}
+function refreshQuery(){ $("#qstr").textContent=buildQuery()||"(empty)"; scheduleSearch(); }
+
+function renderFaders(st){
+  const wrap=document.createElement("div"); wrap.className="faders";
+  CONCEPTS.forEach(c=>{
+    const f=document.createElement("div"); f.className="fader";
+    f.innerHTML=`<div class="val"></div><div class="slot"><div class="zero"></div>
+      <input type="range" min="-2" max="2" step="0.05" value="${c.w}"></div><div class="lbl" title="${c.t}">${c.t}</div>`;
+    const inp=f.querySelector("input"), val=f.querySelector(".val");
+    const paint=()=>{ const w=parseFloat(inp.value); c.w=w; val.textContent=(w>0?"+":"")+w.toFixed(2);
+      val.className="val "+(w>0.04?"p":w<-0.04?"n":"z"); };
+    paint();
+    inp.addEventListener("input",()=>{ paint(); refreshQuery(); });
+    wrap.appendChild(f);
+  });
+  st.appendChild(wrap);
+}
+
+function renderChips(st){
+  const wrap=document.createElement("div"); wrap.className="chips";
+  CONCEPTS.forEach(c=>{
+    const chip=document.createElement("div"); chip.className="chip";
+    chip.innerHTML=`<span class="bar"></span><span class="t">${c.t}</span><span class="w"></span>`;
+    const bar=chip.querySelector(".bar"), w=chip.querySelector(".w");
+    const paint=()=>{ chip.classList.toggle("neg",c.w<-0.04); chip.classList.toggle("pos",c.w>0.04);
+      bar.style.width=Math.min(100,Math.abs(c.w)/2*100)+"%"; w.textContent=(c.w>0?"×":c.w<0?"−×":"×")+Math.abs(c.w).toFixed(2); };
+    paint();
+    let drag=null;
+    chip.addEventListener("pointerdown",e=>{ drag={x:e.clientX,w0:c.w}; chip.setPointerCapture(e.pointerId); });
+    chip.addEventListener("pointermove",e=>{ if(!drag)return; c.w=Math.max(-2,Math.min(2,drag.w0+(e.clientX-drag.x)*0.012)); paint(); refreshQuery(); });
+    chip.addEventListener("pointerup",()=>drag=null);
+    chip.addEventListener("dblclick",()=>{ c.w=1; paint(); refreshQuery(); });
+    wrap.appendChild(chip);
+  });
+  st.appendChild(wrap);
+}
+
+const PAL=["#3a6ea5","#b4452f","#2f7d52","#8a5fb0","#c08a2e","#46817e"];
+function renderAlloc(st){
+  // normalize positive weights to a relative split; build draggable segments
+  CONCEPTS.forEach(c=>{ if(c.w<=0) c.w=1; });   // alloc is positive-only
+  const bar=document.createElement("div"); bar.className="alloc";
+  const tot=()=>CONCEPTS.reduce((a,c)=>a+c.w,0)||1;
+  const segs=[];
+  CONCEPTS.forEach((c,i)=>{
+    const seg=document.createElement("div"); seg.className="seg"; seg.style.background=PAL[i%PAL.length];
+    seg.innerHTML=`<span class="cap">${c.t} ${(c.w/tot()*100).toFixed(0)}%</span>`+(i<CONCEPTS.length-1?`<span class="grip"></span>`:"");
+    bar.appendChild(seg); segs.push(seg);
+  });
+  const repaint=()=>{ const T=tot(); CONCEPTS.forEach((c,i)=>{ segs[i].style.flexBasis=(c.w/T*100)+"%";
+    segs[i].querySelector(".cap").textContent=`${c.t} ${(c.w/T*100).toFixed(0)}%`; }); };
+  repaint();
+  segs.forEach((seg,i)=>{
+    const grip=seg.querySelector(".grip"); if(!grip)return;
+    let drag=null;
+    grip.addEventListener("pointerdown",e=>{ e.preventDefault(); drag={x:e.clientX,a:CONCEPTS[i].w,b:CONCEPTS[i+1].w,bw:bar.clientWidth}; grip.setPointerCapture(e.pointerId); });
+    grip.addEventListener("pointermove",e=>{ if(!drag)return; const T=tot();
+      const d=(e.clientX-drag.x)/drag.bw*T; CONCEPTS[i].w=Math.max(0.05,drag.a+d); CONCEPTS[i+1].w=Math.max(0.05,drag.b-d);
+      repaint(); refreshQuery(); });
+    grip.addEventListener("pointerup",()=>drag=null);
+  });
+  st.appendChild(bar);
+}
+
+/* ---------- live search against the real service ---------- */
+let _t=null;
+function scheduleSearch(){ clearTimeout(_t); _t=setTimeout(runSearch,250); }
+async function runSearch(){
+  const q=buildQuery(); if(!q){ $("#results").innerHTML=""; return; }
+  $("#status").textContent="searching…";
+  try{
+    const r=await (await fetch(`/api/search?q=${encodeURIComponent(q)}&k=24`)).json();
+    const g=$("#results"); g.innerHTML="";
+    (r.results||[]).forEach(h=>{
+      const c=document.createElement("div"); c.className="c";
+      const pct=Math.round((h.prob??h.score)*100);
+      c.innerHTML=`<span class="s">${pct}</span><img loading="lazy" src="/api/thumb?path=${encodeURIComponent(h.path)}&size=240">`;
+      g.appendChild(c);
+    });
+    $("#status").textContent=`${(r.results||[]).length} results`;
+  }catch(e){ $("#status").textContent="error: "+e.message; }
+}
+
+$("#tabs").addEventListener("click",e=>{ const b=e.target.closest("button[data-p]"); if(!b)return;
+  PATTERN=b.dataset.p; $("#tabs").querySelectorAll("button").forEach(x=>x.classList.toggle("on",x===b)); render(); });
+$("#concepts").addEventListener("input",parseConcepts);
+parseConcepts();
+</script></body></html>
