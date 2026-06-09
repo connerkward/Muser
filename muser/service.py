@@ -2398,7 +2398,7 @@ def create_app(model: str = DEFAULT_MODEL):
     def aidet_scan():
         from . import aidet as _aidet
         if not _aidet.available():
-            raise HTTPException(501, "GRIP weight missing — ~/.muser/models/grip_latent.pth")
+            raise HTTPException(501, "AI-likelihood detector unavailable — needs torch + timm")
         if state.aidet["scanning"]:
             return {"started": False, "scanning": True}
         total = state.index.count(state.model_name)

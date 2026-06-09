@@ -407,12 +407,13 @@ def aiscore(
     query: str = typer.Option(None, "--query", "-q", help="Print the AI-likelihood % for ONE image path (no scan)"),
 ):
     """AI-likelihood facet — score how likely each indexed image is AI-generated, via the
-    GRIP `Grag2021_latent` forensic detector (writes ~/.muser/aidet.json).
+    Community Forensics ViT detector (writes ~/.muser/aidet.json).
 
     Runs standalone (no `muser serve` needed). Unlike `detect` (C2PA metadata, positive-only),
-    this is a pixel-level 0–100% score on EVERY image — it catches local SD/Flux/Midjourney
-    output that carries no credentials. Incremental by mtime+size; ~5 img/s (full-res forward),
-    so a full corpus pass takes a while. Needs the weight at ~/.muser/models/grip_latent.pth.
+    this is a soft pixel-level 0–100% score on EVERY image — it catches local SD/ComfyUI output
+    that carries no credentials, while (unlike the old GRIP backend) NOT over-flagging digital
+    art / renders / old photos. Weaker on Flux/ChatGPT/Gemini, so pair it with C2PA. Incremental
+    by mtime+size, content-addressed; weights (~88 MB) download once from HF.
     """
     from . import aidet as _aidet
 

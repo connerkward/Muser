@@ -1,42 +1,35 @@
-"""AI-likelihood facet — a forensic pixel-level "how likely is this image
-AI-generated?" score, complementing the metadata-only C2PA verdict.
+"""AI-likelihood facet — a soft "how likely is this image AI-generated?" score.
 
-Backend: **GRIP `Grag2021_latent`** (Corvi, Cozzolino, Verdoliva — GRIP-UNINA,
-ICASSP 2023, Apache-2.0; ResNet-50 stride-1 fully-convolutional, vendored in
-`_grip_resnet.py`). It won an internal bake-off vs UniversalFakeDetect (CLIP
-linear probe) and two HF ViT classifiers, with mean AUC 0.990 across SDXL /
-Midjourney / Flux / ChatGPT-image / nano-banana and ~97% detection at 5% FPR
-once the operating point is calibrated (see reports/ai-detector-benchmark).
+Backend: **Community Forensics** (Park & Owens, CVPR 2025 — `OwensLab/commfor-model-384`,
+MIT, a ViT-S/16-384 trained on 4,803 generators). It REPLACED the earlier GRIP
+`Grag2021_latent` forensic detector, which over-flagged badly on a diverse library: GRIP
+is really an "is this a clean *camera photograph*?" detector, so it called digital art,
+3D renders, screenshots, vintage/scanned photos, and recompressed JPEGs "AI" (~100% false
+positives on this corpus). On the same images Community Forensics drops that to ~5%, keeps
+real photos at ~0%, and still catches SDXL/ComfyUI output ~100% — weaker on Flux/ChatGPT/
+Gemini (~12–46%), which is why it stays a *soft hint* paired with the signed C2PA badge,
+never an authoritative "AI" claim. See reports/ai-detector-benchmark + the A/B that drove
+the swap.
 
-Per image: full-res forward (ImageNet norm, **no resize** beyond a 1024px
-long-side cap — downscaling destroys the high-frequency forensic traces) → a
-mean-pooled logit → a **Platt-calibrated** AI-likelihood percentage in [0,100]
-(`pct = 100·σ(A·logit + B)`, A/B fit on the labeled benchmark set). Unlike
-C2PA this is a *soft, always-present* score (every image gets one), not a hard
-signed badge — so it's surfaced as a percentage, never as a binary "AI" claim.
+The model's sigmoid output IS the calibrated P(AI), so the percentage is just
+`round(100·σ(logit))` — no Platt step. Preprocess (matches the authors' test transform):
+Resize shorter side→440, center-crop 384, ImageNet norm. ViT-S = 22M params, runs on
+MPS/CPU; weights (~88 MB) download once from HF and cache. Degrades to `available()==False`
+when torch/timm is absent.
 
-Built on `facets.Sidecar` (`~/.muser/aidet.json`, incremental by mtime+size).
-The 269 MB weight lives at `~/.muser/models/grip_latent.pth` (not git-tracked).
-Degrades to `available() == False` when torch or the weight is absent.
+Built on `facets.Sidecar` (`~/.muser/aidet.json`, incremental + content-addressed).
 """
 from __future__ import annotations
 
 import threading
-from pathlib import Path
 
 import numpy as np
 
 from .facets import Sidecar
 
 _SIDE = Sidecar("aidet")
-MODEL_PATH = Path.home() / ".muser" / "models" / "grip_latent.pth"
-VERSION = 1  # bump to force a full re-scan after an algorithm/calibration change
-
-# Platt scaling logit -> percentage, fit on the SDXL/MJ/Flux/ChatGPT/nano vs
-# Flickr-real benchmark (scripts in reports/ai-detector-benchmark). Boundary
-# (50%) sits at logit = -B/A; reals fall well below it, generators above.
-PLATT_A = 0.561700
-PLATT_B = 5.307426
+HF_REPO = "OwensLab/commfor-model-384"
+VERSION = 2  # bumped when GRIP → Community Forensics; forces a clean re-scan
 
 _model = None
 _load_lock = threading.Lock()
@@ -44,10 +37,9 @@ _fwd_lock = threading.Lock()  # serialize the GPU/MPS forward (not thread-parall
 
 
 def available() -> bool:
-    """True when the GRIP weight and torch are both present."""
-    if not MODEL_PATH.exists():
-        return False
+    """True when torch + timm are importable (the weights download lazily)."""
     try:
+        import timm  # noqa: F401
         import torch  # noqa: F401
     except Exception:
         return False
@@ -61,48 +53,44 @@ def _load_model():
     with _load_lock:
         if _model is not None:
             return _model
-        import importlib.util as u
+        import timm
         import torch
         import torchvision.transforms as T
+        from huggingface_hub import hf_hub_download
+        from safetensors.torch import load_file
 
-        here = Path(__file__).parent / "_grip_resnet.py"
-        spec = u.spec_from_file_location("_grip_resnet", here)
-        gm = u.module_from_spec(spec)
-        spec.loader.exec_module(gm)
-        net = gm.resnet50(num_classes=1, gap_size=1, stride0=1)
-        dat = torch.load(MODEL_PATH, map_location="cpu")
-        sd = dat["model"] if "model" in dat else dat
-        sd = {k[7:] if k.startswith("module.") else k: v for k, v in sd.items()}
+        net = timm.create_model("vit_small_patch16_384.augreg_in21k_ft_in1k", pretrained=False)
+        net.head = torch.nn.Linear(384, 1)  # binary head, matches the published ViTClassifier
+        sd = load_file(hf_hub_download(HF_REPO, "model.safetensors"))
+        sd = {k[4:] if k.startswith("vit.") else k: v for k, v in sd.items()}  # strip 'vit.'
         net.load_state_dict(sd)
         dev = ("mps" if torch.backends.mps.is_available()
                else "cuda" if torch.cuda.is_available() else "cpu")
         net = net.to(dev).eval()
-        norm = T.Compose([T.ToTensor(),
-                          T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
-        _model = (net, norm, dev, torch)
+        # Authors' test transform: Resize(440) → CenterCrop(384) → ToTensor → ImageNet norm.
+        prep = T.Compose([
+            T.Resize(440), T.CenterCrop(384), T.ToTensor(),
+            T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ])
+        _model = (net, prep, dev, torch)
     return _model
 
 
 def score_logit(path: str) -> float | None:
-    """Forensic logit for one image (higher → more synthetic). None on failure."""
+    """Raw logit for one image (higher → more likely AI). None on failure."""
     try:
-        net, norm, dev, torch = _load_model()
+        net, prep, dev, torch = _load_model()
         from PIL import Image
-        im = Image.open(path).convert("RGB")
-        if max(im.size) > 1024:  # bound memory; still no square/aspect resize
-            s = 1024 / max(im.size)
-            im = im.resize((round(im.size[0] * s), round(im.size[1] * s)), Image.BICUBIC)
-        x = norm(im).unsqueeze(0).to(dev)
+        x = prep(Image.open(path).convert("RGB")).unsqueeze(0).to(dev)
         with _fwd_lock, torch.no_grad():
-            out = net(x).cpu().numpy()[:, 0]
-        return float(np.mean(out))
+            return float(net(x).flatten()[0].cpu())
     except Exception:
         return None
 
 
 def pct_from_logit(logit: float) -> int:
-    """Platt-calibrated AI-likelihood percentage in [0,100]."""
-    p = 100.0 / (1.0 + np.exp(-(PLATT_A * logit + PLATT_B)))
+    """Calibrated AI-likelihood percentage — the model's own σ(logit), ×100."""
+    p = 100.0 / (1.0 + np.exp(-logit))
     return int(round(min(100.0, max(0.0, p))))
 
 
@@ -114,11 +102,11 @@ def _compute(path: str) -> dict:
 
 
 def scan(paths, progress=None, workers: int = 4) -> dict:
-    """Incrementally score `paths`. workers>1 overlaps image decode; the GPU
-    forward itself is serialized by `_fwd_lock` (MPS isn't thread-parallel)."""
+    """Incrementally score `paths`. workers>1 overlaps image decode; the GPU forward
+    is serialized by `_fwd_lock`. Content-addressed so moved/re-imported/duplicate
+    files reuse a prior score instead of re-running the model."""
     return _SIDE.scan(paths, _compute, progress=progress, workers=workers, version=VERSION,
-                      checkpoint_every=400,  # ~every 1–2 min: scored images go live mid-scan
-                      content_addressed=True)  # reuse by blake2b: moved/re-imported/dup files skip the forward
+                      checkpoint_every=400, content_addressed=True)
 
 
 def prime_cache_from_sidecar() -> int:

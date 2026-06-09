@@ -166,22 +166,27 @@ See `REQUIREMENTS.md` for scope/decisions.
   another window — with no restart. `scan(...)` checkpoints atomically every
   `checkpoint_every` computed files (re-priming in-process too) so a long scan is
   crash-safe, resumable, and goes live progressively.
-- `muser/aidet.py` — **AI-likelihood facet**: a forensic *pixel-level* "how likely is this
+- `muser/aidet.py` — **AI-likelihood facet**: a soft pixel-level "how likely is this
   AI-generated?" score (0–100%), complementing the metadata-only C2PA verdict. Backend:
-  **GRIP `Grag2021_latent`** (Corvi/Verdoliva, ICASSP'23, Apache-2.0; ResNet-50 stride-1,
-  vendored in `_grip_resnet.py`) — won a bake-off vs UniversalFakeDetect + two HF ViT
-  classifiers (mean AUC 0.990 across SDXL/Midjourney/Flux/ChatGPT/nano-banana, ~97%
-  detection at 5% FPR once calibrated; see `~/Desktop/2026-06-08-ai-detector-benchmark/`).
-  Per image: full-res forward (ImageNet norm, **no resize** beyond a 1024px long-side cap —
-  downscaling destroys the high-freq traces) → mean-pooled logit → **Platt-calibrated**
-  percentage (`pct=100·σ(A·logit+B)`, A/B fit on the labeled benchmark). Built on
-  `facets.Sidecar` (`~/.muser/aidet.json`); 269 MB weight at `~/.muser/models/grip_latent.pth`
-  (not git-tracked); `available()=False` without it. Unlike C2PA this is a *soft, always-present*
-  score (every image), surfaced as a **percentage**, never a binary claim. CLI `muser aiscore`
-  (standalone scan, or `-q <path>` for one image); auto-triggers post-index alongside c2pa/color;
-  primes at startup. Surfaced per result as `ai_pct` (via `_attach_aidet`); filtered by
-  `ai_min` and sorted by `sort=ai|ai_asc` on `/api/search` (+ `/api/filter` `ai_min`), all
-  reachable from web (slider), CLI (`--ai-min`/`--sort`), and MCP (`search_images`).
+  **Community Forensics** (Park & Owens, CVPR'25 — `OwensLab/commfor-model-384`, MIT, ViT-S/16
+  trained on 4,803 generators; ~88 MB weight auto-downloaded from HF + cached). **It replaced
+  GRIP `Grag2021_latent`**, which over-flagged catastrophically on this diverse library —
+  GRIP is really an "is this a clean *camera photo*?" detector, so it flagged digital art /
+  3D renders / screenshots / vintage-scanned / recompressed-JPEG images as AI (~100% false
+  positives on the corpus). An A/B on the same images cut that to ~5% (real photos ~0%) while
+  still catching SDXL/ComfyUI output ~100%; it's *weaker* on Flux/ChatGPT/Gemini (~12–46%),
+  so it stays a **soft hint paired with C2PA**, never an authoritative claim (the GRIP era —
+  benchmark, Platt calibration, `_grip_resnet.py`, 269 MB weight — is removed; history in
+  `~/Desktop/2026-06-08-ai-detector-benchmark/` + the swap A/B). Preprocess matches the
+  authors' test transform (Resize 440 → CenterCrop 384 → ImageNet norm); the model's
+  **sigmoid output IS the calibrated P(AI)** so `pct=round(100·σ(logit))` — no Platt step.
+  Built on `facets.Sidecar` (`~/.muser/aidet.json`, incremental + content-addressed);
+  `available()` only needs torch+timm. Soft, always-present score (every image), surfaced as
+  a **percentage**, never a binary claim. CLI `muser aiscore` (standalone scan, or `-q <path>`
+  for one image); auto-triggers post-index alongside c2pa/color; primes at startup. Surfaced
+  per result as `ai_pct` (via `_attach_aidet`); the web filter is a 3-way `[All|Hide AI|Only AI]`
+  control (`ai_min`/`ai_max` band) + `sort=ai|ai_asc` on `/api/search` (+ `/api/filter`), all
+  reachable from web, CLI (`--ai-min`/`--ai-max`/`--sort`), and MCP (`search_images`).
 - `muser/color.py` — **color search** (a *separate LAB-palette index, not the embedder*).
   Per image: median-cut dominant-color palette → CIE-LAB swatches + fractions, persisted to
   `~/.muser/color.json`. `search(rgb)` ranks by `Σ frac·sim(palette,query)` (LAB ΔE, decays
