@@ -117,7 +117,8 @@ def scan(paths, progress=None, workers: int = 4) -> dict:
     """Incrementally score `paths`. workers>1 overlaps image decode; the GPU
     forward itself is serialized by `_fwd_lock` (MPS isn't thread-parallel)."""
     return _SIDE.scan(paths, _compute, progress=progress, workers=workers, version=VERSION,
-                      checkpoint_every=400)  # ~every 1–2 min: scored images go live mid-scan
+                      checkpoint_every=400,  # ~every 1–2 min: scored images go live mid-scan
+                      content_addressed=True)  # reuse by blake2b: moved/re-imported/dup files skip the forward
 
 
 def prime_cache_from_sidecar() -> int:
