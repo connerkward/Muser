@@ -1,0 +1,105 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Weighted word-cloud search bar</title>
+<style>
+  :root{ --bg:#f4efe3; --fg:#1a1813; --mut:#8a8270; --line:#d8d0bd;
+         --pos:#1a1813; --neg:#b4452f; --serif:'Iowan Old Style',Georgia,serif; --mono:ui-monospace,'SF Mono',Menlo,monospace; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 var(--serif);
+        -webkit-font-smoothing:antialiased; padding:30px clamp(16px,5vw,60px) 60px; }
+  h1{ font-size:20px; font-weight:600; margin:0 0 3px; }
+  .sub{ color:var(--mut); font-size:13px; margin-bottom:22px; max-width:74ch; }
+  .sub code{ font:12px var(--mono); background:#0001; padding:1px 4px; }
+  .sub b.gn{ color:var(--neg); }
+
+  /* the bar: words flow like a search field, sized by weight */
+  .bar{ display:flex; align-items:baseline; flex-wrap:wrap; gap:3px 16px; min-height:62px;
+        padding:12px 14px; border:1px solid var(--line); background:#fffc; cursor:text; line-height:1.25; }
+  .bar:focus-within{ border-color:var(--fg); }
+  .word{ position:relative; color:var(--c); cursor:ns-resize; user-select:none; touch-action:none;
+         white-space:nowrap; transition:font-size .04s linear, opacity .1s; padding-top:3px; }
+  .word .neg{ color:var(--neg); font-weight:600; }
+  .word .rm{ position:absolute; top:-7px; right:-9px; font-size:10px; color:var(--mut); opacity:0;
+             cursor:pointer; background:var(--bg); padding:0 2px; }
+  .word:hover .rm{ opacity:1; } .word .rm:hover{ color:var(--neg); }
+  .word.drag{ opacity:.7; }
+  .entry{ flex:1; min-width:130px; border:0; outline:0; background:none; font:18px var(--serif); color:var(--fg); align-self:center; padding:4px 2px; }
+
+  .hint{ color:var(--mut); font-size:12px; font-style:italic; margin:9px 2px 0; }
+  .qline{ font:12.5px var(--mono); margin:18px 2px 4px; } .qline b{ color:var(--mut); font-style:italic; font-family:var(--serif); margin-right:6px; }
+  .meta{ color:var(--mut); font-size:12px; }
+  .results{ display:grid; grid-template-columns:repeat(auto-fill,minmax(116px,1fr)); gap:8px; margin-top:16px; }
+  .results .c{ aspect-ratio:1; background:#0001; overflow:hidden; position:relative; }
+  .results img{ width:100%; height:100%; object-fit:cover; display:block; }
+  .results .s{ position:absolute; top:4px; left:4px; background:#000a; color:#fff; font:10px var(--mono); padding:1px 5px; }
+</style></head><body>
+<h1>Weighted word-cloud search bar</h1>
+<div class="sub">Type a concept and press <code>,</code> or <code>Enter</code> — it joins the cloud. <b>Each word's size is its weight</b>:
+drag a word <b>up</b> to make it count more, <b>down</b> for less. <b>Click</b> a word to flip it to
+<b class="gn">exclude</b> (red, pushed away). Hover for ×, or <code>Backspace</code> to drop the last word.</div>
+
+<div class="bar" id="bar">
+  <input class="entry" id="entry" placeholder="type a concept…" autocomplete="off" spellcheck="false">
+</div>
+<div class="hint">The query you type <i>is</i> the control — bigger word = stronger pull.</div>
+
+<div class="qline"><b>query →</b><span id="qstr"></span> <span class="meta" id="status"></span></div>
+<div class="results" id="results"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+let TOK=[];   // [{t,w,s}]  s=+1 pull / -1 exclude, w magnitude 0..2.5
+
+function buildQuery(){
+  return TOK.filter(c=>c.w>0.04).map(c=>{
+    const sign=c.s<0?"-":"", mag=c.w;
+    return `${sign}${c.t}${Math.abs(mag-1)<0.04?"":":"+mag.toFixed(2)}`;
+  }).join(", ");
+}
+function render(){
+  const bar=$("#bar"), entry=$("#entry");
+  [...bar.querySelectorAll(".word")].forEach(n=>n.remove());
+  TOK.forEach((c,i)=>{
+    const wd=document.createElement("span"); wd.className="word";
+    wd.style.setProperty("--c", c.s<0?"var(--neg)":"var(--pos)");
+    wd.innerHTML=`${c.s<0?'<span class="neg">−</span>':''}${c.t}<span class="rm" title="remove">×</span>`;
+    const paint=()=>{ wd.style.fontSize=clamp(14+c.w*9,12,38)+"px"; wd.style.opacity=clamp(.5+c.w/2.5*.5,.35,1);
+      wd.style.setProperty("--c", c.s<0?"var(--neg)":"var(--pos)"); };
+    paint();
+    let st=null;   // {y, w0, moved}
+    wd.addEventListener("pointerdown",e=>{ if(e.target.classList.contains("rm"))return;
+      st={y:e.clientY,w0:c.w,moved:false}; wd.setPointerCapture(e.pointerId); e.preventDefault(); });
+    wd.addEventListener("pointermove",e=>{ if(!st)return; const dy=e.clientY-st.y;
+      if(Math.abs(dy)>3){ st.moved=true; wd.classList.add("drag"); }
+      c.w=clamp(st.w0-dy*0.013,0,2.5); paint(); refresh(); });
+    wd.addEventListener("pointerup",()=>{ if(st && !st.moved){ c.s*=-1; paint(); refresh(); }  // tap (no drag) = toggle polarity
+      st=null; wd.classList.remove("drag"); });
+    wd.querySelector(".rm").addEventListener("click",e=>{ e.stopPropagation(); TOK.splice(i,1); render(); refresh(); });
+    bar.insertBefore(wd, entry);
+  });
+  refresh();
+}
+function refresh(){ $("#qstr").textContent=buildQuery()||"(empty)"; scheduleSearch(); }
+function commitEntry(){ let v=$("#entry").value.trim(); if(!v)return; let s=1;
+  if(v[0]==="-"){ s=-1; v=v.slice(1).trim(); } if(v) TOK.push({t:v.toLowerCase(),w:1,s}); $("#entry").value=""; render(); }
+$("#entry").addEventListener("keydown",e=>{
+  if(e.key===","||e.key==="Enter"){ e.preventDefault(); commitEntry(); }
+  else if(e.key==="Backspace" && !$("#entry").value && TOK.length){ TOK.pop(); render(); refresh(); } });
+$("#bar").addEventListener("click",e=>{ if(e.target.id==="bar") $("#entry").focus(); });
+
+let _t=null; function scheduleSearch(){ clearTimeout(_t); _t=setTimeout(runSearch,250); }
+async function runSearch(){
+  const q=buildQuery(); if(!q){ $("#results").innerHTML=""; $("#status").textContent=""; return; }
+  $("#status").textContent="· searching…";
+  try{ const r=await (await fetch(`/api/search?q=${encodeURIComponent(q)}&k=24`)).json();
+    const g=$("#results"); g.innerHTML="";
+    (r.results||[]).forEach(h=>{ const c=document.createElement("div"); c.className="c";
+      const pct=Math.round((h.prob??h.score)*100);
+      c.innerHTML=`<span class="s">${pct}</span><img loading="lazy" src="/api/thumb?path=${encodeURIComponent(h.path)}&size=240">`; g.appendChild(c); });
+    $("#status").textContent=`· ${(r.results||[]).length} results`;
+  }catch(e){ $("#status").textContent="· error: "+e.message; }
+}
+["car","snow","sunset","person"].forEach((t,i)=>TOK.push({t,w:1,s:i===3?-1:1}));
+render();
+</script></body></html>
