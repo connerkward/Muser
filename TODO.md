@@ -41,6 +41,14 @@ Live ideas to revisit, not yet scheduled. Promote to issues / commits when picke
 - **Sane routing — logical URLs + working back button** — give each surface a real, shareable location (`/#/search?q=…&folder=…`, `/#/explore`, `/#/jobs`, a result/detail route) so state lives in the URL, and make the browser **Back/Forward** button do what the user expects (return to the previous view/query, close an expanded panel, etc.) rather than dumping out of the app. Audit the current hash-router for dead-ends.
 - **Update the Jobs page** (`http://muser.local/#/jobs`) — revisit the Jobs view: what it shows, layout, and live-status polling. (Scope TBD — define the concrete changes before picking up.)
 
+## MCP ext-app (gallery)
+
+- **Tool result exceeds 1 MB** — `search_images` returns "Tool result is too large. Maximum size is 1MB." The contact-sheet image + metadata block blows the MCP result cap. Fix: shrink the payload — fewer/smaller inline images, drop the full contact sheet, or return references instead of bytes.
+- **Drop the blend slider in the ext-app** — remove the per-result aesthetic blend slider from the MCP gallery UI; use a single sensible default search-algorithm mix instead. (Slider stays in the full web UI.)
+- **"Open in Muser" button** — add a button in the ext-app that opens `http://muser.local` (the full web UI) in the browser.
+- **Sidebar instead of fullscreen** — change the expand/fullscreen mode to a sidebar display mode if the host supports it (`pip`/side-panel), rather than taking over the whole frame.
+- **Return only 3–4 results** — cap the MCP gallery to the top 3–4 matches (keeps the payload small and the inline card compact; pairs with the 1 MB fix above).
+
 ## Polish
 
 - **Negative-prompt α slider** — ✅ shipped 2026-06-03.
