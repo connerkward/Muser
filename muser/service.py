@@ -444,6 +444,7 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.get("/api/status")
     def status():
+        from . import c2pa as _c2pa
         # `ready` flips true once the model is warm. `task` is the single
         # in-flight long-running activity (loading_model / indexing) for the
         # busy overlay; null when idle. Frontend polls this — 4s idle,
@@ -459,6 +460,7 @@ def create_app(model: str = DEFAULT_MODEL):
             "ready": state._ready.is_set(),
             "task": state.task,
             "metadata": state.index.metadata_coverage(state.model_name),
+            "c2pa": _c2pa.available(),
         }
 
     @app.get("/api/jobs")
@@ -716,17 +718,24 @@ def create_app(model: str = DEFAULT_MODEL):
             })
         return out
 
-    def _run_search(qv, k, dedup, method, folder, meta=None):
+    def _run_search(qv, k, dedup, method, folder, meta=None, ai=None):
+        # ai in {None,'any','only','hide'}: restrict to AI-credentialed / non-AI
+        # images by C2PA verdict. The cut is post-kNN (C2PA isn't a LanceDB
+        # column), so over-fetch a wider candidate pool first and trim to k
+        # after filtering — 'only' needs a big multiplier since AI-credentialed
+        # images are a small slice of the corpus.
+        _ai = ai if ai in ("only", "hide") else None
+        fetch_k = k if _ai is None else min(k * (16 if _ai == "only" else 2), 1500)
         if dedup:
-            results = _search_dedup_precomputed(qv, k, method, folder, meta)
+            results = _search_dedup_precomputed(qv, fetch_k, method, folder, meta)
             if results is None:
                 results = state.index.search_dedup(
-                    state.model_name, qv, k=k, method=method, folder=folder, meta=meta,
+                    state.model_name, qv, k=fetch_k, method=method, folder=folder, meta=meta,
                 )
         else:
             results = [
                 {"path": p, "name": os.path.basename(p), "score": round(s, 4), "dupes": [p], "dupe_count": 1}
-                for p, s in state.index.search(state.model_name, qv, k=k, folder=folder, meta=meta)
+                for p, s in state.index.search(state.model_name, qv, k=fetch_k, folder=folder, meta=meta)
             ]
         # Drop results whose canonical path no longer exists on disk, and prune
         # dead entries from each result's `dupes[]`. The LanceDB index is
@@ -775,6 +784,8 @@ def create_app(model: str = DEFAULT_MODEL):
         _attach_dims(results, [r["path"] for r in results])
         _attach_scores(results)
         _attach_c2pa(results)
+        if _ai is not None:
+            results = _filter_by_ai(results, _ai)[:k]
         return results
 
     # Cache the parsed scores.json by mtime so the Search-tab sort-blend join
@@ -968,6 +979,25 @@ def create_app(model: str = DEFAULT_MODEL):
                 continue
             r["c2pa"] = {"ai": bool(v.get("ai")), "kind": v.get("kind"), "tool": v.get("tool")}
 
+    def _filter_by_ai(results, ai):
+        # Restrict to AI-credentialed (ai=='only') or non-AI (ai=='hide')
+        # images per the C2PA verdict cache. `ai` in {None,'any','only','hide'};
+        # the first two are no-ops. A result counts as AI only when the sidecar
+        # has a positive verdict — absence is treated as non-AI: C2PA is
+        # positive-only (a lower bound), so 'hide' can't promise a file is real,
+        # only that it carries no AI Content Credential.
+        if ai not in ("only", "hide"):
+            return results
+        from . import c2pa as _c2pa
+        want = ai == "only"
+        def _is_ai(r):
+            c = r.get("c2pa")
+            if c is None:
+                v = _c2pa.lookup(r["path"])
+                c = v if v else None
+            return bool(c and c.get("ai"))
+        return [r for r in results if _is_ai(r) == want]
+
     def _add_prob(results):
         # Attach a calibrated match probability (SigLIP sigmoid) per result so the UI's
         # "%" is a real confidence, not a flat raw cosine. No-op for models without a
@@ -983,7 +1013,7 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.get("/api/search")
     def search(q: str, k: int = 24, dedup: bool = True, method: str = "embed", folder: str | None = None,
-               neg: str | None = None, neg_strength: float = 0.5,
+               neg: str | None = None, neg_strength: float = 0.5, ai: str | None = None,
                min_width: int | None = None, max_width: int | None = None,
                min_height: int | None = None, max_height: int | None = None,
                min_short_side: int | None = None, max_short_side: int | None = None,
@@ -1021,7 +1051,7 @@ def create_app(model: str = DEFAULT_MODEL):
             min_aspect=min_aspect, max_aspect=max_aspect,
             min_filesize=min_filesize, max_filesize=max_filesize,
         )
-        results = _run_search(qv, k, dedup, method, folder, meta=meta)
+        results = _run_search(qv, k, dedup, method, folder, meta=meta, ai=ai)
         refinements = _refinements([r["path"] for r in results], q)
         return {"query": q, "model": state.model_name, "results": results, "refinements": refinements}
 
@@ -1172,7 +1202,7 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.get("/api/filter")
     def filter_(limit: int = 200, offset: int = 0, folder: str | None = None,
-                dedup: bool = True,
+                dedup: bool = True, ai: str | None = None,
                 min_width: int | None = None, max_width: int | None = None,
                 min_height: int | None = None, max_height: int | None = None,
                 min_short_side: int | None = None, max_short_side: int | None = None,
@@ -1243,6 +1273,11 @@ def create_app(model: str = DEFAULT_MODEL):
         # gaps. Dead rows get background-purged from the index.
         dead = _purge_dead([r["path"] for r in rows])
         rows = [r for r in rows if r["path"] not in dead and not _hidden(r["path"])]
+
+        # AI filter: keep only / drop rows carrying an AI C2PA credential. Rows
+        # here are raw index dicts (no `c2pa` key) so _filter_by_ai falls back
+        # to the verdict-cache lookup per path.
+        rows = _filter_by_ai(rows, ai)
 
         total = len(rows)
         page = rows[offset : offset + limit]

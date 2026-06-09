@@ -1079,6 +1079,16 @@
       <span class="pair"><input type="number" min="0" step="1" id="fMinKB" placeholder="any" /> <span class="unit">KB min</span></span>
       <span class="pair"><input type="number" min="0" step="0.5" id="fMaxMB" placeholder="any" /> <span class="unit">MB max</span></span>
     </div>
+    <div class="filter-row" id="fAIRow">
+      <span class="lab" title="By C2PA Content Credentials — positive-only, so it only catches cloud generators (OpenAI/Firefly/Google) that sign their output; local SD/Flux carry none.">AI-generated</span>
+      <span class="pair">
+        <select id="fAI">
+          <option value="">Any</option>
+          <option value="only">AI only</option>
+          <option value="hide">Hide AI</option>
+        </select>
+      </span>
+    </div>
     <div class="filter-actions">
       <button class="apply" id="fApply">Apply</button>
       <button class="reset" id="fReset">Reset</button>
@@ -2425,7 +2435,7 @@ function _hideShowcaseBar(){ const b = $("#showcaseBar"); if(b) b.style.display 
 //      no query "Apply" hits /api/filter and lists matching images. Filter
 //      state persists per-tab in localStorage so it survives reloads.
 const FILTER_KEY = "muser-filter-v1";
-const _fIDs = ["fMinShort","fMaxLong","fMinAspect","fMaxAspect","fMinKB","fMaxMB"];
+const _fIDs = ["fMinShort","fMaxLong","fMinAspect","fMaxAspect","fMinKB","fMaxMB","fAI"];
 function _loadFilterState(){
   try {
     const s = JSON.parse(localStorage.getItem(FILTER_KEY) || "{}");
@@ -2457,6 +2467,8 @@ function filterParamString(){
   if (maxA)     out.push("max_aspect="     + encodeURIComponent(parseFloat(maxA)));
   if (minKB)    out.push("min_filesize="   + encodeURIComponent(Math.round(parseFloat(minKB)*1024)));
   if (maxMB)    out.push("max_filesize="   + encodeURIComponent(Math.round(parseFloat(maxMB)*1024*1024)));
+  const aiv = $("#fAI").value.trim();
+  if (aiv)      out.push("ai=" + encodeURIComponent(aiv));
   return out.length ? "&" + out.join("&") : "";
 }
 async function runFilter(){
@@ -2502,7 +2514,14 @@ async function updateFilterCoverage(matched){
   let total = 0, scored = 0;
   try { const s = await (await fetch("/api/status")).json();
         total = s.indexed || 0;
-        scored = (s.metadata && s.metadata.scored) || 0; } catch {}
+        scored = (s.metadata && s.metadata.scored) || 0;
+        // Hide the AI filter when c2patool isn't installed — the verdict cache
+        // is empty so "AI only" would always be blank. Reset to Any if it was set.
+        const aiRow = $("#fAIRow");
+        if (aiRow) {
+          aiRow.style.display = s.c2pa === false ? "none" : "";
+          if (s.c2pa === false && $("#fAI").value) { $("#fAI").value = ""; _saveFilterState(); }
+        } } catch {}
   let label;
   if (matched != null) {
     const pct = total ? (matched/total*100).toFixed(matched/total < 0.01 ? 2 : 1) : "0";
@@ -2541,6 +2560,13 @@ $("#fReset").addEventListener("click", () => {
 // Persist on input; "Apply" is still the action, but a typed-in value shouldn't
 // quietly disappear on reload.
 _fIDs.forEach(id => $("#"+id).addEventListener("input", _saveFilterState));
+// AI is a discrete choice, not a typed bound — apply on change like a preset
+// (no waiting on the Apply button).
+$("#fAI").addEventListener("change", () => {
+  _saveFilterState();
+  const q = $("#q").value.trim();
+  if (q.length >= 2) { liveSearch(); } else { runFilter(); }
+});
 // Boot: rehydrate persisted state, then refresh the coverage line.
 _loadFilterState();
 updateFilterCoverage();
