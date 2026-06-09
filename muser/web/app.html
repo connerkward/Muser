@@ -3889,10 +3889,42 @@ function _pipeCard(p){
     <div class="jpipe">${thumb?`<img loading="lazy" src="${thumb}">`:""}<span class="jbrief">${(p.brief||"").slice(0,90)}</span></div>
   </div>`;
 }
+// Human-friendly duration: 90→"1m 30s", 3700→"1h 1m".
+function _fmtDur(s){ s=Math.max(0,Math.round(s)); const h=s/3600|0,m=(s%3600)/60|0,ss=s%60;
+  return h?`${h}h ${m}m`:m?`${m}m ${ss}s`:`${ss}s`; }
+// AI-likelihood facet coverage + ETA. Works for ANY scanner — the in-service
+// scan button AND a standalone `muser aiscore` — because it tracks scored/indexed
+// from the sidecar. ETA prefers the server's in-service estimate, else derives a
+// smoothed rate from how fast `scored` is climbing between polls.
+let _aiCov={scored:null,t:0,rate:0};
+async function _aiLikelihoodCard(){
+  let a; try{ a=await (await fetch("/api/ai-likelihood")).json(); }catch(e){ return ""; }
+  if(!a.available) return "";
+  const scored=a.scored||0, indexed=a.indexed||0;
+  if(!indexed) return "";
+  const remaining=Math.max(0,indexed-scored);
+  if(remaining===0 && !a.scanning){ _aiCov={scored:null,t:0,rate:0}; return ""; }  // complete → hide
+  const now=Date.now()/1000;
+  if(_aiCov.scored!=null && now>_aiCov.t){
+    const inst=(scored-_aiCov.scored)/(now-_aiCov.t);
+    if(inst>0) _aiCov.rate=_aiCov.rate?0.7*_aiCov.rate+0.3*inst:inst;  // EMA smoothing
+  }
+  _aiCov.scored=scored; _aiCov.t=now;
+  let eta=(a.eta_seconds!=null)?a.eta_seconds:(_aiCov.rate>0?Math.round(remaining/_aiCov.rate):null);
+  const rate=(a.rate!=null&&a.rate>0)?a.rate:_aiCov.rate;
+  const meta=`${scored.toLocaleString()}/${indexed.toLocaleString()} (${Math.round(100*scored/indexed)}%)`
+    +(rate>0?` • ${rate.toFixed(1)}/s`:"")+(eta!=null?` • ETA ${_fmtDur(eta)}`:"");
+  return `<div class="jsec">Facet scans</div>
+    <div class="jobcard"><div class="jhead"><span class="jdot ${remaining?'run':'done'}"></span>
+      <b>AI-likelihood</b> <span class="jid mut">GRIP</span><span style="flex:1"></span>
+      <span class="mut">${meta}</span></div>
+      ${_pbar(scored,indexed)}</div>`;
+}
 async function loadJobs(){
   let r; try{ r=await (await fetch("/api/jobs")).json(); }catch(e){ return; }
   const body=$("#jobsBody"); if(!body) return;
   const parts=[];
+  const aiCard=await _aiLikelihoodCard(); if(aiCard) parts.push(aiCard);
   // Foreground task (index / caption / backfill)
   if(r.task && r.task.kind){
     const t=r.task;

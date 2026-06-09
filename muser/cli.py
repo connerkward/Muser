@@ -423,11 +423,20 @@ def aiscore(
     if not paths:
         con.print(f"[red]no indexed images[/] — run `muser index <folder>` first")
         raise typer.Exit(1)
-    _aidet.scan(paths, progress=lambda d, t: con.print(f"  scoring {d}/{t}", end="\r"))
+    from rich.progress import (BarColumn, MofNCompleteColumn, Progress,
+                               TaskProgressColumn, TextColumn, TimeElapsedColumn,
+                               TimeRemainingColumn)
+    with Progress(
+        TextColumn("[bold]AI-likelihood"), BarColumn(), TaskProgressColumn(),
+        MofNCompleteColumn(), TextColumn("•"), TimeElapsedColumn(),
+        TextColumn("• ETA"), TimeRemainingColumn(), console=con,
+    ) as prog:
+        task = prog.add_task("scoring", total=len(paths))
+        _aidet.scan(paths, progress=lambda d, t: prog.update(task, completed=d, total=t))
     # quick coverage summary
     cache = _aidet.sidecar().load()
     flagged = sum(1 for e in cache.values() if (e.get("pct") or 0) >= 50)
-    con.print(f"\n[bold]scored[/] {len(paths)} images → ~/.muser/aidet.json  "
+    con.print(f"[bold]scored[/] {len(paths)} images → ~/.muser/aidet.json  "
               f"([bold]{flagged}[/] at ≥50% AI-likelihood)")
 
 

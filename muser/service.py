@@ -596,7 +596,7 @@ def create_app(model: str = DEFAULT_MODEL):
         paths = state.index.paths(state.model_name, under=folder)
         if not paths:
             return
-        state.aidet = {"scanning": True, "done": 0, "total": len(paths)}
+        state.aidet = {"scanning": True, "done": 0, "total": len(paths), "started": time.time()}
         try:
             _aidet.scan(paths, progress=lambda d, t: state.aidet.update(done=d, total=t))
         finally:
@@ -2228,7 +2228,22 @@ def create_app(model: str = DEFAULT_MODEL):
     @app.get("/api/ai-likelihood")
     def aidet_status():
         from . import aidet as _aidet
-        return {"available": _aidet.available(), "built": _aidet.cache_exists(), **state.aidet}
+        # Coverage works for ANY scanner (in-service OR a standalone `muser aiscore`):
+        # how many of the indexed images already carry an AI-likelihood score.
+        scored = len(_aidet.sidecar().entries())  # mtime-aware; reflects on-disk sidecar
+        indexed = state.index.count(state.model_name)
+        out = {"available": _aidet.available(), "built": _aidet.cache_exists(),
+               "scored": scored, "indexed": indexed, **state.aidet}
+        # ETA for an in-service scan, from its own start time + throughput.
+        st = state.aidet
+        if st.get("scanning") and st.get("started") and st.get("total"):
+            elapsed = max(1e-6, time.time() - st["started"])
+            done = st.get("done", 0)
+            rate = done / elapsed
+            out["elapsed"] = round(elapsed, 1)
+            out["rate"] = round(rate, 2)
+            out["eta_seconds"] = round((st["total"] - done) / rate) if rate > 0 else None
+        return out
 
     @app.post("/api/ai-likelihood/scan")
     def aidet_scan():

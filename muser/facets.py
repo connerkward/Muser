@@ -236,68 +236,56 @@ class Sidecar:
             self._primed = False
             self.prime()
 
-        # Pass 1 — hash every file we need to touch (parallel I/O).
-        hashed = {}  # path -> hash
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            for p, h in ex.map(lambda it: (it[0], blake2b_file(it[0])),
-                               backfill + [(p, st) for p, st in todo]):
-                hashed[p] = h
+        # Single streaming pass: each worker hashes its file, then either reuses a
+        # stored payload (by content hash) or computes once — so progress, the
+        # sidecar, and the content store all advance continuously (no front-loaded
+        # hashing phase that looks frozen). A lock guards by_hash so duplicates
+        # within the same scan reuse rather than both computing; a rare race (two
+        # identical files resolved in the same instant) just costs one extra
+        # compute, never a wrong value. Backfill items only hash (never compute).
+        import threading
+        lock = threading.Lock()
 
-        # Backfill the content store from existing scores — hash only, no compute.
-        since_ckpt = 0
-        for p, st, e in backfill:
-            h = hashed.get(p)
-            if h:
-                e["h"] = h
-                by_hash.setdefault(h, _facet_only(e))
-            done += 1
-            changed = True
-            since_ckpt += 1
-            if since_ckpt >= checkpoint_every:
-                _ckpt(); since_ckpt = 0
-            if progress and done % 50 == 0:
-                progress(done, total)
-
-        # Group todo by content hash; only hashes absent from the store (or at an
-        # older version) need the model — and each unique hash runs exactly once,
-        # so in-scan duplicates collapse too.
-        by_hash_paths: dict[str, list] = {}
-        no_hash = []  # unreadable → compute directly, no caching
-        for p, st in todo:
-            h = hashed.get(p)
-            if h:
-                by_hash_paths.setdefault(h, []).append((p, st))
-            else:
-                no_hash.append((p, st))
-        need = [(h, grp[0][0]) for h, grp in by_hash_paths.items()
-                if not (by_hash.get(h) and by_hash[h].get("v", 1) == version)]
-
-        def _compute_one(h_path):
-            h, p = h_path
+        def _safe_compute(p):
             try:
-                payload = compute(p) or {}
+                return dict(compute(p) or {})
             except Exception:
-                payload = {}
-            payload = dict(payload)
+                return {}
+
+        def work(item):
+            kind, p, st, e = item
+            h = blake2b_file(p)
+            if kind == "backfill":
+                return ("backfill", p, st, e, h, None)
+            if h is None:  # unreadable → compute directly, don't cache by content
+                return ("nohash", p, st, None, None, _safe_compute(p))
+            with lock:
+                hit = by_hash.get(h)
+                if hit and hit.get("v", 1) == version:
+                    return ("reuse", p, st, None, h, dict(hit))
+            payload = _safe_compute(p)
             payload["v"] = version
-            return h, payload
+            with lock:
+                by_hash.setdefault(h, payload)   # canonicalize (handles the race)
+                payload = dict(by_hash[h])
+            return ("computed", p, st, None, h, payload)
 
+        items = ([("backfill", p, st, e) for p, st, e in backfill]
+                 + [("todo", p, st, None) for p, st in todo])
+        since_ckpt = 0
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            for h, payload in ex.map(_compute_one, need):
-                by_hash[h] = payload
-                changed = True
-                since_ckpt += 1
-                if since_ckpt >= checkpoint_every:
-                    _ckpt(); since_ckpt = 0
-
-        # Assign resolved payloads (reused or freshly computed) to every todo path.
-        for h, grp in by_hash_paths.items():
-            base = by_hash.get(h, {})
-            for p, st in grp:
-                entry = dict(base)
-                entry["m"], entry["s"], entry["v"], entry["h"] = (
-                    st.st_mtime_ns, st.st_size, version, h)
-                cache[p] = entry
+            for kind, p, st, e, h, payload in ex.map(work, items):
+                if kind == "backfill":
+                    if h:
+                        e["h"] = h
+                        with lock:
+                            by_hash.setdefault(h, _facet_only(e))
+                else:
+                    entry = dict(payload or {})
+                    entry["m"], entry["s"], entry["v"] = st.st_mtime_ns, st.st_size, version
+                    if h:
+                        entry["h"] = h
+                    cache[p] = entry
                 done += 1
                 changed = True
                 since_ckpt += 1
@@ -305,15 +293,6 @@ class Sidecar:
                     _ckpt(); since_ckpt = 0
                 if progress and done % 50 == 0:
                     progress(done, total)
-        for p, st in no_hash:  # unhashable: compute, don't cache by content
-            try:
-                payload = dict(compute(p) or {})
-            except Exception:
-                payload = {}
-            payload["m"], payload["s"], payload["v"] = st.st_mtime_ns, st.st_size, version
-            cache[p] = payload
-            done += 1
-            changed = True
 
         if changed:
             self.save(cache, by_hash)
