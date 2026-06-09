@@ -126,17 +126,15 @@
                 color:var(--mut); cursor:pointer; border-right:1px solid var(--line, #cfc8b6); }
   .seg button:last-child { border-right:0; }
   .seg button.on { background:var(--fg); color:var(--bg); }
-  /* dual-thumb range (AI-likelihood band): two overlaid native sliders */
-  .dualrange { position:relative; width:200px; height:18px; display:inline-block; vertical-align:middle; }
-  .dualrange .track, .dualrange .fill { position:absolute; top:50%; height:3px; transform:translateY(-50%); pointer-events:none; }
-  .dualrange .track { width:100%; background:var(--line, #cfc8b6); }
-  .dualrange .fill { background:var(--fg); }
-  .dualrange input[type=range]{ position:absolute; top:0; left:0; width:100%; height:18px; margin:0;
-        background:none; -webkit-appearance:none; appearance:none; pointer-events:none; }
-  .dualrange input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; pointer-events:auto;
+  /* AI-likelihood: single native range (mode set by an adjacent .seg toggle) */
+  .airange { width:160px; height:18px; margin:0; vertical-align:middle; -webkit-appearance:none; appearance:none; background:transparent; cursor:pointer; }
+  .airange::-webkit-slider-runnable-track { height:3px; background:var(--line, #cfc8b6); }
+  .airange::-moz-range-track { height:3px; background:var(--line, #cfc8b6); }
+  .airange::-webkit-slider-thumb{ -webkit-appearance:none; margin-top:-6px;
         height:14px; width:14px; border-radius:50%; background:var(--fg); border:2px solid var(--bg); cursor:grab; }
-  .dualrange input[type=range]::-moz-range-thumb{ pointer-events:auto; height:14px; width:14px; border-radius:50%;
+  .airange::-moz-range-thumb{ height:14px; width:14px; border-radius:50%;
         background:var(--fg); border:2px solid var(--bg); cursor:grab; }
+  .airange:disabled { opacity:.35; cursor:default; }
 
   .upload { background:transparent; border:0; padding:0; color:var(--fg);
             font-size:13px; cursor:pointer; border-bottom:1px solid var(--fg); }
@@ -1114,14 +1112,13 @@
       <span class="pair"><input type="number" min="0" step="0.5" id="fMaxMB" placeholder="any" /> <span class="unit">MB max</span></span>
     </div>
     <div class="filter-row" id="fAIRow">
-      <span class="lab" title="GRIP forensic AI-likelihood (0–100%) on every image. Drag the RIGHT handle down to remove likely-AI images; drag the LEFT handle up to show only AI. 0–100 = off.">AI-likelihood</span>
+      <span class="lab" title="GRIP forensic AI-likelihood (0–100%) on every image. 'Hide AI' drops images above the threshold (surface real photos); 'Only AI' keeps images at/above it.">AI-likelihood</span>
       <span class="pair">
-        <span class="dualrange" id="fAIBand">
-          <span class="track"></span><span class="fill" id="fAIFill"></span>
-          <input type="range" id="fAIMin" min="0" max="100" step="5" value="0" />
-          <input type="range" id="fAIMax" min="0" max="100" step="5" value="100" />
+        <span class="seg" id="fAISeg">
+          <button data-aimode="off" class="on" title="No AI filtering.">All</button><button data-aimode="hide" title="Remove images more AI-likely than the threshold — surface real photos.">Hide AI</button><button data-aimode="only" title="Keep only images at/above the threshold — surface AI images.">Only AI</button>
         </span>
-        <span class="unit" id="fAIBandVal" style="min-width:11ch">off</span>
+        <input type="range" id="fAISlider" class="airange" min="0" max="100" step="5" value="50" disabled />
+        <span class="unit" id="fAIVal" style="min-width:18ch">off</span>
       </span>
     </div>
     <div class="filter-actions">
@@ -2496,40 +2493,43 @@ function _hideShowcaseBar(){ const b = $("#showcaseBar"); if(b) b.style.display 
 //      state persists per-tab in localStorage so it survives reloads.
 const FILTER_KEY = "muser-filter-v1";
 const _fIDs = ["fMinShort","fMaxLong","fMinAspect","fMaxAspect","fMinKB","fMaxMB"];
-// AI-likelihood slider is handled separately (a range always has a value, so it
-// can't ride the "non-empty == set" _fIDs logic; 0 = off).
-function _aiMin(){ return parseInt($("#fAIMin").value,10)||0; }
-function _aiMax(){ const v=parseInt($("#fAIMax").value,10); return isNaN(v)?100:v; }
-// Keep the two thumbs ordered, paint the fill band, and label the meaning.
-function _syncAiBand(){
-  let lo=_aiMin(), hi=_aiMax();
-  if(lo>hi){ if(document.activeElement===$("#fAIMin")) hi=lo; else lo=hi; $("#fAIMin").value=lo; $("#fAIMax").value=hi; }
-  const fill=$("#fAIFill"); if(fill){ fill.style.left=lo+"%"; fill.style.width=(hi-lo)+"%"; }
-  const lab=$("#fAIBandVal"); if(!lab) return;
-  if(lo<=0 && hi>=100){ lab.textContent="off"; }
-  else if(lo<=0){ lab.textContent=`≤${hi}% · removing AI`; }
-  else if(hi>=100){ lab.textContent=`≥${lo}% · only AI`; }
-  else { lab.textContent=`${lo}–${hi}%`; }
+// AI-likelihood filter: a 3-way mode toggle (#fAISeg: off|hide|only) + one single
+// native slider (#fAISlider). Mode picks the *direction*; the slider is the
+// threshold. Handled separately from _fIDs (a range always has a value; mode==off
+// is the "unset" state). State lives on the DOM (the .on seg button + slider value).
+function _aiMode(){ const b=$("#fAISeg").querySelector("button.on"); return b ? b.dataset.aimode : "off"; }
+function _aiThresh(){ return parseInt($("#fAISlider").value,10)||0; }
+function _setAiMode(mode){
+  $("#fAISeg").querySelectorAll("button").forEach(x=>x.classList.toggle("on", x.dataset.aimode===mode));
+  // Switching INTO hide/only with a degenerate threshold → seed a sensible ~50.
+  if(mode!=="off"){ const t=_aiThresh(); if(t<=0||t>=100) $("#fAISlider").value=50; }
+}
+// Enable/disable the slider for the mode and write the plain-words effect label.
+function _syncAi(){
+  const mode=_aiMode(), t=_aiThresh(), slider=$("#fAISlider"), lab=$("#fAIVal");
+  slider.disabled = (mode==="off");
+  if(!lab) return;
+  if(mode==="off") lab.textContent="off";
+  else if(mode==="hide") lab.textContent=`removing images above ${t}% AI-likelihood`;
+  else lab.textContent=`showing only images ≥ ${t}% AI-likelihood`;
 }
 function _loadFilterState(){
   try {
     const s = JSON.parse(localStorage.getItem(FILTER_KEY) || "{}");
     _fIDs.forEach(id => { if (s[id] != null) $("#"+id).value = s[id]; });
-    if (s.aiMin != null) $("#fAIMin").value = s.aiMin;
-    if (s.aiMax != null) $("#fAIMax").value = s.aiMax;
-    _syncAiBand();
+    if (s.aiThresh != null) $("#fAISlider").value = s.aiThresh;
+    _setAiMode(s.aiMode || "off"); _syncAi();
     if (s.open) { $("#filterToggle").classList.add("open","on"); $("#filterPanel").classList.add("on"); }
   } catch {}
 }
 function _saveFilterState(){
   const s = {open: $("#filterPanel").classList.contains("on")};
   _fIDs.forEach(id => { const v = $("#"+id).value.trim(); if (v) s[id] = v; });
-  if (_aiMin()) s.aiMin = _aiMin();
-  if (_aiMax() < 100) s.aiMax = _aiMax();
+  if (_aiMode() !== "off") { s.aiMode = _aiMode(); s.aiThresh = _aiThresh(); }
   localStorage.setItem(FILTER_KEY, JSON.stringify(s));
 }
 function filterActive(){
-  return _aiMin() > 0 || _aiMax() < 100 || _fIDs.some(id => $("#"+id).value.trim() !== "");
+  return _aiMode() !== "off" || _fIDs.some(id => $("#"+id).value.trim() !== "");
 }
 // Build the &min_short_side=…&max_long_side=… suffix the /api/search and
 // /api/filter endpoints accept. Empty when no constraints are set.
@@ -2547,9 +2547,10 @@ function filterParamString(){
   if (maxA)     out.push("max_aspect="     + encodeURIComponent(parseFloat(maxA)));
   if (minKB)    out.push("min_filesize="   + encodeURIComponent(Math.round(parseFloat(minKB)*1024)));
   if (maxMB)    out.push("max_filesize="   + encodeURIComponent(Math.round(parseFloat(maxMB)*1024*1024)));
-  const aiMin = _aiMin(), aiMax = _aiMax();
-  if (aiMin)        out.push("ai_min=" + aiMin);
-  if (aiMax < 100)  out.push("ai_max=" + aiMax);
+  // AI mode → one bound: hide = ai_max (drop above), only = ai_min (keep ≥).
+  const aiMode = _aiMode(), aiT = _aiThresh();
+  if (aiMode === "hide") out.push("ai_max=" + aiT);
+  else if (aiMode === "only") out.push("ai_min=" + aiT);
   return out.length ? "&" + out.join("&") : "";
 }
 async function runFilter(){
@@ -2601,7 +2602,7 @@ async function updateFilterCoverage(matched){
         const aiRow = $("#fAIRow");
         if (aiRow) {
           aiRow.style.display = s.aidet === false ? "none" : "";
-          if (s.aidet === false && (_aiMin() || _aiMax()<100)) { $("#fAIMin").value = 0; $("#fAIMax").value = 100; _syncAiBand(); _saveFilterState(); }
+          if (s.aidet === false && _aiMode() !== "off") { _setAiMode("off"); _syncAi(); _saveFilterState(); }
         } } catch {}
   let label;
   if (matched != null) {
@@ -2632,7 +2633,7 @@ $("#fApply").addEventListener("click", () => {
 });
 $("#fReset").addEventListener("click", () => {
   _fIDs.forEach(id => $("#"+id).value = "");
-  $("#fAIMin").value = 0; $("#fAIMax").value = 100; _syncAiBand();
+  $("#fAISlider").value = 50; _setAiMode("off"); _syncAi();
   _saveFilterState();
   const q = $("#q").value.trim();
   if (q.length >= 2) { liveSearch(); }
@@ -2642,16 +2643,20 @@ $("#fReset").addEventListener("click", () => {
 // Persist on input; "Apply" is still the action, but a typed-in value shouldn't
 // quietly disappear on reload.
 _fIDs.forEach(id => $("#"+id).addEventListener("input", _saveFilterState));
-// AI-likelihood slider: live-update the label as it drags; apply (re-search /
-// re-filter) on release, like a one-click control — no waiting on Apply.
-["fAIMin","fAIMax"].forEach(id=>{
-  $("#"+id).addEventListener("input", _syncAiBand);   // live: order thumbs + paint band as you drag
-  $("#"+id).addEventListener("change", () => {         // apply on release
-    _syncAiBand(); _saveFilterState();
-    const q = $("#q").value.trim();
-    if (q.length >= 2) { liveSearch(); } else { runFilter(); }
-  });
+// AI-likelihood: mode toggle + single slider. Both act like one-click controls —
+// re-run the search/filter on change (no waiting on Apply). The slider live-updates
+// its label as it drags and applies on release.
+function _applyAi(){
+  _saveFilterState();
+  const q = $("#q").value.trim();
+  if (q.length >= 2) { liveSearch(); } else { runFilter(); }
+}
+$("#fAISeg").addEventListener("click", e => {
+  const b = e.target.closest("button[data-aimode]"); if(!b) return;
+  _setAiMode(b.dataset.aimode); _syncAi(); _applyAi();
 });
+$("#fAISlider").addEventListener("input", _syncAi);   // live: relabel as you drag
+$("#fAISlider").addEventListener("change", _applyAi); // apply on release
 // Boot: rehydrate persisted state, then refresh the coverage line.
 _loadFilterState();
 updateFilterCoverage();
