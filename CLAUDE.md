@@ -160,7 +160,28 @@ See `REQUIREMENTS.md` for scope/decisions.
   (the c2pa.py cache pattern factored out): a `~/.muser/<name>.json` keyed by path with
   `m`(mtime_ns)+`s`(size) for incremental skip, a thread-pool `scan(paths, compute)`, and a
   RAM cache primed once for O(1) enrichment/ranking. c2pa.py keeps its own copy (shipped,
-  untouched); new facets build on this.
+  untouched); new facets build on this. The RAM cache **auto-re-primes when the sidecar
+  file's mtime changes** (`_maybe_reprime` on lookup/entries), so the running service
+  reflects writes from ANY process — a standalone `muser aiscore`, the post-index hook,
+  another window — with no restart. `scan(...)` checkpoints atomically every
+  `checkpoint_every` computed files (re-priming in-process too) so a long scan is
+  crash-safe, resumable, and goes live progressively.
+- `muser/aidet.py` — **AI-likelihood facet**: a forensic *pixel-level* "how likely is this
+  AI-generated?" score (0–100%), complementing the metadata-only C2PA verdict. Backend:
+  **GRIP `Grag2021_latent`** (Corvi/Verdoliva, ICASSP'23, Apache-2.0; ResNet-50 stride-1,
+  vendored in `_grip_resnet.py`) — won a bake-off vs UniversalFakeDetect + two HF ViT
+  classifiers (mean AUC 0.990 across SDXL/Midjourney/Flux/ChatGPT/nano-banana, ~97%
+  detection at 5% FPR once calibrated; see `~/Desktop/2026-06-08-ai-detector-benchmark/`).
+  Per image: full-res forward (ImageNet norm, **no resize** beyond a 1024px long-side cap —
+  downscaling destroys the high-freq traces) → mean-pooled logit → **Platt-calibrated**
+  percentage (`pct=100·σ(A·logit+B)`, A/B fit on the labeled benchmark). Built on
+  `facets.Sidecar` (`~/.muser/aidet.json`); 269 MB weight at `~/.muser/models/grip_latent.pth`
+  (not git-tracked); `available()=False` without it. Unlike C2PA this is a *soft, always-present*
+  score (every image), surfaced as a **percentage**, never a binary claim. CLI `muser aiscore`
+  (standalone scan, or `-q <path>` for one image); auto-triggers post-index alongside c2pa/color;
+  primes at startup. Surfaced per result as `ai_pct` (via `_attach_aidet`); filtered by
+  `ai_min` and sorted by `sort=ai|ai_asc` on `/api/search` (+ `/api/filter` `ai_min`), all
+  reachable from web (slider), CLI (`--ai-min`/`--sort`), and MCP (`search_images`).
 - `muser/color.py` — **color search** (a *separate LAB-palette index, not the embedder*).
   Per image: median-cut dominant-color palette → CIE-LAB swatches + fractions, persisted to
   `~/.muser/color.json`. `search(rgb)` ranks by `Σ frac·sim(palette,query)` (LAB ΔE, decays

@@ -185,6 +185,8 @@ class State:
         self.c2pa = {"scanning": False, "done": 0, "total": 0, "found": 0}
         # Color-palette facet scan progress (Color tab), polled by /api/color.
         self.color = {"scanning": False, "done": 0, "total": 0}
+        # AI-likelihood (GRIP) facet scan progress, polled by /api/ai-likelihood.
+        self.aidet = {"scanning": False, "done": 0, "total": 0}
 
     def warm(self):
         # Idempotent. Holds a lock so two concurrent first-callers don't both
@@ -395,6 +397,12 @@ def create_app(model: str = DEFAULT_MODEL):
         cprimed = _color.prime_cache_from_sidecar()
         if cprimed:
             print(f"  primed color cache: {cprimed} entries", flush=True)
+        # And the AI-likelihood (GRIP) facet cache so /api/search inlines ai_pct
+        # per result from RAM and the ai_min filter ranks without a disk read.
+        from . import aidet as _aidet
+        aprimed = _aidet.prime_cache_from_sidecar()
+        if aprimed:
+            print(f"  primed aidet cache: {aprimed} entries", flush=True)
         # Prime the result-hiding sets (NSFW from scores.json, hidden-cluster
         # paths from clusters.json) so the first request's _hidden() lookups are
         # O(1) RAM hits, not a cold disk parse. Both are mtime-cached and refresh
@@ -445,6 +453,7 @@ def create_app(model: str = DEFAULT_MODEL):
     @app.get("/api/status")
     def status():
         from . import c2pa as _c2pa
+        from . import aidet as _aidet_mod
         # `ready` flips true once the model is warm. `task` is the single
         # in-flight long-running activity (loading_model / indexing) for the
         # busy overlay; null when idle. Frontend polls this — 4s idle,
@@ -461,6 +470,7 @@ def create_app(model: str = DEFAULT_MODEL):
             "task": state.task,
             "metadata": state.index.metadata_coverage(state.model_name),
             "c2pa": _c2pa.available(),
+            "aidet": _aidet_mod.available(),
         }
 
     @app.get("/api/jobs")
@@ -537,6 +547,7 @@ def create_app(model: str = DEFAULT_MODEL):
             if ok:
                 _scan_c2pa(folder)
                 _scan_color(folder)
+                _scan_aidet(folder)
 
         threading.Thread(target=_bg, daemon=True, name="muser-index").start()
         return {"started": True, "folder": folder}
@@ -572,6 +583,24 @@ def create_app(model: str = DEFAULT_MODEL):
             _color.scan(paths, progress=lambda d, t: state.color.update(done=d, total=t))
         finally:
             state.color["scanning"] = False
+
+    def _scan_aidet(folder: str | None = None):
+        # Shared by the post-index hook and POST /api/ai-likelihood/scan. Scores the
+        # GRIP AI-likelihood facet over the (sub)tree. No-op if the weight/torch is
+        # absent or a scan is already running; incremental, so only new/changed files
+        # run the forward. Slow (full-res ResNet forward per image) — runs in a daemon
+        # thread off the busy overlay, progress in state.aidet.
+        from . import aidet as _aidet
+        if not _aidet.available() or state.aidet.get("scanning"):
+            return
+        paths = state.index.paths(state.model_name, under=folder)
+        if not paths:
+            return
+        state.aidet = {"scanning": True, "done": 0, "total": len(paths)}
+        try:
+            _aidet.scan(paths, progress=lambda d, t: state.aidet.update(done=d, total=t))
+        finally:
+            state.aidet["scanning"] = False
 
     # ---- path → cluster-label map, used for the post-search refinement chips ----
     # Reads ~/.muser/clusters.json once and caches a path → cluster-label dict.
@@ -718,14 +747,14 @@ def create_app(model: str = DEFAULT_MODEL):
             })
         return out
 
-    def _run_search(qv, k, dedup, method, folder, meta=None, ai=None):
-        # ai in {None,'any','only','hide'}: restrict to AI-credentialed / non-AI
-        # images by C2PA verdict. The cut is post-kNN (C2PA isn't a LanceDB
-        # column), so over-fetch a wider candidate pool first and trim to k
-        # after filtering — 'only' needs a big multiplier since AI-credentialed
-        # images are a small slice of the corpus.
-        _ai = ai if ai in ("only", "hide") else None
-        fetch_k = k if _ai is None else min(k * (16 if _ai == "only" else 2), 1500)
+    def _run_search(qv, k, dedup, method, folder, meta=None, ai_min=0, sort=None):
+        # ai_min ∈ [0,100]: keep only results whose GRIP AI-likelihood % >= ai_min.
+        # The cut is post-kNN (the facet isn't a LanceDB column), so over-fetch a
+        # wider candidate pool first and trim to k after filtering. sort: "ai" /
+        # "ai_asc" reorders by AI-likelihood (also needs a wider pool to be meaningful).
+        _ai_min = int(ai_min or 0)
+        widen = _ai_min > 0 or sort in ("ai", "ai_asc")
+        fetch_k = min(k * 8, 1500) if widen else k
         if dedup:
             results = _search_dedup_precomputed(qv, fetch_k, method, folder, meta)
             if results is None:
@@ -784,9 +813,13 @@ def create_app(model: str = DEFAULT_MODEL):
         _attach_dims(results, [r["path"] for r in results])
         _attach_scores(results)
         _attach_c2pa(results)
-        if _ai is not None:
-            results = _filter_by_ai(results, _ai)[:k]
-        return results
+        _attach_aidet(results)
+        if _ai_min > 0:
+            results = _filter_by_ai_min(results, _ai_min)
+        if sort in ("ai", "ai_asc"):
+            results.sort(key=lambda r: (_ai_pct(r) if _ai_pct(r) is not None else -1),
+                         reverse=(sort == "ai"))
+        return results[:k]
 
     # Cache the parsed scores.json by mtime so the Search-tab sort-blend join
     # is one disk read per scores.json update, not one per request. Also
@@ -979,24 +1012,38 @@ def create_app(model: str = DEFAULT_MODEL):
                 continue
             r["c2pa"] = {"ai": bool(v.get("ai")), "kind": v.get("kind"), "tool": v.get("tool")}
 
-    def _filter_by_ai(results, ai):
-        # Restrict to AI-credentialed (ai=='only') or non-AI (ai=='hide')
-        # images per the C2PA verdict cache. `ai` in {None,'any','only','hide'};
-        # the first two are no-ops. A result counts as AI only when the sidecar
-        # has a positive verdict — absence is treated as non-AI: C2PA is
-        # positive-only (a lower bound), so 'hide' can't promise a file is real,
-        # only that it carries no AI Content Credential.
-        if ai not in ("only", "hide"):
+    def _attach_aidet(results):
+        # Inline the GRIP AI-likelihood percentage per result (RAM-only lookup from
+        # the primed ~/.muser/aidet.json). `ai_pct` ∈ [0,100] when the facet knows
+        # the path; absent on a miss (not yet scanned / file changed). The card UI
+        # renders the badge synchronously; the ai_min filter and sort=ai read it too.
+        from . import aidet as _aidet
+        for r in results:
+            v = _aidet.lookup(r["path"])
+            if v is not None and v.get("pct") is not None:
+                r["ai_pct"] = int(v["pct"])
+
+    def _ai_pct(r):
+        # AI-likelihood percentage for one result, from the inlined value or a
+        # direct facet lookup. None when the facet hasn't scored this path yet.
+        if "ai_pct" in r:
+            return r["ai_pct"]
+        from . import aidet as _aidet
+        v = _aidet.lookup(r["path"])
+        return int(v["pct"]) if v is not None and v.get("pct") is not None else None
+
+    def _filter_by_ai_min(results, ai_min):
+        # Keep only results whose GRIP AI-likelihood percentage is >= ai_min.
+        # ai_min in (0,100]; 0/None is a no-op. Unscored paths (no facet entry)
+        # are dropped when a positive floor is set — we can't assert they clear it.
+        if not ai_min:
             return results
-        from . import c2pa as _c2pa
-        want = ai == "only"
-        def _is_ai(r):
-            c = r.get("c2pa")
-            if c is None:
-                v = _c2pa.lookup(r["path"])
-                c = v if v else None
-            return bool(c and c.get("ai"))
-        return [r for r in results if _is_ai(r) == want]
+        out = []
+        for r in results:
+            p = _ai_pct(r)
+            if p is not None and p >= ai_min:
+                out.append(r)
+        return out
 
     def _add_prob(results):
         # Attach a calibrated match probability (SigLIP sigmoid) per result so the UI's
@@ -1013,13 +1060,16 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.get("/api/search")
     def search(q: str, k: int = 24, dedup: bool = True, method: str = "embed", folder: str | None = None,
-               neg: str | None = None, neg_strength: float = 0.5, ai: str | None = None,
+               neg: str | None = None, neg_strength: float = 0.5,
+               ai_min: int = 0, sort: str | None = None,
                min_width: int | None = None, max_width: int | None = None,
                min_height: int | None = None, max_height: int | None = None,
                min_short_side: int | None = None, max_short_side: int | None = None,
                min_long_side: int | None = None, max_long_side: int | None = None,
                min_aspect: float | None = None, max_aspect: float | None = None,
                min_filesize: int | None = None, max_filesize: int | None = None):
+        # ai_min: keep only results with GRIP AI-likelihood % >= ai_min (0 = off).
+        # sort: "ai"/"ai_asc" reorders by AI-likelihood (default = relevance).
         # method: "embed" (cosine, default), "phash" (perceptual-hash Hamming,
         # robust to recompression/resize/crop), or "both" (collapse on either).
         # folder: restrict results to images under this directory (any depth).
@@ -1051,7 +1101,7 @@ def create_app(model: str = DEFAULT_MODEL):
             min_aspect=min_aspect, max_aspect=max_aspect,
             min_filesize=min_filesize, max_filesize=max_filesize,
         )
-        results = _run_search(qv, k, dedup, method, folder, meta=meta, ai=ai)
+        results = _run_search(qv, k, dedup, method, folder, meta=meta, ai_min=ai_min, sort=sort)
         refinements = _refinements([r["path"] for r in results], q)
         return {"query": q, "model": state.model_name, "results": results, "refinements": refinements}
 
@@ -1077,6 +1127,7 @@ def create_app(model: str = DEFAULT_MODEL):
         _attach_dims(results, [r["path"] for r in results])
         _attach_scores(results)
         _attach_c2pa(results)
+        _attach_aidet(results)
         return results
 
     @app.get("/api/search-image")
@@ -1202,7 +1253,7 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.get("/api/filter")
     def filter_(limit: int = 200, offset: int = 0, folder: str | None = None,
-                dedup: bool = True, ai: str | None = None,
+                dedup: bool = True, ai_min: int = 0,
                 min_width: int | None = None, max_width: int | None = None,
                 min_height: int | None = None, max_height: int | None = None,
                 min_short_side: int | None = None, max_short_side: int | None = None,
@@ -1274,10 +1325,10 @@ def create_app(model: str = DEFAULT_MODEL):
         dead = _purge_dead([r["path"] for r in rows])
         rows = [r for r in rows if r["path"] not in dead and not _hidden(r["path"])]
 
-        # AI filter: keep only / drop rows carrying an AI C2PA credential. Rows
-        # here are raw index dicts (no `c2pa` key) so _filter_by_ai falls back
-        # to the verdict-cache lookup per path.
-        rows = _filter_by_ai(rows, ai)
+        # AI-likelihood floor: keep rows whose GRIP AI % >= ai_min. Rows here are
+        # raw index dicts (no `ai_pct`) so _filter_by_ai_min falls back to the
+        # facet-cache lookup per path.
+        rows = _filter_by_ai_min(rows, ai_min)
 
         total = len(rows)
         page = rows[offset : offset + limit]
@@ -2129,6 +2180,7 @@ def create_app(model: str = DEFAULT_MODEL):
         _attach_dims(results, [r["path"] for r in results])
         _attach_scores(results)
         _attach_c2pa(results)
+        _attach_aidet(results)
         return results
 
     @app.get("/api/search-color")
@@ -2172,6 +2224,33 @@ def create_app(model: str = DEFAULT_MODEL):
         total = state.index.count(state.model_name)
         threading.Thread(target=_scan_color, daemon=True, name="muser-color-scan").start()
         return {"started": True, "total": total}
+
+    @app.get("/api/ai-likelihood")
+    def aidet_status():
+        from . import aidet as _aidet
+        return {"available": _aidet.available(), "built": _aidet.cache_exists(), **state.aidet}
+
+    @app.post("/api/ai-likelihood/scan")
+    def aidet_scan():
+        from . import aidet as _aidet
+        if not _aidet.available():
+            raise HTTPException(501, "GRIP weight missing — ~/.muser/models/grip_latent.pth")
+        if state.aidet["scanning"]:
+            return {"started": False, "scanning": True}
+        total = state.index.count(state.model_name)
+        threading.Thread(target=_scan_aidet, daemon=True, name="muser-aidet-scan").start()
+        return {"started": True, "total": total}
+
+    @app.get("/api/ai-likelihood/score")
+    def aidet_score(path: str):
+        """On-demand AI-likelihood % for one path (computes + caches on a miss)."""
+        from . import aidet as _aidet
+        if not _aidet.available():
+            return {"available": False}
+        v = _aidet.lookup(path)
+        if v is None:
+            v = _aidet._compute(path)  # score + (the facet caches lazily on next scan)
+        return {"available": True, "pct": v.get("pct"), "logit": v.get("logit")}
 
     @app.post("/api/reveal")
     def reveal(req: PathReq):

@@ -190,7 +190,12 @@ async function galleryResult(
   refinements?: Refinement[],
 ) {
   const list = results.length
-    ? results.map((h, i) => `${i + 1}. ${h.path} (${((h.prob ?? h.score) * 100).toFixed(1)}%)`).join("\n")
+    ? results
+        .map((h, i) => {
+          const ai = typeof h.ai_pct === "number" ? `, AI ${h.ai_pct}%` : "";
+          return `${i + 1}. ${h.path} (${((h.prob ?? h.score) * 100).toFixed(1)}%${ai})`;
+        })
+        .join("\n")
     : "No matches found. Index some images first with index_folder.";
   const meta = await buildLlmMeta(mode, query, folder, results, refinements);
 
@@ -261,7 +266,9 @@ export function createServer(): McpServer {
       description:
         "Semantically search your image library by natural-language description and open a visual " +
         "gallery of the best matches. Searches the whole index by default; pass a folder only to " +
-        "scope/ensure indexing of a specific folder first.",
+        "scope/ensure indexing of a specific folder first. Optional filters: ai_min (keep only " +
+        "results whose AI-generated likelihood %% is at least this), sort ('ai' = most-AI-likely " +
+        "first, 'ai_asc' = least), and min_short_side / max_long_side resolution bounds in px.",
       inputSchema: {
         folder: z
           .string()
@@ -269,17 +276,32 @@ export function createServer(): McpServer {
           .describe("Optional absolute folder path to index before searching. Omit to search the whole library."),
         query: z.string().describe("Natural-language description of the image to find"),
         k: z.number().optional().describe("How many results to return (default 24)"),
+        ai_min: z
+          .number()
+          .optional()
+          .describe("Keep only results with AI-generated likelihood % >= this (0–100). Omit for no AI filter."),
+        sort: z
+          .enum(["ai", "ai_asc"])
+          .optional()
+          .describe("Reorder by AI-likelihood: 'ai' = most-AI first, 'ai_asc' = least-AI first. Omit for relevance order."),
+        min_short_side: z.number().optional().describe("Only images whose shorter side is at least this many px"),
+        max_long_side: z.number().optional().describe("Only images whose longer side is at most this many px"),
       },
       _meta: { ui: { resourceUri: RESOURCE_URI } },
     },
-    async ({ folder, query, k }) => {
+    async ({ folder, query, k, ai_min, sort, min_short_side, max_long_side }) => {
       await ensureService();
       if (folder) {
         // Ensure the requested folder is in the index before searching it.
         await indexFolder(folder, true).catch(() => undefined);
       }
       const count = k ?? 24;
-      const { results, refinements } = await search(query, count, folder);
+      const { results, refinements } = await search(query, count, folder, {
+        ai_min,
+        sort,
+        min_short_side,
+        max_long_side,
+      });
       return galleryResult("text", query, folder ?? "", await attachThumbs(results), refinements);
     },
   );

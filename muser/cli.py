@@ -185,10 +185,19 @@ def search(
     query: list[str] = typer.Argument(..., help='Text query, e.g. "a dog on a beach"'),
     k: int = typer.Option(12, "-k", "--limit", help="Number of results"),
     in_: str = typer.Option(None, "--in", help="Limit to images under this folder (any depth)"),
+    ai_min: int = typer.Option(0, "--ai-min", help="Keep only results with AI-likelihood %% >= this (0–100)"),
+    sort: str = typer.Option(None, "--sort", help='Reorder results: "ai" (most-AI first) | "ai_asc" (least-AI first)'),
+    min_short: int = typer.Option(None, "--min-short-side", help="Min short side in px"),
+    max_long: int = typer.Option(None, "--max-long-side", help="Max long side in px"),
     model: str = typer.Option(DEFAULT_MODEL, help="Embedding model (only with --local)"),
     local: bool = typer.Option(False, "--local", help="Search in-process instead of via the service"),
 ):
-    """Search the index by natural-language description (optionally scoped to --in <folder>)."""
+    """Search the index by natural-language description.
+
+    Scope with --in <folder>; filter by AI-likelihood with --ai-min N; reorder with
+    --sort ai|ai_asc; constrain resolution with --min-short-side / --max-long-side.
+    These filter/sort options ride the same /api/search the web UI and MCP use.
+    """
     q = " ".join(query)
     folder = str(Path(in_).expanduser()) if in_ else None
     if not local:
@@ -196,6 +205,14 @@ def search(
         params = {"q": q, "k": k}
         if folder:
             params["folder"] = folder
+        if ai_min:
+            params["ai_min"] = ai_min
+        if sort:
+            params["sort"] = sort
+        if min_short:
+            params["min_short_side"] = min_short
+        if max_long:
+            params["max_long_side"] = max_long
         r = _get("/api/search", **params)
         results, used = r["results"], r["model"]
     else:
@@ -217,7 +234,8 @@ def search(
     con.print(f'Top {len(results)} for "{q}" [dim]\\[{used}][/]{scope}:')
     for i, h in enumerate(results, 1):
         parent = "file://" + urllib.parse.quote(os.path.dirname(h["path"]))
-        con.print(f"  {i:2}. {h['score']*100:5.1f}%  [link={parent}]{h['name']}[/link]  [dim]{h['path']}[/dim]")
+        ai = f"  [magenta]AI {h['ai_pct']}%[/]" if h.get("ai_pct") is not None else ""
+        con.print(f"  {i:2}. {h['score']*100:5.1f}%  [link={parent}]{h['name']}[/link]{ai}  [dim]{h['path']}[/dim]")
 
 
 @app.command()
@@ -371,6 +389,46 @@ def detect(
     con.print(f"\n[bold]{len(ai)}[/] AI-generated image(s) found via C2PA over {len(paths)} indexed.")
     for h in ai[:25]:
         con.print(f"  [dim]{h['kind'] or 'ai':9}[/] {h['name']}  [dim]{h['tool'] or ''}[/]")
+
+
+@app.command()
+def aiscore(
+    folder: str = typer.Option(None, "--in", help="Restrict the scan to images under this folder"),
+    model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to scan"),
+    query: str = typer.Option(None, "--query", "-q", help="Print the AI-likelihood % for ONE image path (no scan)"),
+):
+    """AI-likelihood facet — score how likely each indexed image is AI-generated, via the
+    GRIP `Grag2021_latent` forensic detector (writes ~/.muser/aidet.json).
+
+    Runs standalone (no `muser serve` needed). Unlike `detect` (C2PA metadata, positive-only),
+    this is a pixel-level 0–100% score on EVERY image — it catches local SD/Flux/Midjourney
+    output that carries no credentials. Incremental by mtime+size; ~5 img/s (full-res forward),
+    so a full corpus pass takes a while. Needs the weight at ~/.muser/models/grip_latent.pth.
+    """
+    from . import aidet as _aidet
+
+    if not _aidet.available():
+        con.print("[red]GRIP weight missing[/] — put it at ~/.muser/models/grip_latent.pth")
+        raise typer.Exit(1)
+    if query:
+        d = _aidet._compute(str(Path(query).expanduser()))
+        if not d:
+            con.print("[red]could not score[/]"); raise typer.Exit(1)
+        con.print(f"  AI-likelihood [bold]{d['pct']}%[/]  [dim]logit={d['logit']}[/]")
+        return
+    from .index import MuserIndex
+
+    under = str(Path(folder).expanduser()) if folder else None
+    paths = MuserIndex().paths(model, under=under)
+    if not paths:
+        con.print(f"[red]no indexed images[/] — run `muser index <folder>` first")
+        raise typer.Exit(1)
+    _aidet.scan(paths, progress=lambda d, t: con.print(f"  scoring {d}/{t}", end="\r"))
+    # quick coverage summary
+    cache = _aidet.sidecar().load()
+    flagged = sum(1 for e in cache.values() if (e.get("pct") or 0) >= 50)
+    con.print(f"\n[bold]scored[/] {len(paths)} images → ~/.muser/aidet.json  "
+              f"([bold]{flagged}[/] at ≥50% AI-likelihood)")
 
 
 def _hex_to_rgb(h: str) -> tuple[int, int, int]:

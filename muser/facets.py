@@ -27,6 +27,7 @@ class Sidecar:
         self.path = Path.home() / ".muser" / f"{name}.json"
         self._cache: dict[tuple, dict] = {}  # (path, mtime_ns, size) -> payload
         self._primed = False
+        self._sidecar_mtime = -1.0  # mtime of self.path at last prime, for auto-reprime
 
     def exists(self) -> bool:
         return self.path.exists()
@@ -55,25 +56,42 @@ class Sidecar:
             cache[(p, m, s)] = e
         self._cache = cache
         self._primed = True
+        try:
+            self._sidecar_mtime = self.path.stat().st_mtime
+        except OSError:
+            self._sidecar_mtime = -1.0
         return len(self._cache)
 
-    def entries(self) -> dict:
-        """RAM cache as {(path, m, s): payload}; primes on first call."""
-        if not self._primed:
+    def _maybe_reprime(self) -> None:
+        """Re-prime if the sidecar file changed on disk since we last primed, so a
+        reader (the service) reflects writes from ANY process — a standalone
+        `muser aiscore`, the post-index hook, another window — without a restart.
+        A cheap stat per call; the full reload happens only when mtime actually
+        moves (e.g. once per scan checkpoint)."""
+        try:
+            mt = self.path.stat().st_mtime
+        except OSError:
+            return
+        if not self._primed or mt != self._sidecar_mtime:
+            self._primed = False
             self.prime()
+
+    def entries(self) -> dict:
+        """RAM cache as {(path, m, s): payload}; primes (or re-primes on disk change)."""
+        self._maybe_reprime()
         return self._cache
 
     def lookup(self, path: str) -> dict | None:
         """RAM-only payload lookup, valid only if (mtime, size) still match."""
-        if not self._primed:
-            self.prime()
+        self._maybe_reprime()
         try:
             st = os.stat(path)
         except OSError:
             return None
         return self._cache.get((path, st.st_mtime_ns, st.st_size))
 
-    def scan(self, paths, compute, progress=None, workers: int = 8, version: int = 1) -> dict:
+    def scan(self, paths, compute, progress=None, workers: int = 8, version: int = 1,
+             checkpoint_every: int = 1000) -> dict:
         """Incrementally compute the facet for each path. Returns the full cache.
 
         ``compute(path) -> dict`` produces the per-image payload (``m``/``s``/``v``
@@ -109,6 +127,7 @@ class Sidecar:
                 payload = {}
             return p, st, payload
 
+        since_ckpt = 0
         with ThreadPoolExecutor(max_workers=workers) as ex:
             for p, st, payload in ex.map(work, todo):
                 payload = dict(payload)
@@ -116,8 +135,20 @@ class Sidecar:
                 cache[p] = payload
                 changed = True
                 done += 1
+                since_ckpt += 1
                 if progress and done % 50 == 0:
                     progress(done, total)
+                # Periodic atomic checkpoint so a long scan (e.g. the full-corpus
+                # GRIP pass, ~80 min) is crash-safe and resumable — the next run
+                # skips already-saved (mtime,size,version)-matching entries. A
+                # partial sidecar is never observable (write-to-tmp + rename).
+                # Re-prime the RAM cache too, so a long scan's results go live
+                # progressively (badges/filters work mid-scan, not just at the end).
+                if since_ckpt >= checkpoint_every:
+                    self.save(cache)
+                    self._primed = False
+                    self.prime()
+                    since_ckpt = 0
         if changed:
             self.save(cache)
         if progress:

@@ -164,6 +164,11 @@
      "Content Credentials declare AI"; honest "?" because absence proves nothing. */
   .aiflag { position:absolute; bottom:8px; left:8px; background:rgba(180,120,0,.92); color:#fff;
             font-size:10px; font-weight:600; letter-spacing:.02em; padding:2px 7px; cursor:help; }
+  /* AI-likelihood (GRIP) badge — bottom-right, clear of aiflag (BL)/scoreb (TL)/dupe (TR).
+     A soft pixel-forensic probability, so it's only shown when notable (>=50%); the
+     tint deepens with the score. Distinct from the amber C2PA `.aiflag` (signed metadata). */
+  .aib { position:absolute; bottom:8px; right:8px; color:#fff; font-size:10px; font-weight:600;
+         letter-spacing:.02em; padding:2px 7px; cursor:help; font-variant-numeric:tabular-nums; }
   .card .meta { padding:9px 0 0; }
   .card .name { font-size:12px; color:var(--mut); white-space:nowrap;
                 overflow:hidden; text-overflow:ellipsis; }
@@ -1081,13 +1086,10 @@
       <span class="pair"><input type="number" min="0" step="0.5" id="fMaxMB" placeholder="any" /> <span class="unit">MB max</span></span>
     </div>
     <div class="filter-row" id="fAIRow">
-      <span class="lab" title="By C2PA Content Credentials — positive-only, so it only catches cloud generators (OpenAI/Firefly/Google) that sign their output; local SD/Flux carry none.">AI-generated</span>
+      <span class="lab" title="GRIP forensic detector — a pixel-level AI-generated likelihood on every image (0–100%), calibrated on SDXL/Midjourney/Flux/ChatGPT/nano-banana. Unlike the C2PA badge it needs no metadata, so it catches local SD/Flux/Midjourney output.">AI-likelihood ≥</span>
       <span class="pair">
-        <select id="fAI">
-          <option value="">Any</option>
-          <option value="only">AI only</option>
-          <option value="hide">Hide AI</option>
-        </select>
+        <input type="range" id="fAIMin" min="0" max="100" step="5" value="0" style="width:160px" />
+        <span class="unit" id="fAIMinVal" style="min-width:5ch">off</span>
       </span>
     </div>
     <div class="filter-actions">
@@ -2440,21 +2442,28 @@ function _hideShowcaseBar(){ const b = $("#showcaseBar"); if(b) b.style.display 
 //      no query "Apply" hits /api/filter and lists matching images. Filter
 //      state persists per-tab in localStorage so it survives reloads.
 const FILTER_KEY = "muser-filter-v1";
-const _fIDs = ["fMinShort","fMaxLong","fMinAspect","fMaxAspect","fMinKB","fMaxMB","fAI"];
+const _fIDs = ["fMinShort","fMaxLong","fMinAspect","fMaxAspect","fMinKB","fMaxMB"];
+// AI-likelihood slider is handled separately (a range always has a value, so it
+// can't ride the "non-empty == set" _fIDs logic; 0 = off).
+function _aiMin(){ return parseInt($("#fAIMin").value,10)||0; }
+function _syncAiMinLabel(){ const v=_aiMin(); $("#fAIMinVal").textContent = v>0 ? v+"%" : "off"; }
 function _loadFilterState(){
   try {
     const s = JSON.parse(localStorage.getItem(FILTER_KEY) || "{}");
     _fIDs.forEach(id => { if (s[id] != null) $("#"+id).value = s[id]; });
+    if (s.aiMin != null) $("#fAIMin").value = s.aiMin;
+    _syncAiMinLabel();
     if (s.open) { $("#filterToggle").classList.add("open","on"); $("#filterPanel").classList.add("on"); }
   } catch {}
 }
 function _saveFilterState(){
   const s = {open: $("#filterPanel").classList.contains("on")};
   _fIDs.forEach(id => { const v = $("#"+id).value.trim(); if (v) s[id] = v; });
+  if (_aiMin()) s.aiMin = _aiMin();
   localStorage.setItem(FILTER_KEY, JSON.stringify(s));
 }
 function filterActive(){
-  return _fIDs.some(id => $("#"+id).value.trim() !== "");
+  return _aiMin() > 0 || _fIDs.some(id => $("#"+id).value.trim() !== "");
 }
 // Build the &min_short_side=…&max_long_side=… suffix the /api/search and
 // /api/filter endpoints accept. Empty when no constraints are set.
@@ -2472,8 +2481,8 @@ function filterParamString(){
   if (maxA)     out.push("max_aspect="     + encodeURIComponent(parseFloat(maxA)));
   if (minKB)    out.push("min_filesize="   + encodeURIComponent(Math.round(parseFloat(minKB)*1024)));
   if (maxMB)    out.push("max_filesize="   + encodeURIComponent(Math.round(parseFloat(maxMB)*1024*1024)));
-  const aiv = $("#fAI").value.trim();
-  if (aiv)      out.push("ai=" + encodeURIComponent(aiv));
+  const aiMin = _aiMin();
+  if (aiMin)    out.push("ai_min=" + aiMin);
   return out.length ? "&" + out.join("&") : "";
 }
 async function runFilter(){
@@ -2520,12 +2529,12 @@ async function updateFilterCoverage(matched){
   try { const s = await (await fetch("/api/status")).json();
         total = s.indexed || 0;
         scored = (s.metadata && s.metadata.scored) || 0;
-        // Hide the AI filter when c2patool isn't installed — the verdict cache
-        // is empty so "AI only" would always be blank. Reset to Any if it was set.
+        // Hide the AI-likelihood slider when the GRIP detector is unavailable
+        // (no weight) — there'd be no scores to filter on. Reset it if it was set.
         const aiRow = $("#fAIRow");
         if (aiRow) {
-          aiRow.style.display = s.c2pa === false ? "none" : "";
-          if (s.c2pa === false && $("#fAI").value) { $("#fAI").value = ""; _saveFilterState(); }
+          aiRow.style.display = s.aidet === false ? "none" : "";
+          if (s.aidet === false && _aiMin()) { $("#fAIMin").value = 0; _syncAiMinLabel(); _saveFilterState(); }
         } } catch {}
   let label;
   if (matched != null) {
@@ -2556,6 +2565,7 @@ $("#fApply").addEventListener("click", () => {
 });
 $("#fReset").addEventListener("click", () => {
   _fIDs.forEach(id => $("#"+id).value = "");
+  $("#fAIMin").value = 0; _syncAiMinLabel();
   _saveFilterState();
   const q = $("#q").value.trim();
   if (q.length >= 2) { liveSearch(); }
@@ -2565,10 +2575,11 @@ $("#fReset").addEventListener("click", () => {
 // Persist on input; "Apply" is still the action, but a typed-in value shouldn't
 // quietly disappear on reload.
 _fIDs.forEach(id => $("#"+id).addEventListener("input", _saveFilterState));
-// AI is a discrete choice, not a typed bound — apply on change like a preset
-// (no waiting on the Apply button).
-$("#fAI").addEventListener("change", () => {
-  _saveFilterState();
+// AI-likelihood slider: live-update the label as it drags; apply (re-search /
+// re-filter) on release, like a one-click control — no waiting on Apply.
+$("#fAIMin").addEventListener("input", _syncAiMinLabel);
+$("#fAIMin").addEventListener("change", () => {
+  _syncAiMinLabel(); _saveFilterState();
   const q = $("#q").value.trim();
   if (q.length >= 2) { liveSearch(); } else { runFilter(); }
 });
@@ -3100,6 +3111,15 @@ async function _fetchResultTotal(key, folder, fParams){
     _updateResultCount();
   } catch { /* leave the N+ fallback in place */ }
 }
+// AI-likelihood badge HTML for a card. Soft forensic score (GRIP) → shown only
+// when notable (>=50%); the magenta tint deepens with the percentage so a wall
+// of cards reads at a glance. Returns "" when unknown or low.
+function aiBadge(pct){
+  if(pct==null || pct<50) return "";
+  const a = (0.45 + 0.5*(pct-50)/50).toFixed(2);   // 50%→.45 … 100%→.95 opacity
+  return `<span class="aib" style="background:rgba(190,30,110,${a})" `+
+    `title="AI-likelihood ${pct}% — GRIP forensic detector (pixel-level, calibrated). A soft probability, not a verdict.">AI ${pct}%</span>`;
+}
 function _renderHits(r){
   const g=$("#results");
   if(_mode !== "showcase") _hideShowcaseBar();   // any real result set replaces the showcase
@@ -3121,6 +3141,7 @@ function _renderHits(r){
     const scoreTitle = h.prob!=null ? "match probability (SigLIP-calibrated)" : "cosine similarity";
     const dupes=h.dupe_count||1;
     const badge = dupes>1 ? `<span class="dupe" title="${dupes} copies — click to see all">${dupes} copies</span>` : "";
+    const aib = aiBadge(h.ai_pct);
     // uid: stable 12-char blake2b of the path — set as data-uid on the card so
     // it's queryable from DevTools, and as the `title` tooltip so the user can
     // see it. Not rendered visually (keeps the filename UI intact).
@@ -3131,7 +3152,7 @@ function _renderHits(r){
     if(h.width)  c.dataset.w=h.width;
     if(h.height) c.dataset.h=h.height;
     c.innerHTML=`
-      <div class="thumb"><span class="scoreb" title="${scoreTitle}">${pct}</span>${badge}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}&size=${THUMB}" title="${h.name} · uid:${uid}"></div>
+      <div class="thumb"><span class="scoreb" title="${scoreTitle}">${pct}</span>${badge}${aib}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}&size=${THUMB}" title="${h.name} · uid:${uid}"></div>
       <div class="meta"><div class="name" title="${h.path}${uid?' · uid:'+uid:''}">${h.name}</div>
         <div class="bar"><i style="width:${pct}%"></i></div></div>
       <div class="foot">

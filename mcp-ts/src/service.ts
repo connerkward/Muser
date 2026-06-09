@@ -34,6 +34,8 @@ export interface SearchHit {
   hps_v21?: number;
   /** Zero-shot CLIP aesthetic prompt. */
   aesthetic?: number;
+  /** GRIP AI-generated likelihood, 0–100 (present once the aidet facet is scored). */
+  ai_pct?: number;
 }
 /** Pseudo-relevance-feedback chip the service returns alongside results:
  *  a cluster label common to the top hits ("you might also try"). */
@@ -114,18 +116,33 @@ export async function ensureService(maxWaitMs = 120_000): Promise<StatusResponse
   );
 }
 
-/** GET /api/search?q=&k=&folder= — text query, optional folder scope.
+/** Optional filter/sort knobs that ride /api/search, exposed so MCP callers get
+ *  the same filtering/sorting the web UI and CLI have. Default = clean kNN. */
+export interface SearchOpts {
+  ai_min?: number;        // keep only results with AI-likelihood % >= this (0–100)
+  sort?: string;          // "ai" (most-AI first) | "ai_asc" (least-AI first)
+  min_short_side?: number;
+  max_long_side?: number;
+}
+
+/** GET /api/search?q=&k=&folder=… — text query, optional folder scope + filters.
  *
- *  PURE EMBEDDING kNN. We deliberately pass ONLY q/k/folder. /api/search
- *  defaults to `method="embed"` (cosine over the model vectors), so results
- *  come back in embedding-similarity order. We do NOT send any of the
- *  endpoint's optional re-ranking params (sort-blend / aesthetic metrics /
- *  `neg` / metadata filters) — those belong to the standalone web UI's
- *  "advanced" search, not this MCP gallery. Keep this a clean kNN: the gallery
- *  must rank/select on embedding similarity alone. */
-export async function search(query: string, k: number, folder?: string): Promise<SearchResponse> {
+ *  Base behaviour is a PURE EMBEDDING kNN (method="embed", cosine order). The
+ *  optional `opts` add the same AI-likelihood / metadata filtering + sort the
+ *  web UI exposes — passed through only when set, so an opts-less call stays a
+ *  clean similarity ranking. (Still no sort-blend / `neg` — those stay web-only.) */
+export async function search(
+  query: string,
+  k: number,
+  folder?: string,
+  opts: SearchOpts = {},
+): Promise<SearchResponse> {
   let url = `${BASE}/api/search?q=${encodeURIComponent(query)}&k=${k}`;
   if (folder) url += `&folder=${encodeURIComponent(folder)}`;
+  if (opts.ai_min) url += `&ai_min=${opts.ai_min}`;
+  if (opts.sort) url += `&sort=${encodeURIComponent(opts.sort)}`;
+  if (opts.min_short_side) url += `&min_short_side=${opts.min_short_side}`;
+  if (opts.max_long_side) url += `&max_long_side=${opts.max_long_side}`;
   const r = await fetch(url, { signal: AbortSignal.timeout(60_000) });
   if (!r.ok) throw new Error(`/api/search ${r.status}: ${await r.text()}`);
   return (await r.json()) as SearchResponse;
