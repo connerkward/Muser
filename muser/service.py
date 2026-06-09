@@ -747,13 +747,14 @@ def create_app(model: str = DEFAULT_MODEL):
             })
         return out
 
-    def _run_search(qv, k, dedup, method, folder, meta=None, ai_min=0, sort=None):
-        # ai_min ∈ [0,100]: keep only results whose GRIP AI-likelihood % >= ai_min.
-        # The cut is post-kNN (the facet isn't a LanceDB column), so over-fetch a
-        # wider candidate pool first and trim to k after filtering. sort: "ai" /
-        # "ai_asc" reorders by AI-likelihood (also needs a wider pool to be meaningful).
+    def _run_search(qv, k, dedup, method, folder, meta=None, ai_min=0, ai_max=100, sort=None):
+        # ai_min/ai_max ∈ [0,100]: keep results with GRIP AI-likelihood % in the band
+        # (ai_max<100 = remove AI; ai_min>0 = only AI). The cut is post-kNN (the facet
+        # isn't a LanceDB column), so over-fetch a wider candidate pool first and trim
+        # to k after filtering. sort: "ai"/"ai_asc" reorders by AI-likelihood.
         _ai_min = int(ai_min or 0)
-        widen = _ai_min > 0 or sort in ("ai", "ai_asc")
+        _ai_max = 100 if ai_max is None else int(ai_max)
+        widen = _ai_min > 0 or _ai_max < 100 or sort in ("ai", "ai_asc")
         fetch_k = min(k * 8, 1500) if widen else k
         if dedup:
             results = _search_dedup_precomputed(qv, fetch_k, method, folder, meta)
@@ -766,9 +767,9 @@ def create_app(model: str = DEFAULT_MODEL):
                 {"path": p, "name": os.path.basename(p), "score": round(s, 4), "dupes": [p], "dupe_count": 1}
                 for p, s in state.index.search(state.model_name, qv, k=fetch_k, folder=folder, meta=meta)
             ]
-        return _postprocess(results, k, ai_min=_ai_min, sort=sort)
+        return _postprocess(results, k, ai_min=_ai_min, ai_max=ai_max, sort=sort)
 
-    def _postprocess(results, k, ai_min=0, sort=None):
+    def _postprocess(results, k, ai_min=0, ai_max=100, sort=None):
         """Shared tail for every result-producing path (kNN blend AND multi-concept
         match-all): live-file filtering + dead-group promotion, the centralized
         hide policy, per-result enrichment (uid / prob / dims / scores / c2pa /
@@ -814,8 +815,8 @@ def create_app(model: str = DEFAULT_MODEL):
         _attach_scores(results)
         _attach_c2pa(results)
         _attach_aidet(results)
-        if int(ai_min or 0) > 0:
-            results = _filter_by_ai_min(results, int(ai_min))
+        if int(ai_min or 0) > 0 or int(ai_max if ai_max is not None else 100) < 100:
+            results = _filter_by_ai_band(results, ai_min, ai_max)
         if sort in ("ai", "ai_asc"):
             results.sort(key=lambda r: (_ai_pct(r) if _ai_pct(r) is not None else -1),
                          reverse=(sort == "ai"))
@@ -855,7 +856,7 @@ def create_app(model: str = DEFAULT_MODEL):
         n = float(np.linalg.norm(qv)) if qv is not None else 0.0
         return qv / n if n > 0 else qv
 
-    def _search_match_all(pos, neg, k, folder, meta, neg_strength, ai_min, sort):
+    def _search_match_all(pos, neg, k, folder, meta, neg_strength, ai_min, ai_max, sort):
         """Match-all (intersection) over multiple concepts: a result's score is the
         MIN of its per-concept similarities — high only when EVERY concept is
         strongly present (true AND), unlike a blended centroid which rewards
@@ -888,7 +889,7 @@ def create_app(model: str = DEFAULT_MODEL):
              "dupes": [p], "dupe_count": 1}
             for p, s in ranked
         ]
-        return _postprocess(results, k, ai_min=ai_min, sort=sort)
+        return _postprocess(results, k, ai_min=ai_min, ai_max=ai_max, sort=sort)
 
     # Cache the parsed scores.json by mtime so the Search-tab sort-blend join
     # is one disk read per scores.json update, not one per request. Also
@@ -1101,17 +1102,26 @@ def create_app(model: str = DEFAULT_MODEL):
         v = _aidet.lookup(r["path"])
         return int(v["pct"]) if v is not None and v.get("pct") is not None else None
 
-    def _filter_by_ai_min(results, ai_min):
-        # Keep only results whose GRIP AI-likelihood percentage is >= ai_min.
-        # ai_min in (0,100]; 0/None is a no-op. Unscored paths (no facet entry)
-        # are dropped when a positive floor is set — we can't assert they clear it.
-        if not ai_min:
+    def _filter_by_ai_band(results, ai_min, ai_max):
+        # Keep results whose GRIP AI-likelihood % is in [ai_min, ai_max].
+        #   ai_max < 100  → "remove AI": drop likely-AI images above the ceiling.
+        #   ai_min > 0    → "only AI":   keep just images above the floor.
+        # Asymmetric on UNSCORED paths (no facet entry), and deliberately so:
+        #   - a floor (only-AI) DROPS unscored — we can't assert they're AI;
+        #   - a ceiling (remove-AI) KEEPS unscored — we can't assert they're AI,
+        #     so we don't remove what we can't confirm.
+        ai_min = int(ai_min or 0)
+        ai_max = 100 if ai_max is None else int(ai_max)
+        if ai_min <= 0 and ai_max >= 100:
             return results
         out = []
         for r in results:
             p = _ai_pct(r)
-            if p is not None and p >= ai_min:
-                out.append(r)
+            if ai_min > 0 and (p is None or p < ai_min):
+                continue
+            if ai_max < 100 and p is not None and p > ai_max:
+                continue
+            out.append(r)
         return out
 
     def _add_prob(results):
@@ -1130,7 +1140,7 @@ def create_app(model: str = DEFAULT_MODEL):
     @app.get("/api/search")
     def search(q: str, k: int = 24, dedup: bool = True, method: str = "embed", folder: str | None = None,
                neg: str | None = None, neg_strength: float = 0.5,
-               ai_min: int = 0, sort: str | None = None, match: str = "blend",
+               ai_min: int = 0, ai_max: int = 100, sort: str | None = None, match: str = "blend",
                min_width: int | None = None, max_width: int | None = None,
                min_height: int | None = None, max_height: int | None = None,
                min_short_side: int | None = None, max_short_side: int | None = None,
@@ -1170,14 +1180,14 @@ def create_app(model: str = DEFAULT_MODEL):
             negs.append(neg.lower())
         if match == "all" and len(pos) >= 2:
             # Match-all (intersection): each concept must be strongly present.
-            results = _search_match_all(pos, negs, k, folder, meta, neg_strength, ai_min, sort)
+            results = _search_match_all(pos, negs, k, folder, meta, neg_strength, ai_min, ai_max, sort)
         else:
             # Blend (default): sum the positive concept vectors, subtract negatives.
             if len(pos) == 1 and not negs:
                 qv = emb.embed_queries([pos[0]])[0]
             else:
                 qv = _blend_vector(emb, pos, negs, neg_strength)
-            results = _run_search(qv, k, dedup, method, folder, meta=meta, ai_min=ai_min, sort=sort)
+            results = _run_search(qv, k, dedup, method, folder, meta=meta, ai_min=ai_min, ai_max=ai_max, sort=sort)
         refinements = _refinements([r["path"] for r in results], q)
         return {"query": q, "model": state.model_name, "results": results,
                 "refinements": refinements, "concepts": concepts, "match": match}
@@ -1330,7 +1340,7 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.get("/api/filter")
     def filter_(limit: int = 200, offset: int = 0, folder: str | None = None,
-                dedup: bool = True, ai_min: int = 0,
+                dedup: bool = True, ai_min: int = 0, ai_max: int = 100,
                 min_width: int | None = None, max_width: int | None = None,
                 min_height: int | None = None, max_height: int | None = None,
                 min_short_side: int | None = None, max_short_side: int | None = None,
@@ -1402,10 +1412,10 @@ def create_app(model: str = DEFAULT_MODEL):
         dead = _purge_dead([r["path"] for r in rows])
         rows = [r for r in rows if r["path"] not in dead and not _hidden(r["path"])]
 
-        # AI-likelihood floor: keep rows whose GRIP AI % >= ai_min. Rows here are
-        # raw index dicts (no `ai_pct`) so _filter_by_ai_min falls back to the
-        # facet-cache lookup per path.
-        rows = _filter_by_ai_min(rows, ai_min)
+        # AI-likelihood band: keep rows with GRIP AI % in [ai_min, ai_max]
+        # (ai_max<100 removes AI; ai_min>0 keeps only AI). Rows here are raw index
+        # dicts (no `ai_pct`) so _filter_by_ai_band falls back to the facet lookup.
+        rows = _filter_by_ai_band(rows, ai_min, ai_max)
 
         total = len(rows)
         page = rows[offset : offset + limit]

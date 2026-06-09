@@ -286,7 +286,11 @@ export function createServer(): McpServer {
         ai_min: z
           .number()
           .optional()
-          .describe("Keep only results with AI-generated likelihood % >= this (0–100). Omit for no AI filter."),
+          .describe("Show only AI: keep results with AI-generated likelihood % >= this."),
+        ai_max: z
+          .number()
+          .optional()
+          .describe("Remove AI: drop results with AI-generated likelihood % above this (e.g. 30 hides likely-AI images)."),
         sort: z
           .enum(["ai", "ai_asc"])
           .optional()
@@ -296,7 +300,7 @@ export function createServer(): McpServer {
       },
       _meta: { ui: { resourceUri: RESOURCE_URI } },
     },
-    async ({ folder, query, k, ai_min, sort, match, min_short_side, max_long_side }) => {
+    async ({ folder, query, k, ai_min, ai_max, sort, match, min_short_side, max_long_side }) => {
       await ensureService();
       if (folder) {
         // Ensure the requested folder is in the index before searching it.
@@ -305,6 +309,7 @@ export function createServer(): McpServer {
       const count = k ?? 24;
       const { results, refinements } = await search(query, count, folder, {
         ai_min,
+        ai_max,
         sort,
         match,
         min_short_side,

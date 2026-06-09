@@ -119,7 +119,8 @@ export async function ensureService(maxWaitMs = 120_000): Promise<StatusResponse
 /** Optional filter/sort knobs that ride /api/search, exposed so MCP callers get
  *  the same filtering/sorting the web UI and CLI have. Default = clean kNN. */
 export interface SearchOpts {
-  ai_min?: number;        // keep only results with AI-likelihood % >= this (0–100)
+  ai_min?: number;        // keep only results with AI-likelihood % >= this (show only AI)
+  ai_max?: number;        // drop results with AI-likelihood % > this (remove AI)
   sort?: string;          // "ai" (most-AI first) | "ai_asc" (least-AI first)
   match?: string;         // multi-concept (comma query) mode: "blend" | "all"
   min_short_side?: number;
@@ -141,6 +142,7 @@ export async function search(
   let url = `${BASE}/api/search?q=${encodeURIComponent(query)}&k=${k}`;
   if (folder) url += `&folder=${encodeURIComponent(folder)}`;
   if (opts.ai_min) url += `&ai_min=${opts.ai_min}`;
+  if (opts.ai_max != null && opts.ai_max < 100) url += `&ai_max=${opts.ai_max}`;
   if (opts.sort) url += `&sort=${encodeURIComponent(opts.sort)}`;
   if (opts.match && opts.match !== "blend") url += `&match=${encodeURIComponent(opts.match)}`;
   if (opts.min_short_side) url += `&min_short_side=${opts.min_short_side}`;

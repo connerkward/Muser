@@ -185,7 +185,8 @@ def search(
     query: list[str] = typer.Argument(..., help='Text query, e.g. "a dog on a beach"'),
     k: int = typer.Option(12, "-k", "--limit", help="Number of results"),
     in_: str = typer.Option(None, "--in", help="Limit to images under this folder (any depth)"),
-    ai_min: int = typer.Option(0, "--ai-min", help="Keep only results with AI-likelihood %% >= this (0–100)"),
+    ai_min: int = typer.Option(0, "--ai-min", help="Keep only results with AI-likelihood %% >= this (show only AI)"),
+    ai_max: int = typer.Option(100, "--ai-max", help="Drop results with AI-likelihood %% > this (remove AI)"),
     sort: str = typer.Option(None, "--sort", help='Reorder results: "ai" (most-AI first) | "ai_asc" (least-AI first)'),
     match: str = typer.Option("blend", "--match", help='Multi-concept (comma) query mode: "blend" (sum vectors) | "all" (each concept must match)'),
     min_short: int = typer.Option(None, "--min-short-side", help="Min short side in px"),
@@ -211,6 +212,8 @@ def search(
             params["folder"] = folder
         if ai_min:
             params["ai_min"] = ai_min
+        if ai_max < 100:
+            params["ai_max"] = ai_max
         if sort:
             params["sort"] = sort
         if match and match != "blend":
