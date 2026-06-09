@@ -84,9 +84,9 @@ function mkWord(c){
 function render(){
   const bar=$("#bar"), entry=$("#entry");
   [...bar.querySelectorAll(".word")].forEach(n=>n.remove());
-  // one line, grouped by color: positives (green) first, then negatives (red). No divider/tags.
-  const pos=TOK.filter(c=>c.s>0), neg=TOK.filter(c=>c.s<0);
-  [...pos, ...neg].forEach(c=> bar.insertBefore(mkWord(c), entry));
+  // keep words in the order they were typed — flipping polarity recolors in place,
+  // it does NOT regroup pos/neg. (buildQuery still orders pos-then-neg for the API.)
+  TOK.forEach(c=> bar.insertBefore(mkWord(c), entry));
   refresh();
 }
 
