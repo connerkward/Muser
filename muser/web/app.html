@@ -101,12 +101,17 @@
   body.cbar-on .searchbar { display:none; }          /* hide plain input when concept bar is active */
   .cbar { display:none; }
   body.cbar-on .cbar { display:flex; }
-  .cbar { align-items:center; gap:4px 14px; min-height:46px; padding:8px 12px;
+  /* Outer row holds the (scrollable) token area + the image-search icon + Search
+     button; only the inner .cbar-scroll scrolls, so the buttons never slide away. */
+  .cbar { align-items:center; gap:8px; min-height:46px; padding:6px 8px 6px 12px;
           margin-bottom:4px; border:1px solid var(--line); border-radius:2px;
-          background:transparent; cursor:text; flex-wrap:nowrap; overflow-x:auto; }
+          background:transparent; }
   .cbar:focus-within { border-color:var(--fg); }
-  .cbar::-webkit-scrollbar { height:6px; }
-  .cbar::-webkit-scrollbar-thumb { background:var(--line); }
+  .cbar-scroll { flex:1 1 auto; min-width:0; display:flex; align-items:center; gap:4px 14px;
+          flex-wrap:nowrap; overflow-x:auto; cursor:text; }
+  .cbar-scroll::-webkit-scrollbar { height:6px; }
+  .cbar-scroll::-webkit-scrollbar-thumb { background:var(--line); }
+  .cbar > .imgbtn, .cbar > .primary { flex:0 0 auto; }
   .cword { position:relative; flex:0 0 auto; color:var(--cc); cursor:ns-resize;
            user-select:none; touch-action:none; white-space:nowrap; padding-top:3px;
            font-family:var(--serif); transition:font-size .04s linear, opacity .1s; }
@@ -1081,7 +1086,11 @@
   <!-- Concept bar (debug-gated): weighted word-cloud that BUILDS the #q query
        string and reuses the existing search. Hidden unless body.cbar-on. -->
   <div class="cbar" id="cbar">
-    <input class="centry" id="cbarEntry" placeholder="type a concept…  (- to exclude · drag to weight)" autocomplete="off" spellcheck="false" />
+    <div class="cbar-scroll" id="cbarScroll">
+      <input class="centry" id="cbarEntry" placeholder="type a concept…  (- to exclude · drag to weight)" autocomplete="off" spellcheck="false" />
+    </div>
+    <button class="imgbtn" id="cbUploadBtn" type="button" title="Search by uploading an image — find visually similar">🖼</button>
+    <button class="primary" id="cbGo" type="button">Search</button>
   </div>
   <div class="upchip" id="uploadChip">
     <img id="uploadThumb" alt="" />
@@ -5172,10 +5181,15 @@ function manualOrbit(camera, el){
    ========================================================================== */
 const DBG_KEY = "muser.debug.grid";
 let _dbgPanel = null;
-const _dbgDefaults = { thumb: 230, cols: 0, masonry: false, concept: false };  // cols 0 = auto-fill; masonry off = square grid; concept = weighted word-cloud search bar
+const _dbgDefaults = { thumb: 230, cols: 0, masonry: false, concept: true };  // cols 0 = auto-fill; masonry off = square grid; concept = weighted word-cloud search bar (now the default)
 function _dbgLoad(){
-  try { return Object.assign({}, _dbgDefaults, JSON.parse(localStorage.getItem(DBG_KEY)||"{}")); }
-  catch { return Object.assign({}, _dbgDefaults); }
+  try {
+    const s = Object.assign({}, _dbgDefaults, JSON.parse(localStorage.getItem(DBG_KEY)||"{}"));
+    // One-time migration: the concept bar shipped to prod as the default. Flip it on
+    // for sessions that saved the old off-by-default before this, then respect choice.
+    if (!s._cbProd){ s.concept = true; s._cbProd = true; localStorage.setItem(DBG_KEY, JSON.stringify(s)); }
+    return s;
+  } catch { return Object.assign({}, _dbgDefaults); }
 }
 function _dbgSave(s){ try { localStorage.setItem(DBG_KEY, JSON.stringify(s)); } catch {} }
 
@@ -5228,7 +5242,7 @@ function _cbMkWord(c){
   return wd;
 }
 function cbRender(){
-  const bar = $("#cbar"), entry = $("#cbarEntry");
+  const bar = $("#cbarScroll"), entry = $("#cbarEntry");   // tokens live in the scroll area
   if (!bar) return;
   [...bar.querySelectorAll(".cword")].forEach(n => n.remove());
   // Words stay in typed order — flipping polarity recolors in place, never reorders.
@@ -5248,7 +5262,19 @@ function _cbWire(){
     if (e.key===","||e.key==="Enter"){ e.preventDefault(); _cbCommit(); }
     else if (e.key==="Backspace" && !entry.value && _CBTOK.length){ _CBTOK.pop(); cbRender(); cbApply(); }
   });
-  bar.addEventListener("click", e => { if (e.target.id==="cbar") entry.focus(); });
+  // typing a concept exits an active image-to-image search (mirrors the plain #q handler)
+  entry.addEventListener("input", () => {
+    if ($("#uploadChip") && $("#uploadChip").classList.contains("on") && entry.value.trim()) {
+      if (typeof _clearUploadChip === "function") _clearUploadChip();
+    }
+  });
+  bar.addEventListener("click", e => {
+    if (e.target.id==="cbar" || e.target.id==="cbarScroll") entry.focus();
+  });
+  // Image-to-image (library search by image) and a Search button, wired to the
+  // existing flows so they work while the concept bar is the active search UI.
+  const ib = $("#cbUploadBtn"); if (ib) ib.onclick = () => $("#uploadInput").click();
+  const go = $("#cbGo"); if (go) go.onclick = () => { _cbCommit(); cbApply(); };
 }
 // Seed the bar from whatever is already in #q so toggling on mid-search keeps it,
 // then render. Toggling off leaves #q as-is (plain search continues untouched).
