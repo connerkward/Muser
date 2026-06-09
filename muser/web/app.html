@@ -1046,6 +1046,7 @@
     <button class="filter-toggle" id="sortToggle" title="Blend ranking by aesthetic / pickscore on top of the vector match">
       <span class="caret">›</span> Sort…</button>
     <span style="flex:1"></span>
+    <span class="mut" id="resultCount"></span>
     <span class="mut" id="idxmsg"></span>
     <input type="hidden" id="scope" />
   </div>
@@ -3064,6 +3065,17 @@ function syncConsole(){
 
 let _currentResults = [];                                // last /api/search payload — used by the Search-tab sort blend
 
+// Result-count readout in the tools row. Reflects the cards actually on screen;
+// text/image/showcase grow via infinite scroll, so a trailing "+" means "more
+// load as you scroll". Filter mode is suppressed here — its true match total is
+// already shown in the Filter coverage line ("N matching · M indexed").
+function _updateResultCount(){
+  const el=$("#resultCount"); if(!el) return;
+  if(_mode==="filter"){ el.textContent=""; return; }
+  const n=_rendered;
+  if(!n){ el.textContent=""; return; }
+  el.textContent=`${n.toLocaleString()}${_hasMore?"+":""} result${n===1?"":"s"}`;
+}
 function _renderHits(r){
   const g=$("#results");
   if(_mode !== "showcase") _hideShowcaseBar();   // any real result set replaces the showcase
@@ -3074,7 +3086,7 @@ function _renderHits(r){
     $("#empty").textContent = $("#scope").value.trim()
       ? "No matches in this folder — try clearing the scope (✕) to search everywhere."
       : "No matches — is this folder indexed with the current model?";
-    _hasMore=false; renderRefinements([]); return;
+    _hasMore=false; renderRefinements([]); _updateResultCount(); return;
   }
   if (_mode==="text") _hasMore = r.results.length >= _k;  // text: full page ⇒ more ranked below. Other modes set _hasMore themselves.
   const _wasReset = (_rendered === 0);
@@ -3122,6 +3134,7 @@ function _renderHits(r){
     c2paFlag(c, h.path, h.c2pa);
   });
   _rendered = r.results.length;
+  _updateResultCount();
   ensureSentinel();
   renderRefinements(r.refinements || []);
   // If the user has a non-default sort blend dialed in, apply it after each page
