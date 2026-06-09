@@ -35,6 +35,12 @@ Live ideas to revisit, not yet scheduled. Promote to issues / commits when picke
 - **Caption post-process** — for style LoRAs, strip style-describing phrases from generated captions so the LoRA binds style to the trigger, not to explicit text. For subject LoRAs, leave style words in.
 - **End-to-end Muser → fal automation** — once cart-with-captions zip exports cleanly, wire `muser train-lora <zip> --base flux-fast` to call the fal MCP and surface the resulting `.safetensors` URL + a few sample generations for human verification.
 
+## UI / navigation
+
+- **Improve the cluster visualization** — the Explore 3D point cloud (`projection.py` + the Explore tab) reads as a faint scatter; make the clustering legible: better point sizing/opacity/depth cues, stronger cluster color separation, hover/label affordances, and a tighter default camera so the structure is obvious at a glance instead of a haze of dots.
+- **Sane routing — logical URLs + working back button** — give each surface a real, shareable location (`/#/search?q=…&folder=…`, `/#/explore`, `/#/jobs`, a result/detail route) so state lives in the URL, and make the browser **Back/Forward** button do what the user expects (return to the previous view/query, close an expanded panel, etc.) rather than dumping out of the app. Audit the current hash-router for dead-ends.
+- **Update the Jobs page** (`http://muser.local/#/jobs`) — revisit the Jobs view: what it shows, layout, and live-status polling. (Scope TBD — define the concrete changes before picking up.)
+
 ## Polish
 
 - **Negative-prompt α slider** — ✅ shipped 2026-06-03.

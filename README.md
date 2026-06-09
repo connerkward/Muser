@@ -65,9 +65,9 @@ link, Explore viz → hidden; the data itself is still computed locally).
 
 ## Screenshots
 
-| Explore — clustered map | Interesting — aesthetic ranking | AI — C2PA-flagged origins |
-| --- | --- | --- |
-| ![Explore tab — 3D point cloud colored by cluster, with named cluster previews](docs/screenshots/explore.jpg) | ![Interesting tab — images ranked by novelty × aesthetic score](docs/screenshots/interesting.jpg) | ![AI tab — images flagged AI-generated via C2PA Content Credentials](docs/screenshots/ai.jpg) |
+| Explore — clustered map | AI — C2PA-flagged origins |
+| --- | --- |
+| ![Explore tab — 3D point cloud colored by cluster, with named cluster previews](docs/screenshots/explore.jpg) | ![AI tab — images flagged AI-generated via C2PA Content Credentials](docs/screenshots/ai.jpg) |
 
 ## How it works
 
@@ -140,11 +140,13 @@ no path or runtime prefix is needed:
 { "mcpServers": { "muser": { "command": "muser-mcp" } } }
 ```
 
-`search_images` renders the interactive gallery as an _MCP App_ — the host opens it
-inline in the chat and in a side panel (blend/sort slider, dedup badges, folder scope,
-reverse-image). Below, the gallery open in Claude's side panel:
+`search_images` renders the interactive gallery as an _MCP App_ (blend/sort slider,
+dedup badges, folder scope, reverse-image) — the host shows it **inline** in the chat
+and lets you **expand** it into the side panel:
 
-![Muser's search_images gallery open as an MCP App in Claude's side panel](docs/screenshots/mcp-gallery.jpg)
+| Inline in the chat | Expanded into the side panel |
+| --- | --- |
+| ![Muser's search_images gallery as an inline MCP App card in a Claude chat](docs/screenshots/mcp-inline.jpg) | ![Muser's search_images gallery expanded into Claude's side panel](docs/screenshots/mcp-gallery.jpg) |
 
 <sub>Rendered via the [`@modelcontextprotocol/ext-apps`](https://github.com/modelcontextprotocol/ext-apps) host bridge in a Claude-style preview shell — the same MCP App component Claude Desktop loads.</sub>
 
