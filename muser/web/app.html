@@ -2333,7 +2333,11 @@ async function search(){
   // New query OR a forced clean re-run (demo-mode toggle) → reset paging + clear grid.
   // Without the _forceClean branch a same-key re-run keeps _rendered, so _renderHits
   // only appends the tail and a now-smaller result set never shrinks.
-  if(key!==_lastKey || forceClean){ _k=K_STEP; _lastKey=key; _rendered=0; _hasMore=true; showSkeletons(12); }
+  if(key!==_lastKey || forceClean){
+    _k=K_STEP; _lastKey=key; _rendered=0; _hasMore=true; showSkeletons(12);
+    _resultTotal=null;                              // recompute the total for the new universe
+    _fetchResultTotal(key, folder, fParams);        // async — updates the readout when it lands
+  }
   _mode="text"; _loading=true;
   if(_searchAbort) _searchAbort.abort();
   _searchAbort = new AbortController();
@@ -2381,7 +2385,7 @@ async function _loadShowcasePool(){
 }
 async function showShowcase(){
   _showcaseActive = true;
-  _mode = "showcase"; _hasMore = false; _rendered = 0;
+  _mode = "showcase"; _hasMore = false; _rendered = 0; _resultTotal = null;
   if(_searchAbort){ _searchAbort.abort(); _searchAbort = null; }
   showSkeletons(12);
   let pool;
@@ -3065,16 +3069,36 @@ function syncConsole(){
 
 let _currentResults = [];                                // last /api/search payload — used by the Search-tab sort blend
 
-// Result-count readout in the tools row. Reflects the cards actually on screen;
-// text/image/showcase grow via infinite scroll, so a trailing "+" means "more
-// load as you scroll". Filter mode is suppressed here — its true match total is
-// already shown in the Filter coverage line ("N matching · M indexed").
+// Result-count readout in the tools row. A vector search ranks the entire
+// deduped, in-scope, filtered corpus, so the "total" is that universe's size —
+// exactly what /api/filter counts for the same scope+filters with no query.
+// We fetch it once per search (async, off the render path) and cache it in
+// `_resultTotal`; until it lands we show the loaded count with a "+" so the
+// readout is never blank. Filter mode is suppressed — its true total already
+// shows in the Filter coverage line ("N matching · M indexed").
+let _resultTotal = null;   // true universe size for the active search, or null until fetched
 function _updateResultCount(){
   const el=$("#resultCount"); if(!el) return;
   if(_mode==="filter"){ el.textContent=""; return; }
   const n=_rendered;
   if(!n){ el.textContent=""; return; }
-  el.textContent=`${n.toLocaleString()}${_hasMore?"+":""} result${n===1?"":"s"}`;
+  if(_resultTotal!=null){
+    const t=Math.max(_resultTotal, n);
+    el.textContent=`${t.toLocaleString()} result${t===1?"":"s"}`;
+  } else {
+    el.textContent=`${n.toLocaleString()}${_hasMore?"+":""} result${n===1?"":"s"}`;
+  }
+}
+// Resolve the true total for a search universe via /api/filter (no query →
+// it returns `total` = deduped, hidden-/ai-/meta-filtered match count). Tagged
+// by `key` so a stale response from a superseded search is ignored.
+async function _fetchResultTotal(key, folder, fParams){
+  try {
+    const r = await (await fetch(`/api/filter?limit=1${folder?`&folder=${enc(folder)}`:""}${fParams}`)).json();
+    if(key !== _lastKey) return;            // a newer search took over → drop
+    _resultTotal = r.total;
+    _updateResultCount();
+  } catch { /* leave the N+ fallback in place */ }
 }
 function _renderHits(r){
   const g=$("#results");
@@ -3209,7 +3233,7 @@ async function _runImage(append){
   _searchAbort = new AbortController();
   $("#empty").style.display="none";
   _mode="image"; _lastKey="";
-  if(!append){ _rendered=0; showSkeletons(12); }
+  if(!append){ _rendered=0; _resultTotal=null; showSkeletons(12); }
   _loading = true;
   let r;
   try { r = await (await fetch(_imgUrlFn(_imgK), {signal:_searchAbort.signal})).json(); }
@@ -3253,7 +3277,7 @@ async function runCompose(){
   $("#empty").style.display="none";
   // Stay in compose mode: don't clobber #q (a #q keystroke would exit), but
   // _mode=image so the infinite-scroll loader stays off (fixed top-N).
-  _mode="image"; _lastKey=""; _rendered=0; _hasMore=false; showSkeletons(12);
+  _mode="image"; _lastKey=""; _rendered=0; _hasMore=false; _resultTotal=null; showSkeletons(12);
   const ref = _composeRef;
   toast(`Compose: ${ref.split("/").pop()} + “${text}”`);
   let r;
@@ -3357,7 +3381,7 @@ $("#uploadInput").addEventListener("change", async (e) => {
   toast(`Searching by image: ${file.name}`);
   if(_searchAbort) _searchAbort.abort();
   _searchAbort = new AbortController();
-  _mode = "image"; _lastKey = ""; _rendered = 0; _hasMore = false; showSkeletons(12);  // fixed top-N, no scroll-load
+  _mode = "image"; _lastKey = ""; _rendered = 0; _hasMore = false; _resultTotal = null; showSkeletons(12);  // fixed top-N, no scroll-load
   const fd = new FormData();
   fd.append("file", file);
   fd.append("k", "120");
