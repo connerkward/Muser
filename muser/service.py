@@ -766,24 +766,26 @@ def create_app(model: str = DEFAULT_MODEL):
                 {"path": p, "name": os.path.basename(p), "score": round(s, 4), "dupes": [p], "dupe_count": 1}
                 for p, s in state.index.search(state.model_name, qv, k=fetch_k, folder=folder, meta=meta)
             ]
+        return _postprocess(results, k, ai_min=_ai_min, sort=sort)
+
+    def _postprocess(results, k, ai_min=0, sort=None):
+        """Shared tail for every result-producing path (kNN blend AND multi-concept
+        match-all): live-file filtering + dead-group promotion, the centralized
+        hide policy, per-result enrichment (uid / prob / dims / scores / c2pa /
+        AI-likelihood), then the optional ai_min filter + AI sort, trimmed to k.
+        Input result dicts must carry at least path/name/score/dupes/dupe_count."""
         # Drop results whose canonical path no longer exists on disk, and prune
-        # dead entries from each result's `dupes[]`. The LanceDB index is
-        # append-by-mtime so deleted files linger in the table until the next
-        # full re-index; filtering at query time keeps stale hits out of the
-        # UI without forcing a rebuild. Only when the leading path is dead
-        # do we walk the precomputed dedup group (scores.json) to find a live
-        # member to promote — the common case (everything alive) stays a
-        # cheap stat-per-dupe.
+        # dead entries from each result's `dupes[]`. Only when the leading path is
+        # dead do we walk the precomputed dedup group (scores.json) to promote a
+        # live member — the common case (everything alive) stays a cheap stat.
         kept = []
-        dead_leads = []  # leads dropped here (whole group dead) → purge below
+        dead_leads = []
         for r in results:
             d = r.get("dupes") or [r["path"]]
             lead_alive = os.path.exists(r["path"])
             if lead_alive:
-                # Hot path: just trim dead dupes if any (usually a no-op).
                 live = [p for p in d if p == r["path"] or os.path.exists(p)]
             else:
-                # Cold path: look in the full group for a live alternate.
                 groups = _refresh_scores_cache()["groups"]
                 rep_of_map = _refresh_scores_cache()["rep_of"]
                 canon = rep_of_map.get(r["path"]) or r["path"]
@@ -803,9 +805,7 @@ def create_app(model: str = DEFAULT_MODEL):
             kept.append(r)
         results = kept
         if dead_leads:
-            _purge_dead(dead_leads)  # remove fully-dead groups from the index
-        # Centralized hide policy: drop NSFW / hidden-cluster / dead paths (and
-        # background-purge the dead survivors from the index).
+            _purge_dead(dead_leads)
         results = _filter_results(results)
         for r in results:
             r["uid"] = uid_for(r["path"])
@@ -814,12 +814,81 @@ def create_app(model: str = DEFAULT_MODEL):
         _attach_scores(results)
         _attach_c2pa(results)
         _attach_aidet(results)
-        if _ai_min > 0:
-            results = _filter_by_ai_min(results, _ai_min)
+        if int(ai_min or 0) > 0:
+            results = _filter_by_ai_min(results, int(ai_min))
         if sort in ("ai", "ai_asc"):
             results.sort(key=lambda r: (_ai_pct(r) if _ai_pct(r) is not None else -1),
                          reverse=(sort == "ai"))
         return results[:k]
+
+    def _parse_concepts(q: str):
+        """Split a query into signed concepts on commas. Each comma-separated part
+        is one concept; a leading '-' subtracts it (vector arithmetic), '+' / none
+        adds it. Returns [(text, sign), ...] lowercased. No comma → a single
+        concept (current single-vector behavior, unchanged)."""
+        out = []
+        for part in q.split(","):
+            t = part.strip()
+            if not t:
+                continue
+            sign = 1
+            if t[0] in "+-":
+                sign = -1 if t[0] == "-" else 1
+                t = t[1:].strip()
+            if t:
+                out.append((t.lower(), sign))
+        return out
+
+    def _blend_vector(emb, pos, neg, neg_strength):
+        """Sum unit-normalized positive concept embeddings, subtract negatives
+        (weighted by neg_strength), renormalize → one query vector. This is prompt
+        ensembling: each concept contributes equally instead of one long string
+        letting the bag-of-words encoder fixate on whichever token dominates."""
+        import numpy as np
+        vecs = emb.embed_queries(pos + neg) if (pos or neg) else []
+        qv = None
+        for i, _t in enumerate(pos):
+            v = vecs[i]
+            qv = v.copy() if qv is None else qv + v
+        for j, _t in enumerate(neg):
+            qv = qv - neg_strength * vecs[len(pos) + j] if qv is not None else -neg_strength * vecs[len(pos) + j]
+        n = float(np.linalg.norm(qv)) if qv is not None else 0.0
+        return qv / n if n > 0 else qv
+
+    def _search_match_all(pos, neg, k, folder, meta, neg_strength, ai_min, sort):
+        """Match-all (intersection) over multiple concepts: a result's score is the
+        MIN of its per-concept similarities — high only when EVERY concept is
+        strongly present (true AND), unlike a blended centroid which rewards
+        'a bit of each'. One kNN per concept (cheap), merged by min; a concept a
+        result misses entirely is floored at that concept's weakest pooled hit so
+        it ranks below results present in all. Negatives subtract their similarity."""
+        emb = state.warm()
+        pos_vecs = emb.embed_queries(pos)
+        neg_vecs = emb.embed_queries(neg) if neg else []
+        pool = min(max(k * 12, 240), 2400)
+        per = [dict(state.index.search(state.model_name, v, k=pool, folder=folder, meta=meta))
+               for v in pos_vecs]
+        neg_per = [dict(state.index.search(state.model_name, v, k=pool, folder=folder, meta=meta))
+                   for v in neg_vecs]
+        floors = [min(d.values()) if d else 0.0 for d in per]
+        cand = set().union(*[set(d) for d in per]) if per else set()
+        # Collapse near-dupes to canonical (scores.json), keeping the best score.
+        rep_of_map = _refresh_scores_cache()["rep_of"]
+        best: dict[str, float] = {}
+        for p in cand:
+            s = min(per[i].get(p, floors[i]) for i in range(len(per)))
+            for nh in neg_per:
+                s -= neg_strength * nh.get(p, 0.0)
+            canon = rep_of_map.get(p, p)
+            if canon not in best or s > best[canon]:
+                best[canon] = s
+        ranked = sorted(best.items(), key=lambda kv: -kv[1])[: max(k * 4, 200)]
+        results = [
+            {"path": p, "name": os.path.basename(p), "score": round(float(s), 4),
+             "dupes": [p], "dupe_count": 1}
+            for p, s in ranked
+        ]
+        return _postprocess(results, k, ai_min=ai_min, sort=sort)
 
     # Cache the parsed scores.json by mtime so the Search-tab sort-blend join
     # is one disk read per scores.json update, not one per request. Also
@@ -1061,7 +1130,7 @@ def create_app(model: str = DEFAULT_MODEL):
     @app.get("/api/search")
     def search(q: str, k: int = 24, dedup: bool = True, method: str = "embed", folder: str | None = None,
                neg: str | None = None, neg_strength: float = 0.5,
-               ai_min: int = 0, sort: str | None = None,
+               ai_min: int = 0, sort: str | None = None, match: str = "blend",
                min_width: int | None = None, max_width: int | None = None,
                min_height: int | None = None, max_height: int | None = None,
                min_short_side: int | None = None, max_short_side: int | None = None,
@@ -1082,18 +1151,6 @@ def create_app(model: str = DEFAULT_MODEL):
         # the kNN limit applies AFTER the cut (otherwise the top-k of out-of-
         # filter neighbors could return zero in-filter hits).
         emb = state.warm()
-        # Lowercase query text before embedding: SigLIP/CLIP tokenizers are
-        # case-sensitive and were trained on lowercased alt-text, so "Porsche
-        # interior" and "porsche interior" embed to very different vectors (the
-        # capitalized form returns garbage). Normalizing makes case irrelevant.
-        qv = emb.embed_queries([q.lower()])[0]
-        if neg and neg.strip():
-            import numpy as np
-            nv = emb.embed_queries([neg.lower()])[0]
-            qv = qv - neg_strength * nv
-            n = float(np.linalg.norm(qv))
-            if n > 0:
-                qv = qv / n
         meta = _meta_from_params(
             min_width=min_width, max_width=max_width, min_height=min_height, max_height=max_height,
             min_short_side=min_short_side, max_short_side=max_short_side,
@@ -1101,9 +1158,29 @@ def create_app(model: str = DEFAULT_MODEL):
             min_aspect=min_aspect, max_aspect=max_aspect,
             min_filesize=min_filesize, max_filesize=max_filesize,
         )
-        results = _run_search(qv, k, dedup, method, folder, meta=meta, ai_min=ai_min, sort=sort)
+        # Comma syntax → multiple concepts ("depth map, person, -blurry"). Each is
+        # embedded separately; a leading '-' subtracts. The shared `neg` param is
+        # folded in as one more negative. With one concept and no neg this is the
+        # plain single-vector path (lowercased — SigLIP/CLIP tokenizers are
+        # case-sensitive and trained on lowercased alt-text).
+        concepts = _parse_concepts(q)
+        pos = [t for t, s in concepts if s > 0] or [q.lower()]
+        negs = [t for t, s in concepts if s < 0]
+        if neg and neg.strip():
+            negs.append(neg.lower())
+        if match == "all" and len(pos) >= 2:
+            # Match-all (intersection): each concept must be strongly present.
+            results = _search_match_all(pos, negs, k, folder, meta, neg_strength, ai_min, sort)
+        else:
+            # Blend (default): sum the positive concept vectors, subtract negatives.
+            if len(pos) == 1 and not negs:
+                qv = emb.embed_queries([pos[0]])[0]
+            else:
+                qv = _blend_vector(emb, pos, negs, neg_strength)
+            results = _run_search(qv, k, dedup, method, folder, meta=meta, ai_min=ai_min, sort=sort)
         refinements = _refinements([r["path"] for r in results], q)
-        return {"query": q, "model": state.model_name, "results": results, "refinements": refinements}
+        return {"query": q, "model": state.model_name, "results": results,
+                "refinements": refinements, "concepts": concepts, "match": match}
 
     def _dinov2_results(path: str, k: int):
         """Reverse-image (Similar) in the OPTIONAL DINOv2 space, reusing stored

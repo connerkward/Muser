@@ -187,6 +187,7 @@ def search(
     in_: str = typer.Option(None, "--in", help="Limit to images under this folder (any depth)"),
     ai_min: int = typer.Option(0, "--ai-min", help="Keep only results with AI-likelihood %% >= this (0–100)"),
     sort: str = typer.Option(None, "--sort", help='Reorder results: "ai" (most-AI first) | "ai_asc" (least-AI first)'),
+    match: str = typer.Option("blend", "--match", help='Multi-concept (comma) query mode: "blend" (sum vectors) | "all" (each concept must match)'),
     min_short: int = typer.Option(None, "--min-short-side", help="Min short side in px"),
     max_long: int = typer.Option(None, "--max-long-side", help="Max long side in px"),
     model: str = typer.Option(DEFAULT_MODEL, help="Embedding model (only with --local)"),
@@ -194,9 +195,12 @@ def search(
 ):
     """Search the index by natural-language description.
 
-    Scope with --in <folder>; filter by AI-likelihood with --ai-min N; reorder with
-    --sort ai|ai_asc; constrain resolution with --min-short-side / --max-long-side.
-    These filter/sort options ride the same /api/search the web UI and MCP use.
+    Multi-concept: separate concepts with commas — "car, snow" — to combine them as
+    separate vectors; prefix one with "-" to subtract it ("car, -person"). --match blend
+    (default) sums the concept vectors; --match all keeps only images where EACH concept
+    is strongly present (intersection). Scope with --in <folder>; filter by AI-likelihood
+    with --ai-min N; reorder with --sort ai|ai_asc; constrain resolution with
+    --min-short-side / --max-long-side. All ride the same /api/search the web UI and MCP use.
     """
     q = " ".join(query)
     folder = str(Path(in_).expanduser()) if in_ else None
@@ -209,6 +213,8 @@ def search(
             params["ai_min"] = ai_min
         if sort:
             params["sort"] = sort
+        if match and match != "blend":
+            params["match"] = match
         if min_short:
             params["min_short_side"] = min_short
         if max_long:

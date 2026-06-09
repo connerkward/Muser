@@ -121,6 +121,7 @@ export async function ensureService(maxWaitMs = 120_000): Promise<StatusResponse
 export interface SearchOpts {
   ai_min?: number;        // keep only results with AI-likelihood % >= this (0–100)
   sort?: string;          // "ai" (most-AI first) | "ai_asc" (least-AI first)
+  match?: string;         // multi-concept (comma query) mode: "blend" | "all"
   min_short_side?: number;
   max_long_side?: number;
 }
@@ -141,6 +142,7 @@ export async function search(
   if (folder) url += `&folder=${encodeURIComponent(folder)}`;
   if (opts.ai_min) url += `&ai_min=${opts.ai_min}`;
   if (opts.sort) url += `&sort=${encodeURIComponent(opts.sort)}`;
+  if (opts.match && opts.match !== "blend") url += `&match=${encodeURIComponent(opts.match)}`;
   if (opts.min_short_side) url += `&min_short_side=${opts.min_short_side}`;
   if (opts.max_long_side) url += `&max_long_side=${opts.max_long_side}`;
   const r = await fetch(url, { signal: AbortSignal.timeout(60_000) });

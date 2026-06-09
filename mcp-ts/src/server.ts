@@ -268,13 +268,20 @@ export function createServer(): McpServer {
         "gallery of the best matches. Searches the whole index by default; pass a folder only to " +
         "scope/ensure indexing of a specific folder first. Optional filters: ai_min (keep only " +
         "results whose AI-generated likelihood %% is at least this), sort ('ai' = most-AI-likely " +
-        "first, 'ai_asc' = least), and min_short_side / max_long_side resolution bounds in px.",
+        "first, 'ai_asc' = least), and min_short_side / max_long_side resolution bounds in px. " +
+        "Multi-concept: separate concepts with commas (e.g. 'car, snow') to combine them as " +
+        "separate vectors, and prefix one with '-' to subtract it ('car, -person'); the `match` " +
+        "param picks how comma concepts combine.",
       inputSchema: {
         folder: z
           .string()
           .optional()
           .describe("Optional absolute folder path to index before searching. Omit to search the whole library."),
-        query: z.string().describe("Natural-language description of the image to find"),
+        query: z.string().describe("Natural-language description; use commas for multiple concepts ('car, snow'), '-' to subtract ('car, -person')"),
+        match: z
+          .enum(["blend", "all"])
+          .optional()
+          .describe("How comma-separated concepts combine: 'blend' (sum vectors, looser; default) or 'all' (each concept must be strongly present — intersection)."),
         k: z.number().optional().describe("How many results to return (default 24)"),
         ai_min: z
           .number()
@@ -289,7 +296,7 @@ export function createServer(): McpServer {
       },
       _meta: { ui: { resourceUri: RESOURCE_URI } },
     },
-    async ({ folder, query, k, ai_min, sort, min_short_side, max_long_side }) => {
+    async ({ folder, query, k, ai_min, sort, match, min_short_side, max_long_side }) => {
       await ensureService();
       if (folder) {
         // Ensure the requested folder is in the index before searching it.
@@ -299,6 +306,7 @@ export function createServer(): McpServer {
       const { results, refinements } = await search(query, count, folder, {
         ai_min,
         sort,
+        match,
         min_short_side,
         max_long_side,
       });

@@ -306,6 +306,19 @@ pass over the 17.9k uniques, so reserved for selective lookups, not wired in.
 - **Query normalization.** Text queries are lowercased before embedding (`q.lower()`) in
   /api/search, /api/search-compose, /api/score, etc. — the SigLIP tokenizer is
   case-sensitive, so "Red Car" and "red car" otherwise embed differently.
+- **Multi-concept queries (comma syntax).** `/api/search` splits the query on commas into
+  signed concepts (`_parse_concepts`): each is embedded separately and a leading `-`
+  subtracts it (vector arithmetic, generalizing the older `neg` param, which is folded in as
+  one more negative). `match=blend` (default) sums the positive concept vectors and subtracts
+  negatives into ONE query vector (`_blend_vector` — prompt-ensembling, so each concept gets
+  equal weight instead of one long string letting the bag-of-words encoder fixate); `match=all`
+  is intersection (`_search_match_all`): one kNN per concept, a result scored by the MIN of its
+  per-concept similarities (high only when EVERY concept is strongly present), missing concepts
+  floored at that concept's weakest pooled hit, negatives subtracted. Both paths share
+  `_postprocess` (live-file/dead-group handling + hide policy + enrichment + ai_min/sort),
+  factored out of `_run_search`. Single concept + no neg → the unchanged single-vector path.
+  Surfaced in web (a Blend/Match-all segmented toggle that appears when the query has ≥2 comma
+  concepts), CLI (`muser search "a, b" --match all`), and MCP (`search_images match=`).
 - **Known limitation — case-sensitive folder scoping:** the `/api/search?folder=` path
   prefilter compares case-sensitively, but NTFS/APFS are case-insensitive, so scoping with
   altered casing returns 0 results. Proper fix = a normalized `pathkey` column (schema

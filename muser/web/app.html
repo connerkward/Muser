@@ -120,6 +120,12 @@
            min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .tools #idxmsg { flex:0 1 auto; max-width:34ch; }
   .tools #scopemsg, .tools .filter-cov { flex:0 1 auto; max-width:30ch; }
+  /* segmented toggle (Blend / Match all) */
+  .seg { display:inline-flex; border:1px solid var(--line, #cfc8b6); border-radius:0; overflow:hidden; }
+  .seg button { background:transparent; border:0; padding:2px 10px; font-size:11px;
+                color:var(--mut); cursor:pointer; border-right:1px solid var(--line, #cfc8b6); }
+  .seg button:last-child { border-right:0; }
+  .seg button.on { background:var(--fg); color:var(--bg); }
 
   .upload { background:transparent; border:0; padding:0; color:var(--fg);
             font-size:13px; cursor:pointer; border-bottom:1px solid var(--fg); }
@@ -1037,6 +1043,17 @@
     <span>Exclude strength:</span>
     <input type="range" id="negStrength" min="0" max="1.5" step="0.05" value="0.5" />
     <span class="mut" id="negStrengthVal">0.50</span>
+  </div>
+  <!-- Multi-concept row: appears only when the query has a comma (≥2 concepts).
+       Blend = one search toward the mix of concepts (images evoking all together);
+       Match all = each concept must be strongly present (true intersection). -->
+  <div class="row tools" id="conceptRow" style="display:none">
+    <span title="Separate concepts with commas, e.g. &quot;car, snow&quot;. Prefix one with &quot;-&quot; to subtract it (&quot;car, -person&quot;).">Concepts:</span>
+    <span class="mut" id="conceptList"></span>
+    <span class="mut">·</span>
+    <span class="seg" id="matchSeg">
+      <button data-match="blend" class="on" title="Find images evoking the BLEND of all concepts together (one vector = their sum). Looser, faster.">Blend</button><button data-match="all" title="Find images where EACH concept is strongly present (ranked by the weakest concept's match). Stricter intersection.">Match all</button>
+    </span>
   </div>
   <div class="row tools">
     <span>Scope:</span>
@@ -2263,6 +2280,25 @@ $("#scopeClear").onclick = ()=> setScope("");
 const K_STEP=120;                                  // results fetched per page; infinite scroll pulls another K_STEP deeper
 const SCROLL_BUFFER=1500;                           // px below the viewport to prefetch the next page, ahead of the user
 let _searchAbort=null, _searchTimer=null, _k=K_STEP, _lastKey="", _mode="text";
+// Multi-concept search: "blend" (sum concept vectors) | "all" (each must match).
+let _matchMode="blend";
+// Show the Blend/Match-all toggle only when the query has ≥2 comma concepts.
+function _conceptsOf(q){ return q.split(",").map(s=>s.trim()).filter(Boolean); }
+function syncConceptRow(){
+  const row=$("#conceptRow"); if(!row) return;
+  const cs=_conceptsOf($("#q").value);
+  const positives=cs.filter(c=>!c.startsWith("-"));
+  if(positives.length>=2){
+    row.style.display="";
+    $("#conceptList").textContent = cs.map(c=>c.startsWith("-")?`−${c.slice(1).trim()}`:c).join("  +  ").replace(/\+\s+−/g,"−");
+  } else { row.style.display="none"; }
+}
+$("#matchSeg") && $("#matchSeg").addEventListener("click", e=>{
+  const b=e.target.closest("button[data-match]"); if(!b) return;
+  _matchMode=b.dataset.match;
+  $("#matchSeg").querySelectorAll("button").forEach(x=>x.classList.toggle("on", x===b));
+  if($("#q").value.trim().length>=2) liveSearch();
+});
 let _rendered=0, _loading=false, _hasMore=true, _io=null;
 // Set by refreshActiveView() (e.g. demo-mode toggle) to force the *next* view
 // re-run to do a CLEAN re-render — reset pagination + clear the grid even when the
@@ -2331,7 +2367,9 @@ async function search(){
   // negS must be in the key: changing only the exclude strength fetches a new
   // ranking, so the grid has to reset+re-render. Omitting it froze results
   // (key unchanged → _rendered never reset → _renderHits appended nothing).
-  const key=q+"|"+folder+"|"+neg+"|"+(neg?negS:"")+"|"+fParams;
+  const multi = _conceptsOf(q).filter(c=>!c.startsWith("-")).length >= 2;
+  const matchP = (multi && _matchMode==="all") ? "&match=all" : "";
+  const key=q+"|"+folder+"|"+neg+"|"+(neg?negS:"")+"|"+fParams+"|"+(multi?_matchMode:"");
   // New query OR a forced clean re-run (demo-mode toggle) → reset paging + clear grid.
   // Without the _forceClean branch a same-key re-run keeps _rendered, so _renderHits
   // only appends the tail and a now-smaller result set never shrinks.
@@ -2344,7 +2382,7 @@ async function search(){
   if(_searchAbort) _searchAbort.abort();
   _searchAbort = new AbortController();
   let r;
-  try { r = await (await fetch(`/api/search?q=${enc(q)}&k=${_k}${folder?`&folder=${enc(folder)}`:""}${neg?`&neg=${enc(neg)}&neg_strength=${negS}`:""}${fParams}`, {signal:_searchAbort.signal})).json(); }
+  try { r = await (await fetch(`/api/search?q=${enc(q)}&k=${_k}${folder?`&folder=${enc(folder)}`:""}${neg?`&neg=${enc(neg)}&neg_strength=${negS}`:""}${matchP}${fParams}`, {signal:_searchAbort.signal})).json(); }
   catch(e){ if(e.name==="AbortError") return; _loading=false; throw e; }   // abort: a newer search now owns _loading
   _renderHits(r);
   _loading=false;
@@ -3422,6 +3460,7 @@ $("#q").addEventListener("input", ()=>{
   if ($("#uploadChip").classList.contains("on") && $("#q").value.trim().length > 0) _clearUploadChip();
   document.body.classList.toggle("has-query", $("#q").value.trim().length > 0);
   $("#qMini").value = $("#q").value;     // mirror main → mini
+  syncConceptRow();                       // show/hide the Blend/Match-all toggle on comma
   liveSearch();
 });
 $("#neg").addEventListener("input", () => {
