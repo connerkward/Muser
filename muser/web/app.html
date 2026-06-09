@@ -5205,15 +5205,23 @@ let _CBTOK = [];   // [{t,w,s}]  s=+1 find / -1 exclude, w 0..1 (100% default, d
 const _cbClamp = (v,a,b) => Math.max(a, Math.min(b, v));
 function cbConceptOn(){ try { return !!_dbgLoad().concept; } catch { return false; } }
 // Build the `concept, concept:0.60, -concept` string fed to muser's /api/search.
-function cbBuildQuery(){
+function cbBuildQuery(pending){
   const pos = _CBTOK.filter(c=>c.s>0), neg = _CBTOK.filter(c=>c.s<0);
   const part = (arr, sign) => arr.filter(c=>c.w>0.04)
     .map(c => `${sign}${c.t}${Math.abs(c.w-1)<0.04 ? "" : ":"+c.w.toFixed(2)}`);
-  return [...part(pos,""), ...part(neg,"-")].join(", ");
+  const out = [...part(pos,""), ...part(neg,"-")];
+  // Include the word still being typed (uncommitted) so results update live while
+  // you type — restores auto-search-on-keystroke that the plain #q input had.
+  const p = (pending||"").trim();
+  if (p){
+    const neg_ = p[0]==="-"; const t = (neg_||p[0]==="+" ? p.slice(1) : p).trim();
+    if (t) out.push((neg_?"-":"")+t);
+  }
+  return out.join(", ");
 }
 // Push the built query into the real search box and fire the existing pipeline.
 function cbApply(){
-  const q = cbBuildQuery();
+  const q = cbBuildQuery($("#cbarEntry") && $("#cbarEntry").value);
   const qin = $("#q");
   qin.value = q;
   if (q.trim().length >= 2) liveSearch();
@@ -5262,11 +5270,13 @@ function _cbWire(){
     if (e.key===","||e.key==="Enter"){ e.preventDefault(); _cbCommit(); }
     else if (e.key==="Backspace" && !entry.value && _CBTOK.length){ _CBTOK.pop(); cbRender(); cbApply(); }
   });
-  // typing a concept exits an active image-to-image search (mirrors the plain #q handler)
+  // Live search on every keystroke (incl. the uncommitted word) — restores the plain
+  // bar's auto-search-while-typing. Also exits an image search when you start typing.
   entry.addEventListener("input", () => {
     if ($("#uploadChip") && $("#uploadChip").classList.contains("on") && entry.value.trim()) {
       if (typeof _clearUploadChip === "function") _clearUploadChip();
     }
+    cbApply();
   });
   bar.addEventListener("click", e => {
     if (e.target.id==="cbar" || e.target.id==="cbarScroll") entry.focus();
