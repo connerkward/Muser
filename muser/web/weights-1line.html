@@ -17,9 +17,9 @@
         border:1px solid var(--line); background:#fffc; cursor:text; flex-wrap:nowrap; overflow-x:auto; }
   .bar:focus-within{ border-color:var(--fg); }
   .bar::-webkit-scrollbar{ height:6px; } .bar::-webkit-scrollbar-thumb{ background:var(--line); }
-  .div{ flex:0 0 auto; align-self:stretch; width:1px; background:var(--line); margin:4px 4px; }
   .word{ position:relative; flex:0 0 auto; color:var(--c); cursor:ns-resize; user-select:none; touch-action:none;
          white-space:nowrap; transition:font-size .04s linear, opacity .1s; padding-top:3px; }
+  .word .neg{ color:inherit; }
   .word .cw{ font:10px var(--mono); color:var(--mut); vertical-align:super; margin-left:2px; }
   .word .rm{ position:absolute; top:-9px; right:-11px; width:16px; height:16px; line-height:14px; text-align:center;
              font:13px/14px var(--mono); color:var(--fg); background:var(--bg); border:1px solid var(--fg);
@@ -38,18 +38,14 @@
   .results img{ width:100%; height:100%; object-fit:cover; display:block; }
   .results .s{ position:absolute; top:4px; left:4px; background:#000a; color:#fff; font:10px var(--mono); padding:1px 5px; }
 </style></head><body>
-<h1>Weighted word-cloud — one line, split find/exclude</h1>
-<div class="sub">One bar, like muser's search field: <b class="gp">find</b> words on the left, a divider, then
-<b class="gn">exclude</b> words on the right. Type to add (prefix <code>-</code> to exclude); <b>click</b> a word to
-flip its side, <b>drag</b> it up/down to weight it (starts 100%, only down). Hover for ×.</div>
+<h1>Weighted word-cloud — one line</h1>
+<div class="sub">One bar: <b class="gp">find</b> words in green, <b class="gn">exclude</b> words in red (with a <code>-</code>).
+Type to add (prefix <code>-</code> to exclude); <b>click</b> a word to flip green↔red, <b>drag</b> it up/down to
+weight it (starts 100%, only down). Hover for ×.</div>
 
 <div class="bar" id="bar">
-  <span class="ph p" id="phP">find</span>
-  <span class="div" id="div"></span>
-  <span class="ph n" id="phN">exclude</span>
   <input class="entry" id="entry" placeholder="type a concept…  (- to exclude)" autocomplete="off" spellcheck="false">
 </div>
-<div class="hint">Positives and negatives share one line — the divider splits them.</div>
 
 <div class="qline"><b>query →</b><span id="qstr"></span> <span class="meta" id="status"></span></div>
 <div class="results" id="results"></div>
@@ -69,7 +65,7 @@ function refresh(){ $("#qstr").textContent=buildQuery()||"(empty)"; scheduleSear
 function mkWord(c){
   const ac=c.s<0?"var(--neg)":"var(--pos)";
   const wd=document.createElement("span"); wd.className="word"; wd.style.setProperty("--c",ac);
-  wd.innerHTML=`${c.t}<span class="cw"></span><span class="rm" title="remove">×</span>`;
+  wd.innerHTML=`${c.s<0?'<span class="neg">-</span>':''}${c.t}<span class="cw"></span><span class="rm" title="remove">×</span>`;
   const cw=wd.querySelector(".cw");
   const paint=()=>{ wd.style.fontSize=clamp(15+c.w*15,15,30)+"px"; wd.style.opacity=clamp(.5+c.w*.5,.4,1);
     cw.textContent=Math.round(c.w*100)+"%"; };
@@ -86,17 +82,11 @@ function mkWord(c){
   return wd;
 }
 function render(){
-  const bar=$("#bar"), div=$("#div"), entry=$("#entry"), phP=$("#phP"), phN=$("#phN");
+  const bar=$("#bar"), entry=$("#entry");
   [...bar.querySelectorAll(".word")].forEach(n=>n.remove());
+  // one line, grouped by color: positives (green) first, then negatives (red). No divider/tags.
   const pos=TOK.filter(c=>c.s>0), neg=TOK.filter(c=>c.s<0);
-  // positives: after phP, before divider
-  pos.forEach(c=> bar.insertBefore(mkWord(c), div));
-  // negatives: after divider, before entry
-  neg.forEach(c=> bar.insertBefore(mkWord(c), entry));
-  // show the divider + exclude tag only when both sides are in play; placeholders guide when empty
-  div.style.display = neg.length ? "" : "none";
-  phN.style.display = neg.length ? "" : "none";
-  phP.style.display = pos.length ? "none" : "";   // "find" hint only while empty
+  [...pos, ...neg].forEach(c=> bar.insertBefore(mkWord(c), entry));
   refresh();
 }
 
