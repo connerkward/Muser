@@ -559,6 +559,8 @@
 
   body.has-query .chip::before { content:"+ "; color:var(--mut); }
   body.has-query .chip.refine::before { content:"→ "; }
+  /* concept bar active → chips ADD a concept tag, so signal "+" not "→" */
+  body.cbar-on .chip.refine::before { content:"+ "; }
 
   /* Mini search bar: a sliver that slides in from the top when the main
      searchbar scrolls out of view, so search is never more than a tab away
@@ -3445,6 +3447,15 @@ $("#composeBeta").addEventListener("input",  () => $("#composeBetaV").textConten
 // Lets chips act as drill-down filters on the current query
 // instead of always starting over.
 function applyQuery(text){
+  // Concept bar active → the "you might also try" / "in this library" chips add the
+  // suggestion as a weighted concept TAG (a token), not plain text shoved into #q.
+  if (typeof cbConceptOn === "function" && cbConceptOn()){
+    const t = String(text).toLowerCase().trim();
+    if (t && !_CBTOK.some(c => c.t===t && c.s>0)) _CBTOK.push({ t, w:1, s:1 });
+    document.body.classList.add("has-query");
+    cbRender(); cbApply();
+    return;
+  }
   const cur = $("#q").value.trim();
   $("#q").value = cur ? cur + " " + text : text;
   document.body.classList.add("has-query");
