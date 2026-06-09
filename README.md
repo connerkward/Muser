@@ -5,6 +5,8 @@
 **Accessible, local-first image search — with features pointed at asset generation
 and taste / curation for model training.**
 
+![Muser search UI — semantic search for "sunset over water"](docs/screenshots/search.jpg)
+
 Muser indexes a folder of images, lets you search it by natural language, and treats
 that index as the substrate for two adjacent jobs: (1) **finding source assets** for
 generative work — image-to-image search, the selection cart, reverse-image lookup,
@@ -60,6 +62,12 @@ link, Explore viz → hidden; the data itself is still computed locally).
   opt-in DINOv2 space (finer, named clusters).
 - **Reverse-image lookup** — one-click, $0: copies the image to the clipboard and opens
   Google Lens (source) or TinEye (provenance); nothing leaves the machine until you paste.
+
+## Screenshots
+
+| Explore — clustered map | Interesting — aesthetic ranking | AI — C2PA-flagged origins |
+| --- | --- | --- |
+| ![Explore tab — 3D point cloud colored by cluster, with named cluster previews](docs/screenshots/explore.jpg) | ![Interesting tab — images ranked by novelty × aesthetic score](docs/screenshots/interesting.jpg) | ![AI tab — images flagged AI-generated via C2PA Content Credentials](docs/screenshots/ai.jpg) |
 
 ## How it works
 
