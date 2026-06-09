@@ -1,0 +1,125 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Weighted word-cloud — one line, split find/exclude</title>
+<style>
+  :root{ --bg:#f4efe3; --fg:#1a1813; --mut:#8a8270; --line:#d8d0bd;
+         --pos:#2f7d52; --neg:#b4452f; --serif:'Iowan Old Style',Georgia,serif; --mono:ui-monospace,'SF Mono',Menlo,monospace; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 var(--serif);
+        -webkit-font-smoothing:antialiased; padding:30px clamp(16px,5vw,60px) 60px; }
+  h1{ font-size:20px; font-weight:600; margin:0 0 3px; }
+  .sub{ color:var(--mut); font-size:13px; margin-bottom:20px; max-width:76ch; }
+  .sub code{ font:12px var(--mono); background:#0001; padding:1px 4px; }
+  .sub b.gp{ color:var(--pos); } .sub b.gn{ color:var(--neg); }
+
+  /* one-line bar: positives · divider · negatives · input — all on a single row */
+  .bar{ display:flex; align-items:center; gap:4px 14px; min-height:60px; padding:10px 14px;
+        border:1px solid var(--line); background:#fffc; cursor:text; flex-wrap:nowrap; overflow-x:auto; }
+  .bar:focus-within{ border-color:var(--fg); }
+  .bar::-webkit-scrollbar{ height:6px; } .bar::-webkit-scrollbar-thumb{ background:var(--line); }
+  .div{ flex:0 0 auto; align-self:stretch; width:1px; background:var(--line); margin:4px 4px; }
+  .word{ position:relative; flex:0 0 auto; color:var(--c); cursor:ns-resize; user-select:none; touch-action:none;
+         white-space:nowrap; transition:font-size .04s linear, opacity .1s; padding-top:3px; }
+  .word .cw{ font:10px var(--mono); color:var(--mut); vertical-align:super; margin-left:2px; }
+  .word .rm{ position:absolute; top:-9px; right:-11px; width:16px; height:16px; line-height:14px; text-align:center;
+             font:13px/14px var(--mono); color:var(--fg); background:var(--bg); border:1px solid var(--fg);
+             border-radius:50%; cursor:pointer; opacity:0; transition:opacity .1s,color .1s,background .1s,border-color .1s; }
+  .word:hover .rm{ opacity:1; } .word .rm:hover{ color:#fff; background:var(--neg); border-color:var(--neg); }
+  .word.drag{ opacity:.7; }
+  .entry{ flex:1 0 130px; border:0; outline:0; background:none; font:17px var(--serif); color:var(--fg); padding:4px 2px; }
+  .ph{ flex:0 0 auto; font-size:9px; letter-spacing:.08em; text-transform:uppercase; color:var(--mut); align-self:center; }
+  .ph.p{ color:var(--pos); } .ph.n{ color:var(--neg); }
+
+  .hint{ color:var(--mut); font-size:12px; font-style:italic; margin:9px 2px 0; }
+  .qline{ font:12.5px var(--mono); margin:18px 2px 4px; } .qline b{ color:var(--mut); font-style:italic; font-family:var(--serif); margin-right:6px; }
+  .meta{ color:var(--mut); font-size:12px; }
+  .results{ display:grid; grid-template-columns:repeat(auto-fill,minmax(116px,1fr)); gap:8px; margin-top:16px; }
+  .results .c{ aspect-ratio:1; background:#0001; overflow:hidden; position:relative; }
+  .results img{ width:100%; height:100%; object-fit:cover; display:block; }
+  .results .s{ position:absolute; top:4px; left:4px; background:#000a; color:#fff; font:10px var(--mono); padding:1px 5px; }
+</style></head><body>
+<h1>Weighted word-cloud — one line, split find/exclude</h1>
+<div class="sub">One bar, like muser's search field: <b class="gp">find</b> words on the left, a divider, then
+<b class="gn">exclude</b> words on the right. Type to add (prefix <code>-</code> to exclude); <b>click</b> a word to
+flip its side, <b>drag</b> it up/down to weight it (starts 100%, only down). Hover for ×.</div>
+
+<div class="bar" id="bar">
+  <span class="ph p" id="phP">find</span>
+  <span class="div" id="div"></span>
+  <span class="ph n" id="phN">exclude</span>
+  <input class="entry" id="entry" placeholder="type a concept…  (- to exclude)" autocomplete="off" spellcheck="false">
+</div>
+<div class="hint">Positives and negatives share one line — the divider splits them.</div>
+
+<div class="qline"><b>query →</b><span id="qstr"></span> <span class="meta" id="status"></span></div>
+<div class="results" id="results"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+let TOK=[];   // [{t,w,s}]  s=+1 find / -1 exclude, w 0..1 (100% default, down-only)
+
+function buildQuery(){
+  const pos=TOK.filter(c=>c.s>0), neg=TOK.filter(c=>c.s<0);
+  const part=(arr,sign)=>arr.filter(c=>c.w>0.04).map(c=>`${sign}${c.t}${Math.abs(c.w-1)<0.04?"":":"+c.w.toFixed(2)}`);
+  return [...part(pos,""), ...part(neg,"-")].join(", ");
+}
+function refresh(){ $("#qstr").textContent=buildQuery()||"(empty)"; scheduleSearch(); }
+
+function mkWord(c){
+  const ac=c.s<0?"var(--neg)":"var(--pos)";
+  const wd=document.createElement("span"); wd.className="word"; wd.style.setProperty("--c",ac);
+  wd.innerHTML=`${c.t}<span class="cw"></span><span class="rm" title="remove">×</span>`;
+  const cw=wd.querySelector(".cw");
+  const paint=()=>{ wd.style.fontSize=clamp(15+c.w*15,15,30)+"px"; wd.style.opacity=clamp(.5+c.w*.5,.4,1);
+    cw.textContent=Math.round(c.w*100)+"%"; };
+  paint();
+  let st=null;
+  wd.addEventListener("pointerdown",e=>{ if(e.target.classList.contains("rm"))return;
+    st={y:e.clientY,w0:c.w,moved:false}; wd.setPointerCapture(e.pointerId); e.preventDefault(); });
+  wd.addEventListener("pointermove",e=>{ if(!st)return; const dy=e.clientY-st.y;
+    if(Math.abs(dy)>3){ st.moved=true; wd.classList.add("drag"); }
+    c.w=clamp(st.w0-dy*0.007,0,1); paint(); refresh(); });
+  wd.addEventListener("pointerup",()=>{ if(st && !st.moved){ c.s*=-1; render(); refresh(); }  // tap = flip side
+    st=null; wd.classList.remove("drag"); });
+  wd.querySelector(".rm").addEventListener("click",e=>{ e.stopPropagation(); const i=TOK.indexOf(c); if(i>=0)TOK.splice(i,1); render(); refresh(); });
+  return wd;
+}
+function render(){
+  const bar=$("#bar"), div=$("#div"), entry=$("#entry"), phP=$("#phP"), phN=$("#phN");
+  [...bar.querySelectorAll(".word")].forEach(n=>n.remove());
+  const pos=TOK.filter(c=>c.s>0), neg=TOK.filter(c=>c.s<0);
+  // positives: after phP, before divider
+  pos.forEach(c=> bar.insertBefore(mkWord(c), div));
+  // negatives: after divider, before entry
+  neg.forEach(c=> bar.insertBefore(mkWord(c), entry));
+  // show the divider + exclude tag only when both sides are in play; placeholders guide when empty
+  div.style.display = neg.length ? "" : "none";
+  phN.style.display = neg.length ? "" : "none";
+  phP.style.display = pos.length ? "none" : "";   // "find" hint only while empty
+  refresh();
+}
+
+function commit(){ let v=$("#entry").value.trim(); if(!v)return; let s=1;
+  if(v[0]==="-"){ s=-1; v=v.slice(1).trim(); } else if(v[0]==="+"){ v=v.slice(1).trim(); }
+  if(v) TOK.push({t:v.toLowerCase(),w:1,s}); $("#entry").value=""; render(); }
+$("#entry").addEventListener("keydown",e=>{
+  if(e.key===","||e.key==="Enter"){ e.preventDefault(); commit(); }
+  else if(e.key==="Backspace" && !$("#entry").value && TOK.length){ TOK.pop(); render(); refresh(); } });
+$("#bar").addEventListener("click",e=>{ if(e.target.id==="bar"||e.target.classList.contains("ph")) $("#entry").focus(); });
+
+let _t=null; function scheduleSearch(){ clearTimeout(_t); _t=setTimeout(runSearch,250); }
+async function runSearch(){
+  const q=buildQuery(); if(!q){ $("#results").innerHTML=""; $("#status").textContent=""; return; }
+  $("#status").textContent="· searching…";
+  try{ const r=await (await fetch(`/api/search?q=${encodeURIComponent(q)}&k=24`)).json();
+    const g=$("#results"); g.innerHTML="";
+    (r.results||[]).forEach(h=>{ const c=document.createElement("div"); c.className="c";
+      const p=Math.round((h.prob??h.score)*100);
+      c.innerHTML=`<span class="s">${p}</span><img loading="lazy" src="/api/thumb?path=${encodeURIComponent(h.path)}&size=240">`; g.appendChild(c); });
+    $("#status").textContent=`· ${(r.results||[]).length} results`;
+  }catch(e){ $("#status").textContent="· error: "+e.message; }
+}
+["car","snow","sunset"].forEach(t=>TOK.push({t,w:1,s:1})); TOK.push({t:"person",w:1,s:-1});
+render();
+</script></body></html>
