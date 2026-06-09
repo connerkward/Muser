@@ -18,7 +18,8 @@
   .bar:focus-within{ border-color:var(--fg); }
   .word{ position:relative; color:var(--c); cursor:ns-resize; user-select:none; touch-action:none;
          white-space:nowrap; transition:font-size .04s linear, opacity .1s; padding-top:3px; }
-  .word .neg{ color:var(--neg); font-weight:600; }
+  .word .neg{ color:inherit; }   /* the '-' inherits the word's red + weight (consistent w/ query string) */
+  .word .cw{ font:10px var(--mono); color:var(--mut); vertical-align:super; margin-left:2px; }
   /* always-visible remove badge: a small circled × top-right of each word */
   .word .rm{ position:absolute; top:-9px; right:-11px; width:15px; height:15px; line-height:13px; text-align:center;
              font:12px/13px var(--mono); color:var(--mut); background:var(--bg); border:1px solid var(--line);
@@ -37,9 +38,9 @@
   .results .s{ position:absolute; top:4px; left:4px; background:#000a; color:#fff; font:10px var(--mono); padding:1px 5px; }
 </style></head><body>
 <h1>Weighted word-cloud search bar</h1>
-<div class="sub">Type a concept and press <code>,</code> or <code>Enter</code> — it joins the cloud. <b>Each word's size is its weight</b>:
-drag a word <b>up</b> to make it count more, <b>down</b> for less. <b>Click</b> a word to flip it to
-<b class="gn">exclude</b> (red, pushed away). Hover for ×, or <code>Backspace</code> to drop the last word.</div>
+<div class="sub">Type a concept and press <code>,</code> or <code>Enter</code> — it joins the cloud at <b>100%</b> (full size).
+<b>Each word's size is its weight</b>: drag a word <b>down</b> to de-emphasize it (100% → 0%); they all start equal.
+<b>Click</b> a word to flip it to <b class="gn">exclude</b> (red, pushed away). <code>×</code> or <code>Backspace</code> removes it.</div>
 
 <div class="bar" id="bar">
   <input class="entry" id="entry" placeholder="type a concept…" autocomplete="off" spellcheck="false">
@@ -52,7 +53,8 @@ drag a word <b>up</b> to make it count more, <b>down</b> for less. <b>Click</b> 
 <script>
 const $=s=>document.querySelector(s);
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-let TOK=[];   // [{t,w,s}]  s=+1 pull / -1 exclude, w magnitude 0..2.5
+let TOK=[];   // [{t,w,s}]  s=+1 pull / -1 exclude. w = weight 0..1 (=0–100%);
+              // every concept starts at 1.0 (100%, full size) and can only be dragged DOWN.
 
 function buildQuery(){
   return TOK.filter(c=>c.w>0.04).map(c=>{
@@ -66,8 +68,10 @@ function render(){
   TOK.forEach((c,i)=>{
     const wd=document.createElement("span"); wd.className="word";
     wd.style.setProperty("--c", c.s<0?"var(--neg)":"var(--pos)");
-    wd.innerHTML=`${c.s<0?'<span class="neg">−</span>':''}${c.t}<span class="rm" title="remove">×</span>`;
-    const paint=()=>{ wd.style.fontSize=clamp(14+c.w*9,12,38)+"px"; wd.style.opacity=clamp(.5+c.w/2.5*.5,.35,1);
+    wd.innerHTML=`${c.s<0?'<span class="neg">-</span>':''}${c.t}<span class="cw"></span><span class="rm" title="remove">×</span>`;
+    const cw=wd.querySelector(".cw");
+    const paint=()=>{ wd.style.fontSize=clamp(15+c.w*15,15,30)+"px"; wd.style.opacity=clamp(.5+c.w*.5,.4,1);
+      cw.textContent = c.w<0.96 ? Math.round(c.w*100)+"%" : "";   // 100% is the default → keep it clean
       wd.style.setProperty("--c", c.s<0?"var(--neg)":"var(--pos)"); };
     paint();
     let st=null;   // {y, w0, moved}
@@ -75,7 +79,7 @@ function render(){
       st={y:e.clientY,w0:c.w,moved:false}; wd.setPointerCapture(e.pointerId); e.preventDefault(); });
     wd.addEventListener("pointermove",e=>{ if(!st)return; const dy=e.clientY-st.y;
       if(Math.abs(dy)>3){ st.moved=true; wd.classList.add("drag"); }
-      c.w=clamp(st.w0-dy*0.013,0,2.5); paint(); refresh(); });
+      c.w=clamp(st.w0-dy*0.007,0,1); paint(); refresh(); });   // 100% max, only drag down
     wd.addEventListener("pointerup",()=>{ if(st && !st.moved){ c.s*=-1; paint(); refresh(); }  // tap (no drag) = toggle polarity
       st=null; wd.classList.remove("drag"); });
     wd.querySelector(".rm").addEventListener("click",e=>{ e.stopPropagation(); TOK.splice(i,1); render(); refresh(); });
