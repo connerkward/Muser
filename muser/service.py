@@ -876,31 +876,42 @@ def create_app(model: str = DEFAULT_MODEL):
         return results[:k]
 
     def _parse_concepts(q: str):
-        """Split a query into signed concepts on commas. Each comma-separated part
-        is one concept; a leading '-' subtracts it (vector arithmetic), '+' / none
-        adds it. Returns [(text, sign), ...] lowercased. No comma → a single
-        concept (current single-vector behavior, unchanged)."""
+        """Split a query into signed concepts. Commas separate concepts; WITHIN a
+        comma-part a whitespace token that starts with '-'/'+' opens a new signed
+        sub-concept (unsigned tokens extend the current one), so a pasted prompt like
+        "chair, metal -retro" parses as chair(+), metal(+), retro(−) — not the literal
+        string "metal -retro". A '-' inside a word ("self-portrait") is NOT a boundary
+        (only a leading sign on a space-delimited token is). Optional trailing
+        ":<number>" sets the concept weight ("car:2", "snow:0.5"). Returns
+        [(text, signed_weight), ...] lowercased. A single unsigned phrase → one
+        concept (the plain single-vector path, unchanged)."""
         out = []
-        for part in q.split(","):
-            t = part.strip()
-            if not t:
-                continue
-            sign = 1
-            if t[0] in "+-":
-                sign = -1 if t[0] == "-" else 1
-                t = t[1:].strip()
+
+        def emit(words, sign):
+            text = " ".join(words).strip()
+            if not text:
+                return
             weight = 1.0
-            # Optional trailing ":<number>" sets the concept's weight ("car:2",
-            # "snow:0.5") — how much it pulls the blend / how strongly it must match.
-            if ":" in t:
-                head, _, tail = t.rpartition(":")
+            if ":" in text:
+                head, _, tail = text.rpartition(":")
                 try:
                     weight = abs(float(tail.strip()))
-                    t = head.strip()
+                    text = head.strip()
                 except ValueError:
                     pass
-            if t:
-                out.append((t.lower(), sign * weight))
+            if text:
+                out.append((text.lower(), sign * weight))
+
+        for part in q.split(","):
+            sign, words = 1, []
+            for tok in part.split():
+                if len(tok) > 1 and tok[0] in "+-":   # leading-sign token → concept boundary
+                    emit(words, sign)
+                    sign = -1 if tok[0] == "-" else 1
+                    words = [tok[1:]] if tok[1:] else []
+                else:
+                    words.append(tok)
+            emit(words, sign)
         return out
 
     def _blend_vector(emb, pos, neg, neg_strength):

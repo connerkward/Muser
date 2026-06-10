@@ -5268,10 +5268,36 @@ function cbRender(){
   // (cbBuildQuery still emits pos-then-neg for the API.)
   _CBTOK.forEach(c => bar.insertBefore(_cbMkWord(c), entry));
 }
+// Parse a typed/pasted prompt into concept tokens, mirroring the server's
+// _parse_concepts grammar: commas separate concepts; within a part a whitespace
+// token starting with -/+ opens a new signed sub-concept (unsigned tokens extend
+// the current one); trailing ":w" sets weight. So "chair, metal -retro" → chair(+),
+// metal(+), retro(−), and "self-portrait" stays one token (mid-word '-' is not a sign).
+function cbParse(text){
+  const out = [];
+  (text||"").split(",").forEach(part => {
+    let sign = 1, words = [];
+    const flush = () => {
+      if (!words.length) return;
+      let t = words.join(" ").trim(), w = 1;
+      const m = t.match(/:([0-9.]+)\s*$/);
+      if (m){ const n = parseFloat(m[1]); if (!isNaN(n)){ w = n; t = t.slice(0, m.index).trim(); } }
+      if (t) out.push({ t:t.toLowerCase(), w:_cbClamp(w,0,1), s:sign });
+      words = [];
+    };
+    part.split(/\s+/).forEach(tok => {
+      if (!tok) return;
+      if (tok.length>1 && (tok[0]==="-"||tok[0]==="+")){ flush(); sign = tok[0]==="-"?-1:1;
+        if (tok.slice(1)) words.push(tok.slice(1)); }
+      else words.push(tok);
+    });
+    flush();
+  });
+  return out;
+}
 function _cbCommit(){
-  let v = $("#cbarEntry").value.trim(); if (!v) return; let s = 1;
-  if (v[0]==="-"){ s=-1; v=v.slice(1).trim(); } else if (v[0]==="+"){ v=v.slice(1).trim(); }
-  if (v) _CBTOK.push({ t:v.toLowerCase(), w:1, s });
+  const v = $("#cbarEntry").value.trim(); if (!v) return;
+  const toks = cbParse(v); if (toks.length) _CBTOK.push(...toks);
   $("#cbarEntry").value = ""; cbRender(); cbApply();
 }
 function _cbWire(){
@@ -5280,6 +5306,17 @@ function _cbWire(){
   entry.addEventListener("keydown", e => {
     if (e.key===","||e.key==="Enter"){ e.preventDefault(); _cbCommit(); }
     else if (e.key==="Backspace" && !entry.value && _CBTOK.length){ _CBTOK.pop(); cbRender(); cbApply(); }
+  });
+  // Paste a multi-concept prompt ("chair, metal -retro") → split straight into chips.
+  // A plain single word still pastes normally (the input handler live-searches it).
+  entry.addEventListener("paste", e => {
+    const text = (e.clipboardData || window.clipboardData).getData("text");
+    if (!text || !(text.includes(",") || /\s[-+]\S/.test(text))) return;  // not multi-concept → default paste
+    e.preventDefault();
+    const toks = cbParse((entry.value + " " + text).trim());
+    entry.value = "";
+    if (toks.length){ _CBTOK.push(...toks); cbRender(); cbApply(); }
+    entry.focus();
   });
   // Live search on every keystroke (incl. the uncommitted word) — restores the plain
   // bar's auto-search-while-typing. Also exits an image search when you start typing.
