@@ -1,0 +1,256 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Budget bars — color-ranged concept weighting</title>
+<style>
+  :root{ --bg:#f4efe3; --fg:#1a1813; --mut:#8a8270; --line:#d8d0bd;
+         --serif:'Iowan Old Style',Georgia,serif; --mono:ui-monospace,'SF Mono',Menlo,monospace; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 var(--serif);
+        -webkit-font-smoothing:antialiased; padding:28px clamp(16px,4vw,52px); }
+  h1{ font-size:21px; font-weight:600; margin:0 0 2px; letter-spacing:.01em; }
+  .sub{ color:var(--mut); font-size:13px; margin-bottom:22px; max-width:74ch; }
+  .sub code{ font-family:var(--mono); font-size:12px; background:#0001; padding:1px 4px; }
+  .row{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  input#concepts{ flex:1; min-width:260px; font:14px var(--mono); padding:8px 11px;
+        border:1px solid var(--line); background:#fff8; color:var(--fg); }
+  .meta{ color:var(--mut); font-size:12px; margin:8px 2px; }
+
+  /* family color-range controls */
+  .fams{ display:grid; grid-template-columns:1fr 1fr; gap:18px; margin:22px 0 10px; }
+  @media(max-width:720px){ .fams{ grid-template-columns:1fr; } }
+  .fam{ border:1px solid var(--line); padding:13px 15px 15px; background:#fff5; }
+  .fam h2{ font-size:13px; font-weight:600; margin:0 0 10px; letter-spacing:.02em; text-transform:uppercase;
+        display:flex; align-items:center; gap:8px; color:var(--mut); }
+  .fam h2 .dot{ width:11px; height:11px; border-radius:50%; }
+  .ctl{ display:grid; grid-template-columns:54px 1fr 40px; align-items:center; gap:8px; margin:5px 0; }
+  .ctl label{ font-size:12px; color:var(--mut); }
+  .ctl input[type=range]{ width:100%; }
+  .ctl .num{ font-family:var(--mono); font-size:11px; color:var(--fg); text-align:right; }
+  .grad{ height:26px; margin-top:10px; border:1px solid var(--line); position:relative; }
+  .grad .tick{ position:absolute; top:-4px; bottom:-4px; width:2px; transform:translateX(-1px);
+        box-shadow:0 0 0 1.5px #fff8; }
+
+  /* budget bars */
+  .budget{ margin:8px 0 4px; }
+  .budget .blab{ font-size:12px; color:var(--mut); margin:14px 2px 6px; display:flex; gap:8px; align-items:baseline; }
+  .budget .blab b{ color:var(--fg); font-weight:600; }
+  .alloc{ display:flex; height:56px; border:1px solid var(--line); overflow:hidden; user-select:none; }
+  .alloc.empty{ align-items:center; justify-content:center; color:var(--mut); font-style:italic; font-size:12px; height:40px; }
+  .alloc .seg{ position:relative; display:flex; align-items:center; justify-content:center; overflow:hidden;
+        color:#fff; font-size:13px; min-width:0; transition:flex-basis .05s linear; white-space:nowrap;
+        text-shadow:0 1px 2px #0006; }
+  /* visible draggable divider between segments */
+  .alloc .grip{ position:absolute; top:0; right:-7px; width:14px; height:100%; cursor:col-resize; z-index:3;
+        display:flex; align-items:center; justify-content:center; }
+  .alloc .grip::before{ content:""; position:absolute; top:0; bottom:0; width:2px; background:#fff;
+        box-shadow:0 0 3px #0007; opacity:.85; }
+  .alloc .grip .knob{ position:relative; width:10px; height:24px; border-radius:5px; background:#fffefb;
+        box-shadow:0 1px 3px #0006, inset 0 0 0 1px #0002; display:flex; align-items:center; justify-content:center;
+        gap:2px; transition:transform .08s, box-shadow .08s; }
+  .alloc .grip .knob::before, .alloc .grip .knob::after{ content:""; width:1.5px; height:11px; background:#0000004d; border-radius:1px; }
+  .alloc .grip:hover .knob, .alloc .grip.dragging .knob{ transform:scale(1.18); box-shadow:0 2px 6px #0008, inset 0 0 0 1px #0003; }
+  .alloc .seg .cap{ padding:0 14px; overflow:hidden; text-overflow:ellipsis; }
+
+  .hint{ color:var(--mut); font-size:12px; margin:8px 2px 0; font-style:italic; }
+  .qline{ font-family:var(--mono); font-size:13px; margin:16px 2px 4px; }
+  .qline b{ color:var(--mut); font-weight:400; font-family:var(--serif); font-style:italic; margin-right:8px; }
+
+  .results{ display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:8px; margin-top:18px; }
+  .results .c{ aspect-ratio:1; background:#0001; overflow:hidden; position:relative; }
+  .results img{ width:100%; height:100%; object-fit:cover; display:block; }
+  .results .c .s{ position:absolute; top:4px; left:4px; background:#000a; color:#fff; font:10px var(--mono); padding:1px 5px; }
+</style></head><body>
+<h1>Budget bars — color-ranged concept weighting</h1>
+<div class="sub">Two budgets: a <b>pull</b> bar (positive concepts) and a <b>push</b> bar (negatives, typed with a leading
+<code>−</code>). Each side draws its segment colors from a hue range you pick below — so every concept gets a distinct
+swatch, and the two families stay visually separate. Drag a divider to shift weight; the query and live grid update.</div>
+
+<div class="row">
+  <input id="concepts" value="car, snow, sunset, -people, -text" spellcheck="false" autocomplete="off" />
+  <span class="meta" id="status"></span>
+</div>
+
+<div class="fams" id="fams"></div>
+
+<div class="budget">
+  <div class="blab"><b>Pull toward</b> <span class="meta" id="poscount"></span></div>
+  <div class="alloc" id="posbar"></div>
+  <div class="blab"><b>Push away</b> <span class="meta" id="negcount"></span></div>
+  <div class="alloc" id="negbar"></div>
+  <div class="hint">Each bar is one budget split across its concepts (relative emphasis). Colors come from the ranges above; the gradient preview marks where each concept lands.</div>
+</div>
+
+<div class="qline"><b>query →</b><span id="qstr"></span></div>
+<div class="results" id="results"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+// concepts: {t, w, neg}. w = positive magnitude within its own budget.
+let CONCEPTS=[];
+// per-family color range (HSL). pos = cool/green family, neg = warm/red family — disjoint hues.
+const FAM={
+  pos:{ from:150, to:205, sat:55, light:44 },
+  neg:{ from:2,   to:42,  sat:64, light:50 },
+};
+
+function parseConcepts(){
+  const cur=Object.fromEntries(CONCEPTS.map(c=>[c.t,c.w]));
+  CONCEPTS=$("#concepts").value.split(",").map(s=>s.trim()).filter(Boolean).map(raw=>{
+    let t=raw, neg=false;
+    if(t[0]==="-"||t[0]==="−"){ neg=true; t=t.slice(1).trim(); }
+    return { t, neg, w:(t in cur?cur[t]:1) };
+  }).filter(c=>c.t);
+  renderFamilies(); renderBars(); refreshQuery();
+}
+
+/* ---- color math: HSL → LAB and CIE76 ΔE, so we can measure adjacent-swatch distinctness ---- */
+const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+function hslToRgb(h,s,l){ s/=100; l/=100; const k=n=>(n+h/30)%12;
+  const a=s*Math.min(l,1-l); const f=n=>l-a*Math.max(-1,Math.min(k(n)-3,9-k(n),1));
+  return [f(0),f(8),f(4)].map(x=>x*255); }
+function rgbToLab(r,g,b){ [r,g,b]=[r,g,b].map(v=>{ v/=255; return v<=0.04045?v/12.92:Math.pow((v+0.055)/1.055,2.4); });
+  let X=(r*0.4124+g*0.3576+b*0.1805)/0.95047, Y=r*0.2126+g*0.7152+b*0.0722, Z=(r*0.0193+g*0.1192+b*0.9505)/1.08883;
+  const f=t=>t>0.008856?Math.cbrt(t):7.787*t+16/116; const fx=f(X),fy=f(Y),fz=f(Z);
+  return [116*fy-16,500*(fx-fy),200*(fy-fz)]; }
+function dE(c1,c2){ const a=rgbToLab(...hslToRgb(c1.h,c1.s,c1.l)), b=rgbToLab(...hslToRgb(c2.h,c2.s,c2.l));
+  return Math.hypot(a[0]-b[0],a[1]-b[1],a[2]-b[2]); }
+function minAdjDE(cols){ let m=Infinity; for(let i=1;i<cols.length;i++) m=Math.min(m,dE(cols[i-1],cols[i])); return m; }
+// max-spread permutation: split the sorted-hue indices in half and interleave, so neighbouring
+// positions draw hues from opposite ends of the range instead of one small step apart.
+function maxSpreadOrder(n){ if(n<=1) return [...Array(n).keys()];
+  const half=Math.ceil(n/2), a=[],b=[]; for(let i=0;i<n;i++)(i<half?a:b).push(i);
+  const out=[]; for(let i=0;i<half;i++){ out.push(a[i]); if(b[i]!==undefined) out.push(b[i]); } return out; }
+
+const DE_TARGET=22;  // every adjacent pair aims to clear this CIE76 ΔE (≈ clearly-different colors)
+/* ---- spread N hues across [from,to], reorder for adjacency contrast, then widen the
+       lightness zig-zag until no two neighbours are perceptually too close ---- */
+function famColors(side){
+  const list=CONCEPTS.filter(c=>side==="neg"?c.neg:!c.neg);
+  const f=FAM[side], n=list.length;
+  if(!n) return [];
+  if(n===1){ const h=(f.from+f.to)/2; const o={c:list[0],h,s:f.sat,l:f.light}; o.col=`hsl(${h.toFixed(1)} ${f.sat}% ${f.light}%)`; return [o]; }
+  const sorted=[...Array(n)].map((_,i)=>f.from+(f.to-f.from)*i/(n-1));   // evenly spaced hues
+  const hue=maxSpreadOrder(n).map(idx=>sorted[idx]);                     // neighbours get far-apart hues
+  const sign=i=>(i%2?-1:1);
+  const make=A=>hue.map((h,i)=>({c:list[i],h,s:f.sat,l:clamp(f.light+sign(i)*A,16,84)}));
+  let cols=make(0),A=0;                                                  // grow lightness gap until distinct (or capped)
+  while(n>1 && minAdjDE(cols)<DE_TARGET && A<20){ A+=2; cols=make(A); }
+  cols.forEach(o=>o.col=`hsl(${o.h.toFixed(1)} ${o.s}% ${o.l}%)`);
+  return cols;
+}
+
+/* ---- family range controls (hue from/to + sat + light) with gradient preview ---- */
+function renderFamilies(){
+  const host=$("#fams"); host.innerHTML="";
+  [["pos","Pull · positive"],["neg","Push · negative"]].forEach(([side,title])=>{
+    const f=FAM[side];
+    const card=document.createElement("div"); card.className="fam";
+    const midDot=`hsl(${((f.from+f.to)/2).toFixed(1)} ${f.sat}% ${f.light}%)`;
+    card.innerHTML=`
+      <h2><span class="dot" style="background:${midDot}"></span>${title}</h2>
+      ${ctl(side,"from","hue from",0,360,f.from)}
+      ${ctl(side,"to","hue to",0,360,f.to)}
+      ${ctl(side,"sat","saturation",0,100,f.sat)}
+      ${ctl(side,"light","lightness",0,100,f.light)}
+      <div class="grad"></div>`;
+    host.appendChild(card);
+    card.querySelectorAll("input[type=range]").forEach(inp=>{
+      inp.addEventListener("input",()=>{
+        FAM[side][inp.dataset.k]=parseFloat(inp.value);
+        inp.parentElement.querySelector(".num").textContent=fmt(inp.dataset.k,inp.value);
+        paintGrad(card,side); card.querySelector(".dot").style.background=
+          `hsl(${((FAM[side].from+FAM[side].to)/2).toFixed(1)} ${FAM[side].sat}% ${FAM[side].light}%)`;
+        renderBars(); // recolor segments live
+      });
+    });
+    paintGrad(card,side);
+  });
+}
+function ctl(side,k,lab,min,max,val){
+  return `<div class="ctl"><label>${lab}</label>
+    <input type="range" data-k="${k}" min="${min}" max="${max}" step="1" value="${val}">
+    <span class="num">${fmt(k,val)}</span></div>`;
+}
+const fmt=(k,v)=> (k==="sat"||k==="light") ? v+"%" : Math.round(v)+"°";
+function paintGrad(card,side){
+  const f=FAM[side]; const el=card.querySelector(".grad");
+  // gradient across the hue range
+  const stops=[]; for(let i=0;i<=8;i++){ const h=f.from+(f.to-f.from)*i/8;
+    stops.push(`hsl(${h.toFixed(1)} ${f.sat}% ${f.light}%) ${i/8*100}%`); }
+  el.style.background=`linear-gradient(90deg,${stops.join(",")})`;
+  // ticks where each concept lands
+  el.querySelectorAll(".tick").forEach(t=>t.remove());
+  const span=(f.to-f.from)||1;
+  famColors(side).forEach(x=>{ const t=clamp((x.h-f.from)/span,0,1);   // tick at the concept's actual hue
+    const tk=document.createElement("div"); tk.className="tick"; tk.style.left=(t*100)+"%";
+    tk.style.background=x.col; tk.title=x.c.t; el.appendChild(tk); });
+}
+
+/* ---- the two budget bars ---- */
+function renderBars(){
+  buildBar("pos", $("#posbar"), $("#poscount"));
+  buildBar("neg", $("#negbar"), $("#negcount"));
+}
+function buildBar(side,bar,countEl){
+  const cols=famColors(side); const list=cols.map(x=>x.c);
+  if(list.length){ const m=minAdjDE(cols);
+    countEl.textContent=`${list.length} concept${list.length>1?"s":""}`+
+      (list.length>1?` · adjacent ΔE ≥ ${Math.round(m)}`:"");
+    countEl.style.color = list.length>1 && m<12 ? "#b4452f" : ""; // flag a range too narrow for N distinct colors
+  } else countEl.textContent="";
+  bar.classList.toggle("empty",list.length===0);
+  if(!list.length){ bar.innerHTML = side==="pos"
+    ? "type concepts to pull toward" : "add a −concept to push away"; return; }
+  bar.classList.remove("empty"); bar.innerHTML="";
+  const tot=()=>list.reduce((a,c)=>a+c.w,0)||1;
+  const segs=[];
+  cols.forEach((x,i)=>{
+    const seg=document.createElement("div"); seg.className="seg"; seg.style.background=x.col;
+    seg.innerHTML=`<span class="cap"></span>`+(i<list.length-1?`<span class="grip" title="drag to shift weight"><span class="knob"></span></span>`:"");
+    bar.appendChild(seg); segs.push(seg);
+  });
+  const repaint=()=>{ const T=tot(); list.forEach((c,i)=>{ segs[i].style.flexBasis=(c.w/T*100)+"%";
+    segs[i].querySelector(".cap").textContent=`${c.t} ${(c.w/T*100).toFixed(0)}%`; }); refreshQuery(); };
+  repaint();
+  segs.forEach((seg,i)=>{
+    const grip=seg.querySelector(".grip"); if(!grip)return;
+    let drag=null;
+    grip.addEventListener("pointerdown",e=>{ e.preventDefault(); grip.classList.add("dragging");
+      drag={x:e.clientX,a:list[i].w,b:list[i+1].w,bw:bar.clientWidth}; grip.setPointerCapture(e.pointerId); });
+    grip.addEventListener("pointermove",e=>{ if(!drag)return; const T=tot();
+      const d=(e.clientX-drag.x)/drag.bw*T; list[i].w=Math.max(0.05,drag.a+d); list[i+1].w=Math.max(0.05,drag.b-d);
+      repaint(); });
+    const end=()=>{ drag=null; grip.classList.remove("dragging"); };
+    grip.addEventListener("pointerup",end); grip.addEventListener("pointercancel",end);
+  });
+}
+
+/* ---- query: per-side relative split, negatives prefixed − ---- */
+function buildQuery(){
+  const part=(side,prefix)=>{ const l=CONCEPTS.filter(c=>side==="neg"?c.neg:!c.neg);
+    const tot=l.reduce((a,c)=>a+c.w,0)||1;
+    return l.map(c=>`${prefix}${c.t}:${(c.w/tot*l.length).toFixed(2)}`); };
+  return [...part("pos",""),...part("neg","-")].join(", ");
+}
+function refreshQuery(){ $("#qstr").textContent=buildQuery()||"(empty)"; scheduleSearch(); }
+
+/* ---- live search ---- */
+let _t=null;
+function scheduleSearch(){ clearTimeout(_t); _t=setTimeout(runSearch,250); }
+async function runSearch(){
+  const q=buildQuery(); if(!q){ $("#results").innerHTML=""; $("#status").textContent=""; return; }
+  $("#status").textContent="searching…";
+  try{
+    const r=await (await fetch(`/api/search?q=${encodeURIComponent(q)}&k=24`)).json();
+    const g=$("#results"); g.innerHTML="";
+    (r.results||[]).forEach(h=>{ const c=document.createElement("div"); c.className="c";
+      const pct=Math.round((h.prob??h.score)*100);
+      c.innerHTML=`<span class="s">${pct}</span><img loading="lazy" src="/api/thumb?path=${encodeURIComponent(h.path)}&size=240">`;
+      g.appendChild(c); });
+    $("#status").textContent=`${(r.results||[]).length} results`;
+  }catch(e){ $("#status").textContent="error: "+e.message; }
+}
+
+$("#concepts").addEventListener("input",parseConcepts);
+parseConcepts();
+</script></body></html>

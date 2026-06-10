@@ -471,6 +471,12 @@ def create_app(model: str = DEFAULT_MODEL):
         f = Path(__file__).resolve().parent / "web" / "weights-1line.html"
         return f.read_text() if f.exists() else "<h1>1-line proto not found</h1>"
 
+    @app.get("/proto/weights-budget", response_class=HTMLResponse)
+    def proto_weights_budget():
+        # Budget bars with selectable per-family hue ranges (pull vs push).
+        f = Path(__file__).resolve().parent / "web" / "weights-budget.html"
+        return f.read_text() if f.exists() else "<h1>budget proto not found</h1>"
+
     # SVG favicon: solid-fill knockout mark — italic lowercase 'm' carved
     # out of a charcoal square. Single-character favicons need the solid
     # field to carry weight at 16px; an outlined glyph alone reads as a
