@@ -533,7 +533,90 @@ def create_app(model: str = DEFAULT_MODEL):
             "metadata": state.index.metadata_coverage(state.model_name),
             "c2pa": _c2pa.available(),
             "aidet": _aidet_mod.available(),
+            # True only on the hidden personal instance (MUSER_HOME=~/.muser-personal).
+            # The frontend uses this to reveal the Triage tab; never set on the main one.
+            "personal": _is_personal_instance(),
         }
+
+    # ---- Hidden personal-triage endpoints (only meaningful on the personal root) ----
+    def _is_personal_instance() -> bool:
+        from .paths import is_personal
+        return is_personal()
+
+    @app.get("/api/personal/summary")
+    def personal_summary():
+        """Bucket counts + uncertainty histogram for the Triage tab. classified=False
+        until `muser personal classify` has run."""
+        from .personal import personalness as _pn
+        entries = _pn.all_entries()
+        if not entries:
+            return {"classified": False, "total": 0,
+                    "buckets": {"personal": 0, "in_between": 0, "reference": 0},
+                    "vlm": 0, "hist": [0] * 20}
+        buckets = {"personal": 0, "in_between": 0, "reference": 0}
+        hist = [0] * 20
+        vlm = 0
+        for e in entries.values():
+            b = e.get("bucket")
+            if b in buckets:
+                buckets[b] += 1
+            if "vlm" in e:
+                vlm += 1
+            u = e.get("unc")
+            if u is not None:
+                hist[min(19, max(0, int(u * 20)))] += 1
+        return {"classified": True, "total": len(entries), "buckets": buckets,
+                "vlm": vlm, "hist": hist}
+
+    @app.get("/api/personal/bucket")
+    def personal_bucket(name: str, offset: int = 0, limit: int = 120, sort: str = "p"):
+        """Paged image paths in a bucket. sort: 'p' (most→least personal), 'unc'
+        (most uncertain first). Live-file filtered."""
+        from .personal import personalness as _pn
+        rows = [(p, e) for p, e in _pn.all_entries().items() if e.get("bucket") == name]
+        if sort == "unc":
+            rows.sort(key=lambda pe: -(pe[1].get("unc") or 0))
+        else:
+            personal = name != "reference"
+            rows.sort(key=lambda pe: -(pe[1].get("p") or 0) if personal else (pe[1].get("p") or 0))
+        total = len(rows)
+        page = rows[offset:offset + limit]
+        items = [{"path": p, "p": e.get("p"), "unc": e.get("unc"),
+                  "sig": e.get("sig"), "vlm": e.get("vlm")} for p, e in page]
+        return {"name": name, "total": total, "offset": offset, "items": items}
+
+    @app.get("/api/personal/vlm-estimate")
+    def personal_vlm_estimate(umin: float = 0.0, umax: float = 1.0):
+        from .personal import vlm_triage as _vt
+        n, cost = _vt.estimate(umin, umax)
+        return {"count": n, "cost": cost}
+
+    @app.post("/api/personal/vlm-run")
+    def personal_vlm_run(req: dict):
+        """Run the VLM pass over an uncertainty band in a background thread; poll
+        /api/personal/vlm-status. Idempotent: no-op while a run is in flight."""
+        from .personal import vlm_triage as _vt
+        if getattr(state, "_vlm", None) and state._vlm.get("running"):
+            return {"started": False, "reason": "already running"}
+        umin = float(req.get("umin", 0.0))
+        umax = float(req.get("umax", 1.0))
+        n, cost = _vt.estimate(umin, umax)
+        state._vlm = {"running": True, "done": 0, "total": n, "umin": umin, "umax": umax,
+                      "cost": cost, "result": None}
+
+        def _bg():
+            try:
+                res = _vt.run(umin, umax,
+                              on_status=lambda d, t: state._vlm.update(done=d, total=t))
+                state._vlm["result"] = res
+            finally:
+                state._vlm["running"] = False
+        threading.Thread(target=_bg, daemon=True, name="muser-vlm-triage").start()
+        return {"started": True, "count": n, "cost": cost}
+
+    @app.get("/api/personal/vlm-status")
+    def personal_vlm_status():
+        return getattr(state, "_vlm", None) or {"running": False}
 
     @app.get("/api/jobs")
     def jobs_list():

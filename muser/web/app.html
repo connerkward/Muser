@@ -1037,6 +1037,8 @@
     <button class="nav" data-view="ai">AI</button>
     <button class="nav" data-view="results">Results</button>
     <button class="nav" data-view="jobs">Jobs</button>
+    <!-- Triage = hidden personal Google-Photos sub-tool; only on the personal instance -->
+    <button class="nav" data-view="triage" style="display:none">Triage</button>
   </nav>
   <input id="qMini" placeholder="Search…" autocomplete="off" />
   <input id="negMini" placeholder="Exclude…" autocomplete="off" />
@@ -1053,6 +1055,8 @@
   <button class="nav" id="navAI">AI</button>
   <button class="nav" id="navResults">Results</button>
   <button class="nav" id="navJobs">Jobs</button>
+  <!-- Triage = hidden personal Google-Photos sub-tool; revealed only when /api/status personal=true -->
+  <button class="nav" id="navTriage" style="display:none">Triage</button>
   <span class="mut" id="status">…</span>
   <span class="sp"></span>
   <span class="spinner" id="spinner" style="display:none" title="Working…"></span>
@@ -1299,6 +1303,40 @@
     <button class="x" id="afilterX" title="Clear filter" style="display:none">×</button>
   </div>
   <div class="grid" id="aiGrid"></div>
+</div>
+
+<div class="wrap" id="triageView" style="display:none">
+  <div style="font-size:11px;color:#caa468;margin-bottom:10px">
+    <b>Personal triage</b> — your Google Photos sorted into <b>personal</b> (your life: people you know,
+    selfies, pets, docs, screenshots), <b>reference</b> (saved inspiration: design, objects, scenes), and
+    <b>in-between</b> (a personal photo that's also aesthetically strong). Local, $0. Isolated from the
+    aesthetic library. Uncertain images can be resolved with a paid gpt-4o-mini pass below.
+  </div>
+  <div class="row" id="triageBuckets" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+    <button class="nav on" data-bucket="personal">Personal <span class="n" data-c="personal">0</span></button>
+    <button class="nav" data-bucket="in_between">In-between <span class="n" data-c="in_between">0</span></button>
+    <button class="nav" data-bucket="reference">Reference <span class="n" data-c="reference">0</span></button>
+    <span style="flex:1"></span>
+    <label class="mut" style="font-size:12px">sort
+      <select id="triageSort"><option value="p">most→least personal</option><option value="unc">most uncertain</option></select>
+    </label>
+    <span class="mut" id="triageMsg">…</span>
+  </div>
+  <div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:12px;background:#1a1a1a">
+    <div style="font-size:12px;margin-bottom:6px"><b>VLM pass</b> — send the <i>uncertain</i> band to gpt-4o-mini (be generous; cost shown before running)</div>
+    <div id="uncHist" style="display:flex;align-items:flex-end;gap:1px;height:34px;margin-bottom:6px"></div>
+    <div class="row" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <label class="mut" style="font-size:12px">min <input type="range" id="uMin" min="0" max="100" value="30" style="width:120px"></label>
+      <label class="mut" style="font-size:12px">max <input type="range" id="uMax" min="0" max="100" value="100" style="width:120px"></label>
+      <span class="mut" id="uBandLabel" style="font-size:12px">uncertainty 0.30–1.00</span>
+      <span style="flex:1"></span>
+      <span id="vlmEst" class="mut" style="font-size:12px">…</span>
+      <button class="primary" id="vlmRun">Run VLM</button>
+    </div>
+    <div class="mut" id="vlmStatus" style="font-size:12px;margin-top:6px;display:none"></div>
+  </div>
+  <div class="grid" id="triageGrid"></div>
+  <div class="row" style="margin-top:10px"><button id="triageMore" style="display:none">Load more</button></div>
 </div>
 
 <div class="wrap" id="colorView" style="display:none">
@@ -3881,9 +3919,9 @@ function openDetail(uid){ showView("image", {uid}); }
 // ---- view switching (Search / Explore / Interesting / Review / AI / Image) ----
 // `image` is a *detail* view (no nav button) — it's only reached from hash
 // routing (#/image/<uid>) or programmatically via openDetail(uid).
-const VIEWS={search:"searchView",explore:"exploreView",interesting:"interestingView",review:"reviewView",color:"colorView",ai:"aiView",results:"resultsView",jobs:"jobsView",image:"imageView"};
-const NAVS={search:"navSearch",explore:"navExplore",interesting:"navInteresting",review:"navReview",color:"navColor",ai:"navAI",results:"navResults",jobs:"navJobs"};
-const VIEW_TITLES={search:"Search",explore:"Explore",interesting:"Interesting",review:"Review",color:"Color",ai:"AI",results:"Results",jobs:"Jobs",image:"Image"};
+const VIEWS={search:"searchView",explore:"exploreView",interesting:"interestingView",review:"reviewView",color:"colorView",ai:"aiView",results:"resultsView",jobs:"jobsView",triage:"triageView",image:"imageView"};
+const NAVS={search:"navSearch",explore:"navExplore",interesting:"navInteresting",review:"navReview",color:"navColor",ai:"navAI",results:"navResults",jobs:"navJobs",triage:"navTriage"};
+const VIEW_TITLES={search:"Search",explore:"Explore",interesting:"Interesting",review:"Review",color:"Color",ai:"AI",results:"Results",jobs:"Jobs",triage:"Triage",image:"Image"};
 // Internal flag: when popstate or initial-route call showView, suppress the
 // pushState so back/forward don't double-stack history entries.
 let _suppressHistory=false;
@@ -3911,6 +3949,7 @@ function showView(v, opts){
   if(v==="ai") loadAI();
   if(v==="results") openResults(opts.runId);
   if(v==="jobs") startJobsPoll();
+  if(v==="triage") loadTriage();
   if(v==="image" && opts.uid) loadImageDetail(opts.uid);
   // Returning to Search with no query + no filter and an empty grid → showcase.
   if(v==="search" && typeof showShowcase==="function"
@@ -4926,7 +4965,7 @@ $("#indexPick").onclick = async () => {
   } catch (e) { toast("index failed (check path)"); }
 };
 
-pollStatus(); loadFolders(); loadClusterChips(); syncNsfwNav();
+pollStatus(); loadFolders(); loadClusterChips(); syncNsfwNav(); syncPersonalNav();
 // Initial route: respect #/<view> (or #/image/<uid>) in the URL so deep-links
 // / reload land on the right tab. Use replaceState (via the suppress flag +
 // explicit replace) so we don't leave an empty entry behind the first real navigation.
@@ -5567,6 +5606,100 @@ function applyNsfwNav(hide){
 function syncNsfwNav(){
   fetch("/api/demo-mode").then(r=>r.json()).then(j=>applyNsfwNav(!!j.hide)).catch(()=>{});
 }
+
+// ---- Hidden personal-triage tab (only on the ~/.muser-personal instance) ----
+function syncPersonalNav(){
+  fetch("/api/status").then(r=>r.json()).then(s=>{
+    if(!s.personal) return;
+    document.querySelectorAll('[data-view="triage"], #navTriage').forEach(b=>b.style.display="");
+  }).catch(()=>{});
+}
+const _triage={bucket:"personal", sort:"p", offset:0, total:0, loading:false};
+let _vlmPoll=null, _estTimer=null, _lastHist=null;
+async function loadTriage(){
+  let s; try{ s=await (await fetch("/api/personal/summary")).json(); }catch(e){ return; }
+  const msg=$("#triageMsg");
+  if(!s.classified){ msg.textContent="not classified yet — run `muser personal classify`"; return; }
+  for(const k of ["personal","in_between","reference"]){
+    const el=$(`#triageBuckets .n[data-c="${k}"]`); if(el) el.textContent=s.buckets[k]||0;
+  }
+  msg.textContent=`${s.total} images${s.vlm?` · ${s.vlm} VLM-resolved`:""}`;
+  _lastHist=s.hist; renderUncHist(s.hist);
+  _triage.offset=0;
+  await loadTriageBucket(true);
+  updateVlmEstimate();
+}
+function renderUncHist(hist){
+  const max=Math.max(1,...hist), box=$("#uncHist"); box.innerHTML="";
+  hist.forEach((c,i)=>{
+    const lo=i/20, inBand = lo>=($("#uMin").value/100) && lo<=($("#uMax").value/100);
+    const d=document.createElement("div");
+    d.style.cssText=`flex:1;height:${Math.max(2,Math.round(c/max*34))}px;background:${inBand?"#caa468":"#444"}`;
+    d.title=`unc ${lo.toFixed(2)}–${(lo+0.05).toFixed(2)}: ${c}`;
+    box.appendChild(d);
+  });
+}
+async function loadTriageBucket(clean){
+  if(_triage.loading) return; _triage.loading=true;
+  const g=$("#triageGrid"); if(clean){ g.innerHTML=""; _triage.offset=0; }
+  try{
+    const r=await (await fetch(`/api/personal/bucket?name=${_triage.bucket}&sort=${_triage.sort}&offset=${_triage.offset}&limit=120`)).json();
+    _triage.total=r.total;
+    for(const it of r.items){
+      const c=document.createElement("div"); c.className="card";
+      const pct=Math.round((it.p||0)*100), unc=Math.round((it.unc||0)*100);
+      const vlm=it.vlm?` · VLM:${it.vlm.bucket} (${it.vlm.reason||""})`:"";
+      c.innerHTML=`<div class="thumb"><span class="scoreb" title="personal-ness ${pct}% · uncertainty ${unc}%${vlm}">${pct}</span><img loading="lazy" src="/api/thumb?path=${enc(it.path)}&size=${typeof THUMB!=='undefined'?THUMB:200}" title="${it.path}${vlm}"></div>`;
+      g.appendChild(c);
+    }
+    _triage.offset+=r.items.length;
+    $("#triageMore").style.display = _triage.offset<_triage.total ? "" : "none";
+  } finally { _triage.loading=false; }
+}
+async function updateVlmEstimate(){
+  const umin=$("#uMin").value/100, umax=$("#uMax").value/100;
+  $("#uBandLabel").textContent=`uncertainty ${umin.toFixed(2)}–${umax.toFixed(2)}`;
+  try{
+    const r=await (await fetch(`/api/personal/vlm-estimate?umin=${umin}&umax=${umax}`)).json();
+    $("#vlmEst").textContent=`${r.count} images · ~$${r.cost.toFixed(2)}`;
+    $("#vlmRun").disabled = r.count===0;
+  }catch(e){}
+}
+function pollVlm(){
+  clearInterval(_vlmPoll);
+  _vlmPoll=setInterval(async()=>{
+    let s; try{ s=await (await fetch("/api/personal/vlm-status")).json(); }catch(e){ return; }
+    const el=$("#vlmStatus"); el.style.display="";
+    if(s.running){ el.textContent=`running… ${s.done||0}/${s.total||0}`; }
+    else{
+      clearInterval(_vlmPoll);
+      const r=s.result; el.textContent=r?`done — resolved ${r.resolved}/${r.total}`:"idle";
+      $("#vlmRun").disabled=false; loadTriage();
+    }
+  }, 1500);
+}
+// wire triage controls (idempotent — runs once at parse)
+(function wireTriage(){
+  document.querySelectorAll('#triageBuckets [data-bucket]').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('#triageBuckets [data-bucket]').forEach(x=>x.className="nav");
+    b.className="nav on"; _triage.bucket=b.dataset.bucket; loadTriageBucket(true);
+  });
+  const sort=$("#triageSort"); if(sort) sort.onchange=()=>{ _triage.sort=sort.value; loadTriageBucket(true); };
+  const more=$("#triageMore"); if(more) more.onclick=()=>loadTriageBucket(false);
+  ["uMin","uMax"].forEach(id=>{ const el=$("#"+id); if(el) el.oninput=()=>{
+    clearTimeout(_estTimer); _estTimer=setTimeout(updateVlmEstimate,200);
+    const s=$("#triageView"); if(s && s.style.display!=="none") renderUncHist(_lastHist||[]);
+  };});
+  const run=$("#vlmRun"); if(run) run.onclick=async()=>{
+    const umin=$("#uMin").value/100, umax=$("#uMax").value/100;
+    run.disabled=true;
+    try{
+      const r=await (await fetch("/api/personal/vlm-run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({umin,umax})})).json();
+      if(r.started){ $("#vlmStatus").style.display=""; $("#vlmStatus").textContent=`started ${r.count} images (~$${r.cost.toFixed(2)})`; pollVlm(); }
+      else run.disabled=false;
+    }catch(e){ run.disabled=false; }
+  };
+})();
 
 // Re-run whatever view is currently showing so a server-side data change
 // (e.g. demo-mode toggle) is reflected immediately. Mirrors showView's loader
