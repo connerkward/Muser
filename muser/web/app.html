@@ -1126,6 +1126,8 @@
   <button class="nav" id="navEvaluate" style="display:none">Evaluate</button>
   <!-- Cleanup = algorithmic delete-candidate review; personal instance only -->
   <button class="nav" id="navCleanup" style="display:none">Cleanup</button>
+  <!-- Toggle: hide 🗑-flagged images everywhere (server-side, persisted); personal only -->
+  <button class="nav" id="hideFlaggedBtn" style="display:none" title="Toggle hiding images flagged for deletion across all tabs">🗑 hidden</button>
   <span class="mut" id="status">…</span>
   <span class="sp"></span>
   <span class="spinner" id="spinner" style="display:none" title="Working…"></span>
@@ -6119,13 +6121,37 @@ function _makeQabar(path){
   return bar;
 }
 
-function syncPersonalNav(){
+// Header toggle for the server-side "hide 🗑-flagged" filter (persisted across
+// restarts). On = flagged images vanish from every tab except Cleanup (the
+// review surface). Re-renders the current view on toggle.
+async function syncHideFlagged(){
+  const btn=$("#hideFlaggedBtn"); if(!btn) return;
+  let st; try{ st=await (await fetch("/api/personal/hide-flagged")).json(); }catch(e){ return; }
+  btn.style.display="";
+  const paint=s=>{ btn.textContent = s.on ? `🗑 ${s.count.toLocaleString()} hidden` : `🗑 shown`;
+                   btn.classList.toggle("on", s.on); };
+  paint(st);
+  btn.onclick=async()=>{
+    const cur=btn.classList.contains("on");
+    const r=await (await fetch("/api/personal/hide-flagged",{method:"POST",
+      headers:{"content-type":"application/json"}, body:JSON.stringify({on:!cur})})).json();
+    paint(r);
+    toast(r.on ? `hiding ${r.count.toLocaleString()} flagged images` : "flagged images shown");
+    const v=Object.keys(VIEWS).find(k=>{const el=$("#"+VIEWS[k]);return el&&el.style.display!=="none";});
+    if(v && v!=="image") showView(v);                  // refresh whatever tab is open
+  };
+}
+
+function syncPersonalNav(attempt=0){
+  // Retries: at boot the service may still be warming (status fetch fails /
+  // returns early) — without a retry the personal tabs never reveal.
   fetch("/api/status").then(r=>r.json()).then(s=>{
     // Faces tab: wherever face clustering has run (main OR personal).
     if(s.faces)
       document.querySelectorAll('[data-view="faces"], #navFaces').forEach(b=>b.style.display="");
     if(!s.personal) return;
     enableQuickMark();   // quick bucket/delete marking on every thumbnail
+    syncHideFlagged();   // header toggle: hide 🗑-flagged images everywhere
     document.querySelectorAll('[data-view="triage"], #navTriage').forEach(b=>b.style.display="");
     // Evaluate (label/dispose) + Cleanup (delete-candidate review) — personal only.
     document.querySelectorAll('[data-view="evaluate"], #navEvaluate, [data-view="cleanup"], #navCleanup')
@@ -6136,7 +6162,7 @@ function syncPersonalNav(){
       .forEach(b=>b.style.display="none");
     const cur=location.hash.replace(/^#\/?/,"");
     if(cur==="ai"||cur==="jobs") showView("faces");   // redirect off a hidden tab
-  }).catch(()=>{});
+  }).catch(()=>{ if(attempt<8) setTimeout(()=>syncPersonalNav(attempt+1), 2500); });
 }
 const _triage={bucket:"personal", sort:"p", offset:0, total:0, loading:false};
 let _vlmPoll=null, _estTimer=null, _lastHist=null;

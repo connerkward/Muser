@@ -121,6 +121,25 @@ def flagged() -> dict:
     return {**out, "counts": {f: len(out[f]) for f in FLAGS}}
 
 
+_DEL_CACHE = {"mtime": -1.0, "set": frozenset()}
+
+
+def delete_set() -> frozenset:
+    """Paths flagged 'delete', cached by eval_labels.json mtime — O(1) per-path
+    lookups for the service's global hide filter (re-primes when any process
+    writes a new flag)."""
+    try:
+        mt = LABELS_FILE.stat().st_mtime
+    except OSError:
+        return frozenset()
+    if mt != _DEL_CACHE["mtime"]:
+        labels = _load_labels()
+        _DEL_CACHE["set"] = frozenset(p for p, e in labels.items()
+                                      if e.get("flag") == "delete")
+        _DEL_CACHE["mtime"] = mt
+    return _DEL_CACHE["set"]
+
+
 def results() -> dict:
     """Model-vs-human accuracy + confusion + per-bucket precision over labeled images."""
     labels = _load_labels()

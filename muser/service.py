@@ -71,6 +71,31 @@ def _load_demo_hide() -> bool:
 
 _DEMO = {"hide": _load_demo_hide()}
 
+# Hide images the user flagged 🗑 for deletion (Evaluate/Cleanup flags) from every
+# result endpoint. **On by default** (flagging means "I don't want to see this"),
+# toggleable from the header on the personal instance, persisted across restarts.
+# The Cleanup candidates endpoint bypasses it — that's the review surface.
+_HIDEFLAG_FILE = MUSER_HOME / "hide_flagged.json"
+
+
+def _load_hide_flagged() -> bool:
+    try:
+        return bool(json.loads(_HIDEFLAG_FILE.read_text()).get("on", True))
+    except Exception:
+        return True
+
+
+_HIDEFLAG = {"on": _load_hide_flagged()}
+
+
+def _delete_flagged() -> frozenset:
+    """Delete-flagged paths (mtime-cached in evaluate.py); empty off the personal root."""
+    try:
+        from .personal import evaluate as _ev
+        return _ev.delete_set()
+    except Exception:
+        return frozenset()
+
 
 class DemoModeReq(BaseModel):
     on: bool
@@ -563,10 +588,15 @@ def create_app(model: str = DEFAULT_MODEL):
             return {"classified": False, "total": 0,
                     "buckets": {"personal": 0, "in_between": 0, "reference": 0},
                     "vlm": 0, "hist": [0] * 20}
+        # Respect the hide-flagged toggle so the counts match what the grids show.
+        # (Set-lookup only — skip the per-path stat; dead files are a tiny drift.)
+        flagged = _delete_flagged() if _HIDEFLAG["on"] else frozenset()
         buckets = {"personal": 0, "in_between": 0, "reference": 0}
         hist = [0] * 20
         vlm = 0
-        for e in entries.values():
+        for p, e in entries.items():
+            if p in flagged:
+                continue
             b = e.get("bucket")
             if b in buckets:
                 buckets[b] += 1
@@ -575,15 +605,16 @@ def create_app(model: str = DEFAULT_MODEL):
             u = e.get("unc")
             if u is not None:
                 hist[min(19, max(0, int(u * 20)))] += 1
-        return {"classified": True, "total": len(entries), "buckets": buckets,
+        return {"classified": True, "total": sum(buckets.values()), "buckets": buckets,
                 "vlm": vlm, "hist": hist}
 
     @app.get("/api/personal/bucket")
     def personal_bucket(name: str, offset: int = 0, limit: int = 120, sort: str = "p"):
         """Paged image paths in a bucket. sort: 'p' (most→least personal), 'unc'
-        (most uncertain first). Live-file filtered."""
+        (most uncertain first). Hide-filtered (dead / 🗑-flagged / NSFW)."""
         from .personal import personalness as _pn
-        rows = [(p, e) for p, e in _pn.all_entries().items() if e.get("bucket") == name]
+        rows = [(p, e) for p, e in _pn.all_entries().items()
+                if e.get("bucket") == name and not _hidden(p)]
         if sort == "unc":
             rows.sort(key=lambda pe: -(pe[1].get("unc") or 0))
         else:
@@ -729,6 +760,20 @@ def create_app(model: str = DEFAULT_MODEL):
         _ev.label(path, bucket)          # also record as ground truth for accuracy/training
         return {"ok": True, "bucket": bucket}
 
+    @app.get("/api/personal/hide-flagged")
+    def get_hide_flagged():
+        return {"on": _HIDEFLAG["on"], "count": len(_delete_flagged())}
+
+    @app.post("/api/personal/hide-flagged")
+    def set_hide_flagged(req: dict):
+        """Toggle hiding 🗑-flagged images from every result endpoint; persisted."""
+        _HIDEFLAG["on"] = bool(req.get("on"))
+        try:
+            _HIDEFLAG_FILE.write_text(json.dumps({"on": _HIDEFLAG["on"]}))
+        except Exception:
+            pass
+        return {"on": _HIDEFLAG["on"], "count": len(_delete_flagged())}
+
     # ---- Cleanup: algorithmic delete-candidate review ----
     @app.get("/api/personal/cleanup-status")
     def cleanup_status():
@@ -777,7 +822,10 @@ def create_app(model: str = DEFAULT_MODEL):
                     extra[path] = (70, "duplicate")
         except Exception:
             pass
-        cands = [c for c in _cu.candidates(min_score, extra) if not _hidden(c["path"])]
+        # include_flagged=False: Cleanup IS the review surface for flags — an
+        # already-flagged candidate must stay visible (dimmed) so it can be rescued.
+        cands = [c for c in _cu.candidates(min_score, extra)
+                 if not _hidden(c["path"], include_flagged=False)]
         flagged = _ev.flagged()
         delset = set(flagged.get("delete", []))
         total = len(cands)
@@ -1429,11 +1477,15 @@ def create_app(model: str = DEFAULT_MODEL):
             ).start()
         return dead
 
-    def _hidden(path: str) -> bool:
+    def _hidden(path: str, include_flagged: bool = True) -> bool:
         """True iff `path` should be hidden from ALL result endpoints: file gone
-        from disk, NSFW above threshold, or a member of a hidden cluster. Pure
-        set/dict lookups (plus one stat for the dead check) — O(1) per result."""
+        from disk, user-flagged 🗑 for deletion (toggleable), NSFW above threshold,
+        or a member of a hidden cluster. Pure set/dict lookups (plus one stat for
+        the dead check) — O(1) per result. `include_flagged=False` lets the Cleanup
+        review surface keep showing what's already flagged."""
         if not os.path.exists(path):
+            return True
+        if include_flagged and _HIDEFLAG["on"] and path in _delete_flagged():
             return True
         if not _DEMO["hide"]:
             return False  # demo mode off → only dead files are hidden
