@@ -101,6 +101,35 @@ def classify(
 
 
 @app.command()
+def train(
+    model: str = typer.Option("siglip2-b", help="Embedding model"),
+    hold_out: float = typer.Option(0.2, "--hold-out", help="Fraction for held-out test"),
+):
+    """Train a supervised head on user labels (from /evaluate); report held-out accuracy."""
+    ensure_personal_root()
+    from . import personalness
+    r = personalness.train(model=model, hold_out_fraction=hold_out,
+                           progress=lambda m: con.print(f"  {m}"))
+    if not r.get("trained"):
+        con.print(f"[red]{r.get('message', 'failed')}[/]")
+        raise typer.Exit(1)
+    con.print(f"\n[bold]supervised training results[/]")
+    con.print(f"  labeled: {r['n_labeled']}  train: {r['n_train']}  test: {r['n_test']}")
+    con.print(f"  accuracy: {r['accuracy']*100:.1f}%  (binary personal: {r['binary_personal_accuracy']*100:.1f}%)")
+    con.print(f"\n  confusion matrix (rows=true, cols=pred):")
+    cols = list(r["confusion"]["personal"].keys())
+    con.print("            " + "  ".join(f"{c[:6]:>8s}" for c in cols))
+    for a in cols:
+        con.print(f"  {a:11s} " + "  ".join(f"{r['confusion'][a][c]:8d}" for c in cols))
+    con.print(f"\n  per-bucket precision on held-out:")
+    for b in cols:
+        s = r["per_bucket"][b]
+        prec = s.get("precision")
+        if prec:
+            con.print(f"    {b:11s} {s['n']:3d} examples, {s['correct']} correct, {prec:.1%} precision")
+
+
+@app.command()
 def sheets(out: str = typer.Option(None, "--out", help="Output dir (default ~/Desktop/personal-triage-sheets)")):
     """Render labeled contact sheets per bucket to inspect the classification (verify-outputs)."""
     ensure_personal_root()

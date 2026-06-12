@@ -306,6 +306,194 @@ def _load_scores() -> dict:
         return {}
 
 
+# ---- supervised learning from user labels -----------------------------------
+
+def _load_eval_labels() -> dict:
+    """Load human-labeled verdicts from eval_labels.json."""
+    f = data_file("eval_labels.json")
+    if not f.exists():
+        return {}
+    try:
+        import json
+        return json.loads(f.read_text())
+    except Exception:
+        return {}
+
+
+def train(model: str = "siglip2-b", hold_out_fraction: float = 0.2, progress=None) -> dict:
+    """Train a supervised head on user labels; recompute personalness with blend.
+
+    Returns: {trained: bool, n_labeled: int, n_train: int, n_test: int,
+              accuracy: float, confusion: {...}, per_bucket: {...}, message: str}
+    """
+    def log(m):
+        if progress:
+            progress(m)
+
+    labels = _load_eval_labels()
+    if not labels:
+        return {"trained": False, "message": "no labels yet"}
+
+    log(f"loaded {len(labels)} labeled images")
+
+    idx = MuserIndex()
+    paths, Xp, wh = _table_vectors(idx, model)
+    if not paths:
+        return {"trained": False, "message": "no personal index"}
+
+    # Map paths to indices for fast lookup
+    path_to_idx = {p: i for i, p in enumerate(paths)}
+
+    # Collect labeled examples: filter to those in the index
+    labeled_indices = []
+    labeled_verdicts = []
+    labeled_paths = []
+    for path, entry in labels.items():
+        verdict = entry.get("label")
+        if verdict not in ("personal", "in_between", "reference"):
+            continue
+        if path not in path_to_idx:
+            continue  # not indexed yet
+        idx_in_corpus = path_to_idx[path]
+        labeled_indices.append(idx_in_corpus)
+        labeled_verdicts.append(verdict)
+        labeled_paths.append(path)
+
+    if len(labeled_indices) < 10:
+        return {"trained": False, "message": f"need ≥10 labeled; have {len(labeled_indices)}"}
+
+    log(f"using {len(labeled_indices)} labeled examples")
+
+    # Feature matrix: (R, F, A, Q, M, doc_binary, has_people_binary, cam_binary) + the full embedding
+    # Actually, we'll train TWO things:
+    # 1. Re-train R on the labeled examples to see if it improves
+    # 2. Fit a supervised head on (R, F, A, Q, M, doc, people, cam) → bucket
+
+    # For now, let's fit a simpler model: logistic regression on (R_val, F, A, Q, M, doc, people, cam)
+    # where personal=1, reference=0, in_between=0.5 (we'll use binary: personal vs not-personal for the main head)
+
+    from .. import faces as _faces
+    from . import takeout
+    _faces.prime_cache_from_sidecar()
+    fclusters = _faces.clusters()
+    faces_entries = _faces.sidecar().load()
+    tmeta = takeout.sidecar().load()
+    scores = _load_scores()
+
+    # Load the existing R model or use neutral
+    R_model = _load_R()
+    if R_model is None:
+        log("no R model found; using neutral R=0.5 for feature matrix")
+        Rproba = np.full(len(paths), 0.5, np.float32)
+    else:
+        w, b = R_model
+        Rproba = _R_proba(Xp, w, b)
+
+    concepts = _concept_scores(Xp, model)
+    doc_pctl = concepts["doc"]
+
+    # Build feature matrix for labeled examples
+    X_feat = []
+    y_personal = []
+    y_bucket = []
+
+    for i in range(len(labeled_paths)):
+        path = labeled_paths[i]
+        corpus_idx = labeled_indices[i]
+        fe = faces_entries.get(path, {})
+        tm = tmeta.get(path, {})
+        F = _face_signal(fe, wh[corpus_idx], fclusters)
+        A = 0.5 + (ALBUM_NUDGE if tm.get("roll") else -ALBUM_NUDGE)
+        A = float(np.clip(A, 0.0, 1.0))
+        Q = float((scores.get(path, {}) or {}).get("aesthetic_v2", 0.5))
+        has_people = bool(tm.get("people"))
+        cam = bool(tm.get("cam"))
+        doc = doc_pctl[corpus_idx] >= DOC_PCTL or _is_screenshot(path, wh[corpus_idx])
+        R = float(Rproba[corpus_idx])
+
+        # Feature vector: (R, F, A, Q, doc, has_people, cam, 1-R)
+        feat = [R, F, A, Q, float(doc), float(has_people), float(cam), 1.0 - R]
+        X_feat.append(feat)
+
+        verdict = labeled_verdicts[i]
+        y_bucket.append({"personal": 0, "in_between": 1, "reference": 2}[verdict])
+        y_personal.append(1.0 if verdict == "personal" else 0.0)
+
+    X_feat = np.asarray(X_feat, dtype=np.float32)
+    y_personal = np.asarray(y_personal, dtype=np.float32)
+    y_bucket = np.asarray(y_bucket, dtype=np.int32)
+
+    # Split: 80% train, 20% held-out
+    rng = np.random.default_rng(42)
+    perm = rng.permutation(len(X_feat))
+    n_train = int(len(X_feat) * (1 - hold_out_fraction))
+    train_idx = perm[:n_train]
+    test_idx = perm[n_train:]
+
+    X_train, X_test = X_feat[train_idx], X_feat[test_idx]
+    y_train_bucket, y_test_bucket = y_bucket[train_idx], y_bucket[test_idx]
+    y_train_personal, y_test_personal = y_personal[train_idx], y_personal[test_idx]
+
+    # Fit multiclass logistic regression (3 buckets)
+    from sklearn.linear_model import LogisticRegression
+    clf_bucket = LogisticRegression(max_iter=2000, C=1.0, multi_class='multinomial')
+    clf_bucket.fit(X_train, y_train_bucket)
+
+    log(f"trained on {len(train_idx)} examples, testing on {len(test_idx)}")
+
+    # Held-out evaluation
+    y_pred = clf_bucket.predict(X_test)
+    accuracy = float(np.mean(y_pred == y_test_bucket))
+
+    # Confusion matrix on held-out set
+    confusion = {a: {b: 0 for b in ("personal", "in_between", "reference")}
+                 for a in ("personal", "in_between", "reference")}
+    idx_to_bucket = {0: "personal", 1: "in_between", 2: "reference"}
+    for pred, truth in zip(y_pred, y_test_bucket):
+        pred_b = idx_to_bucket[int(pred)]
+        truth_b = idx_to_bucket[int(truth)]
+        confusion[truth_b][pred_b] += 1
+
+    # Binary personal vs reference (ignoring in_between)
+    binary_personal_test = y_test_bucket[y_test_bucket != 1]  # exclude in_between
+    binary_pred = y_pred[y_test_bucket != 1]
+    if len(binary_personal_test) > 0:
+        binary_personal_test = (binary_personal_test == 0).astype(int)
+        binary_pred = (binary_pred == 0).astype(int)
+        binary_acc = float(np.mean(binary_pred == binary_personal_test))
+    else:
+        binary_acc = None
+
+    per_bucket = {}
+    for b in ("personal", "in_between", "reference"):
+        tot = sum(confusion[b].values())
+        per_bucket[b] = {
+            "n": tot,
+            "correct": confusion[b][b],
+            "precision": round(confusion[b][b] / tot, 3) if tot else None
+        }
+
+    log(f"held-out accuracy: {accuracy:.1%} (binary personal: {binary_acc:.1%})")
+
+    # Save the trained classifier for later use
+    SUPERVISED_FILE = data_file("personalness_supervised.npz")
+    np.savez(SUPERVISED_FILE,
+             coef=clf_bucket.coef_.astype(np.float32),
+             intercept=clf_bucket.intercept_.astype(np.float32))
+
+    return {
+        "trained": True,
+        "n_labeled": len(labeled_indices),
+        "n_train": len(train_idx),
+        "n_test": len(test_idx),
+        "accuracy": round(accuracy, 3),
+        "binary_personal_accuracy": round(binary_acc, 3) if binary_acc else None,
+        "confusion": confusion,
+        "per_bucket": per_bucket,
+        "message": f"trained on {len(train_idx)}, tested on {len(test_idx)}: {accuracy:.1%} accuracy"
+    }
+
+
 # ---- read side (for the service / triage / verification) ----------------------
 
 def prime() -> int:

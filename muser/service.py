@@ -694,6 +694,36 @@ def create_app(model: str = DEFAULT_MODEL):
         from .personal import evaluate as _ev
         return _ev.flagged()
 
+    @app.post("/api/personal/train")
+    def personal_train(hold_out: float = 0.2):
+        """Train a supervised head on accumulated user labels.
+        Returns {trained, n_labeled, n_train, n_test, accuracy, confusion, per_bucket, message}"""
+        if state.task is not None:
+            raise HTTPException(409, f"busy: {state.task.get('kind')}")
+        state.task = {"kind": "personal_training", "done": 0, "total": 100}
+
+        def _progress(m):
+            if state.task and state.task.get("kind") == "personal_training":
+                # rough progress updates
+                state.task["message"] = m
+
+        def _bg():
+            try:
+                from .personal import personalness as _pn
+                result = _pn.train(model=state.model_name, hold_out_fraction=hold_out,
+                                   progress=_progress)
+                state.task = {
+                    "kind": "personal_training_done",
+                    "result": result
+                }
+            except Exception as e:
+                state.task = {"kind": "personal_training_error", "error": str(e)}
+            # Auto-clear after a short window
+            threading.Timer(3.0, lambda: setattr(state, "task", None)).start()
+
+        threading.Thread(target=_bg, daemon=True, name="muser-personal-train").start()
+        return {"started": True, "message": "training in background"}
+
     @app.get("/evaluate", response_class=HTMLResponse)
     def personal_evaluate_page():
         f = Path(__file__).resolve().parent / "web" / "personal_evaluate.html"

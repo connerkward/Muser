@@ -60,6 +60,7 @@
     <span><span class="b" id="mFlag" style="color:#e89b86">0</span> <span class="l">flagged ↓/🗑</span></span>
   </div>
   <span class="sp"></span>
+  <button class="ghost" id="trainBtn" style="display:none">Retrain on labels 🧠</button>
   <button class="ghost" id="newBatch">New batch ↻</button>
   <a href="/report">Results dashboard →</a>
 </header>
@@ -159,10 +160,49 @@ function renderCM(cm){
   }
   $("#cm").innerHTML=h;
 }
+async function trainOnLabels(){
+  const btn=$("#trainBtn");
+  const origText=btn.textContent;
+  btn.disabled=true; btn.textContent="Training…";
+  try{
+    const r=await (await fetch("/api/personal/train",{method:"POST"})).json();
+    if(r.started){
+      // Poll for completion
+      let done=false;
+      while(!done){
+        const st=await (await fetch("/api/status")).json();
+        if(st.task && (st.task.kind==="personal_training_done" || st.task.kind==="personal_training_error")){
+          const res=st.task.result || st.task;
+          btn.textContent=origText;
+          btn.disabled=false;
+          if(res.trained){
+            alert(`Trained on ${res.n_labeled} labels:\n${res.accuracy*100|0}% accuracy (${res.binary_personal_accuracy*100|0}% binary)\n\n${res.message}`);
+          } else {
+            alert(`Training failed: ${res.message || res.error}`);
+          }
+          done=true;
+        } else {
+          await new Promise(r=>setTimeout(r,1000));
+        }
+      }
+    }
+  }catch(e){
+    btn.textContent=origText;
+    btn.disabled=false;
+    alert(`Error: ${e.message}`);
+  }
+}
+$("#trainBtn").onclick=trainOnLabels;
 $("#more").onclick=()=>batch(30);
 $("#newBatch").onclick=()=>{ seen.clear(); $("#grid").innerHTML=""; batch(45); };
 $("#lb").onclick=()=>$("#lb").style.display="none";
+// Show train button only if there are labels
+async function checkForLabels(){
+  const r=await (await fetch("/api/personal/eval-results")).json();
+  if(r.labeled>=5) $("#trainBtn").style.display="";
+}
 batch(45);
+checkForLabels();
 </script>
 </body>
 </html>
