@@ -20,7 +20,8 @@ import numpy as np
 from .embedders import Embedder
 
 DEFAULT_DB = MUSER_HOME / "db"
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif", ".tiff"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif", ".tiff",
+              ".heic", ".heif"}  # heic/heif need pillow-heif; absent -> file just skips
 
 # Metadata columns added to LanceDB tables in 2026-06 for the Filter panel
 # (resolution / aspect / file-size search). Nullable on legacy rows; populated
