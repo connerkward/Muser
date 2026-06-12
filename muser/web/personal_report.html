@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Personal Triage — Results</title>
+<style>
+  :root{ --bg:#121212; --card:#1b1b1b; --line:#2c2c2c; --ink:#e8e8e8; --mut:#8a8a8a;
+         --amber:#caa468; --p:#5b9bd5; --i:#caa468; --r:#7a7a7a; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{padding:20px 26px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  header h1{font-size:18px;margin:0;font-weight:600}
+  header .sub{color:var(--mut);font-size:12px}
+  header a{color:var(--amber);text-decoration:none;font-size:12px}
+  main{padding:22px 26px;max-width:1180px;margin:0 auto}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:22px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .card .n{font-size:26px;font-weight:600}
+  .card .l{color:var(--mut);font-size:12px;margin-top:2px}
+  .card.personal .n{color:var(--p)} .card.in_between .n{color:var(--i)} .card.reference .n{color:var(--r)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-bottom:20px}
+  section h2{font-size:13px;margin:0 0 14px;font-weight:600;letter-spacing:.02em;color:var(--amber);text-transform:uppercase}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media(max-width:780px){.grid2{grid-template-columns:1fr}}
+  /* distribution bars */
+  .distbar{display:flex;height:30px;border-radius:6px;overflow:hidden;margin-bottom:8px}
+  .distbar > div{display:flex;align-items:center;justify-content:center;font-size:12px;color:#111;font-weight:600;transition:flex .4s}
+  .legend{display:flex;gap:16px;font-size:12px;color:var(--mut);flex-wrap:wrap}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+  /* histograms */
+  .hist{display:flex;align-items:flex-end;gap:2px;height:90px}
+  .hist > div{flex:1;background:#3a3a3a;border-radius:2px 2px 0 0;transition:height .4s;min-height:2px}
+  .hist.amber > div{background:var(--amber)} .hist.blue > div{background:var(--p)}
+  .axis{display:flex;justify-content:space-between;color:var(--mut);font-size:10px;margin-top:4px}
+  /* drivers */
+  .drow{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .drow .lab{width:90px;font-size:12px;color:var(--mut);text-transform:capitalize}
+  .dstack{flex:1;display:flex;height:20px;border-radius:4px;overflow:hidden;background:#232323}
+  .dstack > div{transition:flex .4s}
+  /* confusion matrix */
+  .cm{display:grid;grid-template-columns:auto repeat(3,1fr);gap:6px;max-width:520px}
+  .cm .h{color:var(--mut);font-size:11px;display:flex;align-items:center;justify-content:center;text-transform:capitalize}
+  .cm .rh{justify-content:flex-end;padding-right:8px}
+  .cm .cell{aspect-ratio:2.4/1;border-radius:7px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;border:1px solid transparent;transition:border .15s, transform .1s}
+  .cm .cell:hover{border-color:var(--amber)} .cm .cell.sel{border-color:var(--amber);transform:scale(1.03)}
+  .cm .cell.diag{cursor:default} .cm .cell .v{font-size:18px;font-weight:600}
+  .cm .cell .pct{font-size:10px;color:rgba(255,255,255,.6)}
+  .metrics{display:flex;gap:22px;margin-bottom:14px;flex-wrap:wrap}
+  .metric .v{font-size:22px;font-weight:600} .metric .l{font-size:11px;color:var(--mut)}
+  .metric.good .v{color:#6ab04c} .metric.warn .v{color:var(--amber)}
+  /* disagreement gallery */
+  #disHead{font-size:12px;color:var(--mut);margin:16px 0 10px}
+  .gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+  .tile{background:#181818;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .tile img{width:100%;height:130px;object-fit:cover;display:block;background:#0c0c0c}
+  .tile .meta{padding:7px 8px}
+  .tile .verd{font-size:11px;font-weight:600}
+  .tile .verd .from{color:var(--mut)} .tile .arr{color:var(--amber)}
+  .tile .why{font-size:10px;color:var(--mut);margin-top:3px;line-height:1.35;height:26px;overflow:hidden}
+  .empty{color:var(--mut);font-size:12px;padding:14px 0}
+  .pill{display:inline-block;font-size:10px;padding:1px 7px;border-radius:10px;background:#2a2a2a;color:var(--mut)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Personal Triage — Results</h1>
+  <span class="sub" id="sub">loading…</span>
+  <span style="flex:1"></span>
+  <a href="/#/triage">← Triage</a>
+</header>
+<main id="main"><div class="empty">loading…</div></main>
+
+<script>
+const BN={personal:"Personal",in_between:"In-between",reference:"Reference"};
+const COL={personal:"#5b9bd5",in_between:"#caa468",reference:"#7a7a7a"};
+const enc=encodeURIComponent;
+let DATA=null, selCell=null;
+
+async function load(){
+  let d; try{ d=await (await fetch("/api/personal/report")).json(); }catch(e){ main.innerHTML=`<div class="empty">failed to load</div>`; return; }
+  DATA=d;
+  if(!d.classified){ document.getElementById("main").innerHTML=`<div class="empty">Not classified yet — run <code>muser personal classify</code>.</div>`; return; }
+  document.getElementById("sub").textContent=`${d.total.toLocaleString()} images${d.vlm?` · ${d.vlm} VLM-resolved`:""}`;
+  render();
+}
+
+function bar(buckets,total){
+  return `<div class="distbar">`+["personal","in_between","reference"].map(b=>{
+    const n=buckets[b]||0, pc=total?n/total*100:0;
+    return `<div style="flex:${n||0.0001};background:${COL[b]}" title="${BN[b]}: ${n} (${pc.toFixed(0)}%)">${pc>7?Math.round(pc)+"%":""}</div>`;
+  }).join("")+`</div>`;
+}
+function hist(arr,cls){
+  const mx=Math.max(1,...arr);
+  return `<div class="hist ${cls}">`+arr.map((c,i)=>`<div style="height:${Math.max(2,c/mx*90)}px" title="${(i/20).toFixed(2)}–${((i+1)/20).toFixed(2)}: ${c}"></div>`).join("")+`</div>`;
+}
+function drivers(dr){
+  const order=["people","face","camera","doc","appearance"];
+  const dc={people:"#6ab04c",face:"#5b9bd5",camera:"#caa468",doc:"#b08bd0",appearance:"#555"};
+  let h="";
+  for(const b of ["personal","in_between","reference"]){
+    const row=dr[b], tot=order.reduce((s,k)=>s+(row[k]||0),0)||1;
+    h+=`<div class="drow"><div class="lab">${BN[b]}</div><div class="dstack">`+
+       order.map(k=>`<div style="flex:${row[k]||0.0001};background:${dc[k]}" title="${k}: ${row[k]||0}"></div>`).join("")+`</div></div>`;
+  }
+  h+=`<div class="legend" style="margin-top:6px">`+order.map(k=>`<span><i style="background:${dc[k]}"></i>${k}</span>`).join("")+`</div>`;
+  return h;
+}
+function confusion(b){
+  const cm=b.confusion, order=["personal","in_between","reference"];
+  const mx=Math.max(1,...order.flatMap(a=>order.map(c=>cm[a][c])));
+  let h=`<div class="cm"><div></div>`+order.map(c=>`<div class="h">VLM ${BN[c]}</div>`).join("");
+  for(const a of order){
+    const rtot=order.reduce((s,c)=>s+cm[a][c],0)||1;
+    h+=`<div class="h rh">local ${BN[a]}</div>`;
+    for(const c of order){
+      const v=cm[a][c], diag=a===c, alpha=0.12+0.55*(v/mx);
+      const bg = diag?`rgba(106,176,76,${alpha})`:`rgba(202,164,104,${alpha})`;
+      h+=`<div class="cell ${diag?'diag':''}" style="background:${bg}" data-a="${a}" data-c="${c}">
+            <div class="v">${v}</div><div class="pct">${Math.round(v/rtot*100)}%</div></div>`;
+    }
+  }
+  return h+`</div>`;
+}
+function metric(v,l,cls){return `<div class="metric ${cls||''}"><div class="v">${v}</div><div class="l">${l}</div></div>`;}
+
+function render(){
+  const d=DATA, b=d.benchmark;
+  let h=`<div class="cards">
+    ${card(d.total.toLocaleString(),"total images","")}
+    ${card(d.buckets.personal,"personal","personal")}
+    ${card(d.buckets.in_between,"in-between","in_between")}
+    ${card(d.buckets.reference,"reference","reference")}
+  </div>`;
+
+  h+=`<section><h2>Bucket distribution</h2>${bar(d.buckets,d.total)}
+      <div class="legend">${["personal","in_between","reference"].map(x=>`<span><i style="background:${COL[x]}"></i>${BN[x]} — ${d.buckets[x]}</span>`).join("")}</div></section>`;
+
+  h+=`<div class="grid2">
+    <section><h2>Personal-ness (P) distribution</h2>${hist(d.p_hist,"blue")}<div class="axis"><span>0 reference</span><span>0.5</span><span>1 personal →</span></div></section>
+    <section><h2>Uncertainty distribution</h2>${hist(d.unc_hist,"amber")}<div class="axis"><span>0 confident</span><span>0.5</span><span>1 uncertain →</span></div>
+      <div style="color:var(--mut);font-size:11px;margin-top:8px">The VLM band slider on the Triage tab sends a chosen uncertainty range to gpt-4o-mini.</div></section>
+  </div>`;
+
+  h+=`<section><h2>What signal drove each bucket</h2>${drivers(d.drivers)}
+      <div style="color:var(--mut);font-size:11px;margin-top:8px">Weights — faces/people ${Math.round(d.weights.evidence*100)} · camera ${Math.round(d.weights.camera*100)} · appearance ${Math.round(d.weights.appearance*100)}. People-tag and camera are floors; appearance (1−R vs the aesthetic library) is a weak tiebreak.</div></section>`;
+
+  if(b){
+    const order=["personal","in_between","reference"];
+    const binP=(()=>{const s=b.confusion.personal;return s.personal/((s.personal+s.reference)||1)})();
+    const binR=(()=>{const s=b.confusion.reference;return s.reference/((s.reference+s.personal)||1)})();
+    h+=`<section><h2>Benchmark — gpt-4o-mini independent judge</h2>
+      <div class="metrics">
+        ${metric((b.overall_agreement*100|0)+"%","exact 3-bucket agreement","warn")}
+        ${metric((binP*100|0)+"%","personal precision (vs reference)", binP>=.8?"good":"warn")}
+        ${metric((binR*100|0)+"%","reference precision (vs personal)", binR>=.8?"good":"warn")}
+        ${metric(b.judged,"images judged","")}
+      </div>
+      <div style="color:var(--mut);font-size:11px;margin-bottom:12px">A different model + modality (reads the pixels) bucketing a random sample — independent of the local R/faces/EXIF signals. Click a confusion cell to see those images. <span class="pill">in-between is fuzzy — the judge rarely uses it, which drags the exact-match number; the personal-vs-reference precisions are the meaningful read.</span></div>
+      ${confusion(b)}
+      <div id="disHead">Click an off-diagonal cell above to inspect disagreements.</div>
+      <div class="gal" id="gal"></div>
+    </section>`;
+  } else {
+    h+=`<section><h2>Benchmark</h2><div class="empty">No benchmark yet — run <code>muser personal benchmark</code> for an independent gpt-4o-mini confusion matrix.</div></section>`;
+  }
+  document.getElementById("main").innerHTML=h;
+  if(b) wireConfusion();
+}
+function card(n,l,cls){return `<div class="card ${cls}"><div class="n">${n}</div><div class="l">${l}</div></div>`;}
+
+function wireConfusion(){
+  document.querySelectorAll(".cm .cell").forEach(c=>c.onclick=()=>{
+    const a=c.dataset.a, v=c.dataset.c;
+    document.querySelectorAll(".cm .cell").forEach(x=>x.classList.remove("sel"));
+    c.classList.add("sel");
+    showDisagreements(a,v);
+  });
+}
+function showDisagreements(local,vlm){
+  const dis=(DATA.benchmark.disagreements||[]).filter(x=>x.local===local && x.vlm===vlm);
+  const head=document.getElementById("disHead"), gal=document.getElementById("gal");
+  if(local===vlm){ head.innerHTML=`<b>${BN[local]}</b> agreements (${DATA.benchmark.confusion[local][local]}) — images stored only for disagreements.`; gal.innerHTML=""; return; }
+  head.innerHTML=`Local said <b style="color:${COL[local]}">${BN[local]}</b>, judge said <b style="color:${COL[vlm]}">${BN[vlm]}</b> — ${dis.length} image(s)`;
+  gal.innerHTML = dis.length ? dis.map(x=>`
+    <div class="tile">
+      <img loading="lazy" src="/api/thumb?path=${enc(x.path)}&size=200" title="${x.path}">
+      <div class="meta">
+        <div class="verd"><span class="from">${BN[x.local]}</span> <span class="arr">→</span> ${BN[x.vlm]}</div>
+        <div class="why">${(x.vlm_reason||"").replace(/</g,"&lt;")}</div>
+      </div>
+    </div>`).join("") : `<div class="empty">none</div>`;
+}
+load();
+</script>
+</body>
+</html>

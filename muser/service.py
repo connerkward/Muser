@@ -618,6 +618,55 @@ def create_app(model: str = DEFAULT_MODEL):
     def personal_vlm_status():
         return getattr(state, "_vlm", None) or {"running": False}
 
+    @app.get("/api/personal/report")
+    def personal_report():
+        """Aggregate for the interactive results dashboard (/report): bucket counts,
+        P + uncertainty histograms, what signal drove each bucket, and the VLM-judge
+        benchmark (confusion matrix + disagreement list) if `muser personal benchmark`
+        has run. Reads live from personalness.json + benchmark.json."""
+        import json as _json
+        from .personal import personalness as _pn
+        from .paths import data_file as _df
+        entries = _pn.all_entries()
+        buckets = {"personal": 0, "in_between": 0, "reference": 0}
+        p_hist = [0] * 20
+        unc_hist = [0] * 20
+        # what carried each bucket (priority order matches the fusion floors)
+        drivers = {b: {"people": 0, "camera": 0, "face": 0, "doc": 0, "appearance": 0}
+                   for b in buckets}
+        for e in entries.values():
+            b = e.get("bucket")
+            if b not in buckets:
+                continue
+            buckets[b] += 1
+            pv, uv = e.get("p"), e.get("unc")
+            if pv is not None:
+                p_hist[min(19, max(0, int(pv * 20)))] += 1
+            if uv is not None:
+                unc_hist[min(19, max(0, int(uv * 20)))] += 1
+            s = e.get("sig", {})
+            key = ("people" if s.get("people") else "camera" if s.get("cam")
+                   else "face" if (s.get("F", 0) or 0) > 0 else "doc" if s.get("doc")
+                   else "appearance")
+            drivers[b][key] += 1
+        bench = None
+        bf = _df("benchmark.json")
+        if bf.exists():
+            try:
+                bench = _json.loads(bf.read_text())
+            except Exception:
+                bench = None
+        return {"classified": bool(entries), "total": len(entries), "buckets": buckets,
+                "vlm": sum(1 for e in entries.values() if "vlm" in e),
+                "p_hist": p_hist, "unc_hist": unc_hist, "drivers": drivers,
+                "weights": {"evidence": 0.45, "camera": 0.40, "appearance": 0.15},
+                "benchmark": bench}
+
+    @app.get("/report", response_class=HTMLResponse)
+    def personal_report_page():
+        f = Path(__file__).resolve().parent / "web" / "personal_report.html"
+        return f.read_text() if f.exists() else "<h1>report page not found</h1>"
+
     @app.get("/api/jobs")
     def jobs_list():
         """Everything in flight, for the Jobs page:
