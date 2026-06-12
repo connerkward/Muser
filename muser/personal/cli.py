@@ -101,9 +101,23 @@ def classify(
 
 
 @app.command()
+def sheets(out: str = typer.Option(None, "--out", help="Output dir (default ~/Desktop/personal-triage-sheets)")):
+    """Render labeled contact sheets per bucket to inspect the classification (verify-outputs)."""
+    ensure_personal_root()
+    from . import sheets as _sheets
+    ps = _sheets.generate(out)
+    if not ps:
+        con.print("[red]not classified[/] — run `muser personal classify` first")
+        raise typer.Exit(1)
+    for p in ps:
+        con.print(f"  {p}")
+    con.print(f"[bold]{len(ps)} sheets[/] → open and eyeball the buckets")
+
+
+@app.command()
 def serve(
-    host: str = typer.Option("0.0.0.0", help="Bind address (0.0.0.0 → reachable via Caddy)"),
-    port: int = typer.Option(7778, help="Port (Caddy maps personal.muser.local → here)"),
+    host: str = typer.Option("127.0.0.1", help="Bind address (Caddy proxies to here)"),
+    port: int = typer.Option(7780, help="Port (Caddy maps personal.muser.local → here; 7777 muser/7778 feedsieve/7779 local)"),
     model: str = typer.Option("siglip2-b", help="Embedding model"),
 ):
     """Serve the personal instance (same web UI, isolated data, Triage tab gated on)."""
