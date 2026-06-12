@@ -436,7 +436,7 @@ def train(model: str = "siglip2-b", hold_out_fraction: float = 0.2, progress=Non
 
     # Fit multiclass logistic regression (3 buckets)
     from sklearn.linear_model import LogisticRegression
-    clf_bucket = LogisticRegression(max_iter=2000, C=1.0, multi_class='multinomial')
+    clf_bucket = LogisticRegression(max_iter=2000, C=1.0)
     clf_bucket.fit(X_train, y_train_bucket)
 
     log(f"trained on {len(train_idx)} examples, testing on {len(test_idx)}")

@@ -167,23 +167,33 @@ async function trainOnLabels(){
   try{
     const r=await (await fetch("/api/personal/train",{method:"POST"})).json();
     if(r.started){
-      // Poll for completion
+      // Poll /api/personal/train-result for completion
       let done=false;
-      while(!done){
-        const st=await (await fetch("/api/status")).json();
-        if(st.task && (st.task.kind==="personal_training_done" || st.task.kind==="personal_training_error")){
-          const res=st.task.result || st.task;
+      let attempts=0;
+      while(!done && attempts<120){  // 120 sec timeout
+        attempts++;
+        const tr=await (await fetch("/api/personal/train-result")).json();
+        if(tr.ready && tr.result){
+          const res=tr.result;
           btn.textContent=origText;
           btn.disabled=false;
           if(res.trained){
             alert(`Trained on ${res.n_labeled} labels:\n${res.accuracy*100|0}% accuracy (${res.binary_personal_accuracy*100|0}% binary)\n\n${res.message}`);
+            // Refresh the results to show any changes
+            await new Promise(r=>setTimeout(r,1000));
+            refreshResults();
           } else {
             alert(`Training failed: ${res.message || res.error}`);
           }
           done=true;
         } else {
-          await new Promise(r=>setTimeout(r,1000));
+          await new Promise(r=>setTimeout(r,500));
         }
+      }
+      if(!done){
+        btn.textContent=origText;
+        btn.disabled=false;
+        alert("Training timed out");
       }
     }
   }catch(e){

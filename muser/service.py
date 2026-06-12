@@ -190,6 +190,10 @@ class State:
         self.aidet = {"scanning": False, "done": 0, "total": 0}
         # Face detect/embed/cluster facet progress (People), polled by /api/faces.
         self.faces = {"scanning": False, "done": 0, "total": 0}
+        # Training result from /api/personal/train (personal instance only). Stored
+        # for a short window after completion so the UI can fetch it via polling.
+        self.training_result: dict | None = None
+        self.training_result_time: float = 0.0
 
     def warm(self):
         # Idempotent. Holds a lock so two concurrent first-callers don't both
@@ -696,15 +700,15 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.post("/api/personal/train")
     def personal_train(hold_out: float = 0.2):
-        """Train a supervised head on accumulated user labels.
-        Returns {trained, n_labeled, n_train, n_test, accuracy, confusion, per_bucket, message}"""
+        """Train a supervised head on accumulated user labels (asynchronous).
+        Returns {started: true, message: string}. Polls /api/personal/train-result for result."""
         if state.task is not None:
             raise HTTPException(409, f"busy: {state.task.get('kind')}")
         state.task = {"kind": "personal_training", "done": 0, "total": 100}
+        state.training_result = None
 
         def _progress(m):
             if state.task and state.task.get("kind") == "personal_training":
-                # rough progress updates
                 state.task["message"] = m
 
         def _bg():
@@ -712,17 +716,32 @@ def create_app(model: str = DEFAULT_MODEL):
                 from .personal import personalness as _pn
                 result = _pn.train(model=state.model_name, hold_out_fraction=hold_out,
                                    progress=_progress)
+                state.training_result = result
+                state.training_result_time = time.time()
                 state.task = {
                     "kind": "personal_training_done",
                     "result": result
                 }
             except Exception as e:
+                state.training_result = {"trained": False, "error": str(e)}
+                state.training_result_time = time.time()
                 state.task = {"kind": "personal_training_error", "error": str(e)}
-            # Auto-clear after a short window
+            # Auto-clear task after a window (but result stays for longer)
             threading.Timer(3.0, lambda: setattr(state, "task", None)).start()
 
         threading.Thread(target=_bg, daemon=True, name="muser-personal-train").start()
         return {"started": True, "message": "training in background"}
+
+    @app.get("/api/personal/train-result")
+    def personal_train_result():
+        """Fetch the result of the most recent training job (if within ~30 seconds of completion)."""
+        if state.training_result is None:
+            return {"ready": False}
+        # Expire the result after 30 seconds
+        if time.time() - state.training_result_time > 30:
+            state.training_result = None
+            return {"ready": False}
+        return {"ready": True, "result": state.training_result}
 
     @app.get("/evaluate", response_class=HTMLResponse)
     def personal_evaluate_page():
