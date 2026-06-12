@@ -605,6 +605,15 @@
                   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .cluster .cnt { font-size:11px; color:var(--mut); padding:3px 0 0;
                   font-variant-numeric:tabular-nums; }
+  /* Faces tab: per-card action row (View / Name / Rename / Un-name / Select) */
+  #facesView .cluster { cursor:default; }
+  #facesView .cluster .mos { cursor:pointer; outline:2px solid transparent; transition:outline-color .12s; }
+  #facesView .cluster.sel .mos { outline-color:var(--fg); }
+  #facesView .cluster .frow { display:flex; gap:11px; padding:6px 0 0; flex-wrap:wrap; }
+  #facesView .cluster .frow button { background:transparent; border:0; padding:0; color:var(--mut);
+                  font-size:12px; cursor:pointer; border-bottom:1px solid transparent; }
+  #facesView .cluster .frow button:hover { color:var(--fg); border-bottom-color:var(--fg); }
+  #facesView .cluster .frow button.on { color:var(--fg); border-bottom-color:var(--fg); }
   #cback { margin-bottom:8px; background:transparent; border:0; padding:0; color:var(--mut);
            font-size:12px; cursor:pointer; }
   #cback:hover { color:var(--fg); }
@@ -1252,10 +1261,21 @@
 
 <!-- Faces (People) — face_clusters.json people-groups; revealed when /api/status faces=true -->
 <div class="wrap" id="facesView" style="display:none">
-  <div class="row" style="margin-bottom:14px">
+  <div class="row" style="margin-bottom:6px">
     <b>People</b>
-    <span class="mut">— faces grouped into recurring people (InsightFace ArcFace + HDBSCAN). Local, $0.</span>
-    <span class="mut" id="facesMsg" style="margin-left:8px"></span>
+    <span class="mut">— faces grouped into recurring people (InsightFace ArcFace + HDBSCAN). Name a group, or select several and merge. Named people's photos are auto-classified <b>personal</b>. Local, $0.</span>
+  </div>
+  <div class="row" id="facesToolbar" style="margin-bottom:12px;gap:8px;align-items:center">
+    <span class="mut" id="facesMsg"></span>
+    <span class="sp" style="flex:1"></span>
+    <span class="mut" id="facesSelMsg" style="display:none"></span>
+    <button id="facesMergeBtn" style="display:none">Merge selected…</button>
+    <button id="facesSelClear" style="display:none">Clear</button>
+  </div>
+  <div id="facesPeopleWrap" style="display:none">
+    <div class="mut" style="margin:4px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.5px">Named</div>
+    <div class="grid" id="facesPeople"></div>
+    <div class="mut" style="margin:18px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.5px">Unnamed groups</div>
   </div>
   <div class="grid" id="facesGrid"></div>
   <div id="facesDetail" style="display:none">
@@ -4981,44 +5001,112 @@ async function loadMoreClusterMembers(isFirst){
   _cdMaybeLoadMore();                                 // short page / tall window: keep filling until the buffer is satisfied
 }
 
-// ---- Faces (People) tab — people-clusters from face_clusters.json ----
+// ---- Faces (People) tab — curated people + raw clusters from face_clusters.json ----
 // Self-contained (own state + simple Load-more paging) so it never collides with
 // the Explore cluster-detail state machine above.
-const _fd={id:null, offset:0, total:0, loading:false};
+const _fd={ref:null, offset:0, total:0, loading:false};   // ref: 'c:<id>' or 'p:<id>'
+const _faceSel=new Set();                                  // merge selection of refs
 async function loadFaces(){
   $("#facesDetail").style.display="none"; $("#facesGrid").style.display="";
+  _faceSel.clear(); _syncFaceSel();
   $("#facesMsg").textContent="loading…";
   let r; try{ r=await (await fetch("/api/faces")).json(); }catch(e){ $("#facesMsg").textContent="failed"; return; }
+  if(!r.built){ $("#facesMsg").textContent="Not built yet — run:  muser faces"; $("#facesGrid").innerHTML=""; return; }
+  const people=r.people||[], clusters=r.clusters||[];
+  const tot=[...people,...clusters].reduce((a,c)=>a+c.size,0);
+  $("#facesMsg").textContent=`${people.length} named · ${clusters.length} unnamed · ${tot.toLocaleString()} face-photos`;
+  // Named people section (only shown when there are any)
+  const pw=$("#facesPeopleWrap"), pg=$("#facesPeople");
+  pw.style.display = people.length ? "" : "none";
+  pg.innerHTML="";
+  people.forEach(pe=> pg.appendChild(_faceCard(pe, "p:"+pe.id, pe.name, true)));
+  // Unnamed clusters
   const g=$("#facesGrid"); g.innerHTML="";
-  if(!r.built){ $("#facesMsg").textContent="Not built yet — run:  muser faces"; return; }
-  const total=r.clusters.reduce((a,c)=>a+c.size,0);
-  $("#facesMsg").textContent=`${r.clusters.length} people · ${total.toLocaleString()} face-photos`;
-  r.clusters.forEach((c,i)=>{
-    const mos=c.reps.slice(0,4).map(rp=>`<img loading="lazy" src="/api/thumb?path=${enc(rp.path)}" title="${rp.path}">`).join("");
-    // span_days from file mtime is meaningless for Takeout (all share the extract
-    // time), so only surface it when it's actually informative.
-    const span = c.span_days>=1 ? `${Math.round(c.span_days)}d span · ` : "";
-    const card=document.createElement("div"); card.className="card cluster";
-    card.innerHTML=`<div class="mos">${mos}</div><div class="lab">Person ${i+1}</div>
-      <div class="sub">${span}${c.size.toLocaleString()} photos</div>`;
-    card.onclick=()=>openFacePerson(c.id, i+1, c.size);
-    g.appendChild(card);
-  });
+  clusters.forEach((c,i)=> g.appendChild(_faceCard(c, "c:"+c.id, "Person "+(i+1), false)));
+  if(!people.length && !clusters.length) $("#facesMsg").textContent="no people groups";
 }
-async function openFacePerson(id, num, size){
-  $("#facesGrid").style.display="none"; $("#facesDetail").style.display="";
-  $("#fdtitle").textContent=`Person ${num}`;
+function _faceCard(c, ref, label, named){
+  const mos=(c.reps||[]).slice(0,4).map(rp=>`<img loading="lazy" src="/api/thumb?path=${enc(rp.path)}" title="${rp.path}">`).join("");
+  const card=document.createElement("div"); card.className="card cluster"; card.dataset.ref=ref;
+  if(_faceSel.has(ref)) card.classList.add("sel");
+  card.innerHTML=`<div class="mos">${mos}</div>
+    <div class="lab">${named?'👤 ':''}${esc(label)}</div>
+    <div class="sub">${c.size.toLocaleString()} photos</div>
+    <div class="frow">
+      <button class="lens" data-act="open">View</button>
+      ${named
+        ? `<button data-act="rename">Rename</button><button data-act="unname" title="Un-name → revert to auto bucket">Un-name</button>`
+        : `<button data-act="name">Name…</button>`}
+      <button data-act="sel" class="${_faceSel.has(ref)?'on':''}" title="Select for merge">${_faceSel.has(ref)?'✓ selected':'Select'}</button>
+    </div>`;
+  card.querySelectorAll("[data-act]").forEach(b=> b.onclick=(ev)=>{ ev.stopPropagation(); _faceAct(b.dataset.act, c, ref, label); });
+  // clicking the mosaic opens the group
+  card.querySelector(".mos").onclick=()=> openFacePerson(ref, label, c.size);
+  return card;
+}
+async function _faceAct(act, c, ref, label){
+  if(act==="open"){ openFacePerson(ref, label, c.size); return; }
+  if(act==="sel"){ _faceSel.has(ref)?_faceSel.delete(ref):_faceSel.add(ref); _syncFaceSel(); return; }
+  if(act==="name"){
+    const name=prompt("Name this person — all their photos become personal:", "");
+    if(!name) return;
+    await fetch("/api/faces/name",{method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({cluster_id:parseInt(ref.slice(2)), name})});
+    toast(`named “${name}” → photos now personal`); loadFaces();
+  }
+  if(act==="rename"){
+    const name=prompt("Rename:", label);
+    if(!name||name===label) return;
+    await fetch("/api/faces/merge",{method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({refs:[ref], name})});       // merge with self = rename + keep paths
+    loadFaces();
+  }
+  if(act==="unname"){
+    if(!confirm(`Un-name “${label}”? Their photos revert to the model's bucket.`)) return;
+    await fetch("/api/faces/unname",{method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({person_id:ref.slice(2)})});
+    toast(`un-named “${label}”`); loadFaces();
+  }
+}
+function _syncFaceSel(){
+  document.querySelectorAll("#facesView .card.cluster").forEach(card=>{
+    const on=_faceSel.has(card.dataset.ref);
+    card.classList.toggle("sel", on);
+    const b=card.querySelector('[data-act="sel"]'); if(b){ b.className=on?'on':''; b.textContent=on?'✓ selected':'Select'; }
+  });
+  const n=_faceSel.size;
+  $("#facesSelMsg").style.display=n?"":"none"; $("#facesSelMsg").textContent=`${n} selected`;
+  $("#facesMergeBtn").style.display=n>=2?"":"none";
+  $("#facesSelClear").style.display=n?"":"none";
+}
+$("#facesMergeBtn").onclick=async()=>{
+  if(_faceSel.size<2) return;
+  const name=prompt(`Merge ${_faceSel.size} groups into one person named:`, "");
+  if(!name) return;
+  await fetch("/api/faces/merge",{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({refs:[..._faceSel], name})});
+  _faceSel.clear(); toast(`merged → “${name}” (personal)`); loadFaces();
+};
+$("#facesSelClear").onclick=()=>{ _faceSel.clear(); _syncFaceSel(); };
+
+const _faceMemUrl=(ref,off)=> ref.startsWith("p:")
+  ? `/api/person?id=${ref.slice(2)}&offset=${off}&limit=120`
+  : `/api/face-cluster?id=${ref.slice(2)}&offset=${off}&limit=120`;
+async function openFacePerson(ref, label, size){
+  $("#facesGrid").style.display="none"; $("#facesPeopleWrap").style.display="none";
+  $("#facesDetail").style.display="";
+  $("#fdtitle").textContent=label;
   $("#fdsub").textContent=`${size.toLocaleString()} photos`;
   $("#fdgrid").innerHTML="";
-  _fd.id=id; _fd.offset=0; _fd.total=size; _fd.loading=false;
+  _fd.ref=ref; _fd.offset=0; _fd.total=size; _fd.loading=false;
   await loadMoreFaceMembers();
 }
 async function loadMoreFaceMembers(){
   if(_fd.loading) return; _fd.loading=true;
-  const id=_fd.id, offset=_fd.offset;
-  let r; try{ r=await (await fetch(`/api/face-cluster?id=${id}&offset=${offset}&limit=120`)).json(); }
+  const ref=_fd.ref, offset=_fd.offset;
+  let r; try{ r=await (await fetch(_faceMemUrl(ref,offset))).json(); }
   catch(e){ _fd.loading=false; return; }
-  if(id!==_fd.id){ _fd.loading=false; return; }   // a newer person was opened mid-fetch
+  if(ref!==_fd.ref){ _fd.loading=false; return; }   // a newer group was opened mid-fetch
   const g=$("#fdgrid");
   r.members.forEach(h=>{
     const uid=h.uid||"";
@@ -5033,7 +5121,7 @@ async function loadMoreFaceMembers(){
   $("#fdmore").style.display = _fd.offset < _fd.total ? "" : "none";
   _fd.loading=false;
 }
-$("#fback").onclick=()=>{ $("#facesDetail").style.display="none"; $("#facesGrid").style.display=""; };
+$("#fback").onclick=()=>{ $("#facesDetail").style.display="none"; loadFaces(); };
 $("#fdmore").onclick=()=>loadMoreFaceMembers();
 
 $("#indexPick").onclick = async () => {

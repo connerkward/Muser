@@ -2876,24 +2876,40 @@ def create_app(model: str = DEFAULT_MODEL):
             "members": [{"path": p, "name": os.path.basename(p), "uid": uid_for(p)} for p in page],
         }
 
-    # ---- Faces (people) tab: HDBSCAN people-clusters from face_clusters.json ----
+    # ---- Faces (people) tab: HDBSCAN people-clusters + user-curated people ----
     @app.get("/api/faces")
     def faces_list():
-        """People-clusters (largest first): {id, size, span_days, reps:[{path,uid}]}.
-        `built:false` until `muser faces` has clustered. Hidden reps dropped."""
+        """Curated `people` (named/merged, largest first) + unnamed raw `clusters`
+        (those not yet claimed by a named person). Both: {..., reps:[{path,uid}]}.
+        `built:false` until `muser faces` has clustered."""
         from . import faces as _faces
+        from .personal import people as _people
         cl = _faces.clusters()
         if not cl:
-            return {"built": False, "clusters": []}
-        out = []
+            return {"built": False, "people": [], "clusters": []}
+
+        def _reps(paths, k=4):
+            return [{"path": p, "uid": uid_for(p)} for p in paths if not _hidden(p)][:k]
+
+        # Curated, named people (path-anchored — stable across re-clusters).
+        people = []
+        for pe in _people.list_people():
+            reps = _reps(pe["paths"], 4)
+            live = sum(1 for p in pe["paths"] if not _hidden(p))
+            people.append({"id": pe["id"], "name": pe["name"], "size": live, "reps": reps})
+
+        # Unnamed raw clusters, minus those a named person already claims.
+        claimed = set(_people.claimed_clusters().keys())
+        clusters = []
         for label, c in cl.items():
-            reps = [{"path": p, "uid": uid_for(p)} for p in c.get("reps", []) if not _hidden(p)]
+            if int(label) in claimed:
+                continue
+            reps = [{"path": p, "uid": uid_for(p)} for p in c.get("reps", []) if not _hidden(p)][:4]
             if not reps:
                 continue  # whole cluster hidden → skip
-            out.append({"id": int(label), "size": c.get("size", 0),
-                        "span_days": c.get("span_days", 0), "reps": reps})
-        out.sort(key=lambda c: -c["size"])
-        return {"built": True, "clusters": out}
+            clusters.append({"id": int(label), "size": c.get("size", 0), "reps": reps})
+        clusters.sort(key=lambda c: -c["size"])
+        return {"built": True, "people": people, "clusters": clusters}
 
     @app.get("/api/face-cluster")
     def face_cluster_members(id: int, offset: int = 0, limit: int = 120):
@@ -2905,6 +2921,48 @@ def create_app(model: str = DEFAULT_MODEL):
             "total": len(members),
             "members": [{"path": p, "name": os.path.basename(p), "uid": uid_for(p)} for p in page],
         }
+
+    @app.get("/api/person")
+    def person_members(id: str, offset: int = 0, limit: int = 120):
+        """All images of a curated (named) person `id` (path-anchored membership)."""
+        from .personal import people as _people
+        match = next((p for p in _people.load()["people"] if p["id"] == id), None)
+        if not match:
+            return {"total": 0, "members": []}
+        members = [p for p in match.get("paths", []) if not _hidden(p)]
+        page = members[offset : offset + limit]
+        return {
+            "total": len(members), "name": match["name"],
+            "members": [{"path": p, "name": os.path.basename(p), "uid": uid_for(p)} for p in page],
+        }
+
+    @app.post("/api/faces/name")
+    def faces_name(req: dict):
+        """Name a raw cluster → a curated person (auto-classifies their photos
+        personal). Body: {cluster_id, name}."""
+        from .personal import people as _people
+        try:
+            person = _people.name_cluster(int(req["cluster_id"]), str(req["name"]))
+        except (KeyError, ValueError) as e:
+            return {"ok": False, "error": str(e)}
+        return {"ok": True, "person": person}
+
+    @app.post("/api/faces/merge")
+    def faces_merge(req: dict):
+        """Merge clusters/people into one named person. Body: {refs:["c:11","p:p1"], name}."""
+        from .personal import people as _people
+        try:
+            person = _people.merge(list(req.get("refs", [])), str(req["name"]))
+        except (KeyError, ValueError) as e:
+            return {"ok": False, "error": str(e)}
+        return {"ok": True, "person": person}
+
+    @app.post("/api/faces/unname")
+    def faces_unname(req: dict):
+        """Delete a curated person and revert their images' buckets. Body: {person_id}."""
+        from .personal import people as _people
+        ok = _people.delete(str(req.get("person_id", "")))
+        return {"ok": ok}
 
     # ---- Explore: 3D embedding projection (point-cloud viz) ----
     # A 3D PCA of a sample of the indexed embeddings, colored by HDBSCAN cluster.

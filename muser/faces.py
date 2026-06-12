@@ -185,9 +185,15 @@ def scan(paths, progress=None, checkpoint_every: int = 500) -> dict:
         progress(done, total)
 
     def _flush():
+        # NOTE: do NOT clear `emb` here. `_save_npz(emb)` rewrites the whole npz
+        # from the dict, so clearing it would truncate the file to only the faces
+        # found since the last checkpoint — which silently shrank a 33k-face store
+        # to ~130 and wrecked clustering. The dict is tiny (512 f32 per face ≈
+        # 2 KB; even 100k faces ≈ 200 MB), so accumulating it is fine; the earlier
+        # "26 GB" was misattributed and clearing here fixed nothing while breaking
+        # the embeddings.
         _SIDE.save(cache)
         _save_npz(emb)
-        emb.clear()  # free memory after saving to npz
         _SIDE._primed = False
         _SIDE.prime()
 
