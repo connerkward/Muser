@@ -667,6 +667,27 @@ def create_app(model: str = DEFAULT_MODEL):
         f = Path(__file__).resolve().parent / "web" / "personal_report.html"
         return f.read_text() if f.exists() else "<h1>report page not found</h1>"
 
+    @app.get("/api/personal/eval-sample")
+    def personal_eval_sample(n: int = 60, seed: int = 0):
+        from .personal import evaluate as _ev
+        return {"items": _ev.sample(n=n, seed=seed)}
+
+    @app.post("/api/personal/eval-label")
+    def personal_eval_label(req: dict):
+        from .personal import evaluate as _ev
+        _ev.label(req["path"], req.get("label"), req.get("model"))
+        return {"ok": True}
+
+    @app.get("/api/personal/eval-results")
+    def personal_eval_results():
+        from .personal import evaluate as _ev
+        return _ev.results()
+
+    @app.get("/evaluate", response_class=HTMLResponse)
+    def personal_evaluate_page():
+        f = Path(__file__).resolve().parent / "web" / "personal_evaluate.html"
+        return f.read_text() if f.exists() else "<h1>evaluate page not found</h1>"
+
     @app.get("/api/jobs")
     def jobs_list():
         """Everything in flight, for the Jobs page:

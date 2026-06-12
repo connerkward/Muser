@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Personal Triage — Evaluate</title>
+<style>
+  :root{ --bg:#121212; --card:#1b1b1b; --line:#2c2c2c; --ink:#e8e8e8; --mut:#8a8a8a;
+         --amber:#caa468; --p:#5b9bd5; --i:#caa468; --r:#7a7a7a; --good:#6ab04c; --bad:#d08770; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{position:sticky;top:0;z-index:5;background:rgba(18,18,18,.96);backdrop-filter:blur(8px);
+         padding:12px 22px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+  header h1{font-size:16px;margin:0;font-weight:600}
+  .met{display:flex;gap:18px;align-items:baseline;flex-wrap:wrap}
+  .met .b{font-size:20px;font-weight:600} .met .l{font-size:11px;color:var(--mut)}
+  .met .good{color:var(--good)} .met .amber{color:var(--amber)}
+  header a,button.ghost{color:var(--amber);text-decoration:none;font-size:12px;background:none;border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer}
+  header .sp{flex:1}
+  main{padding:18px 22px;max-width:1300px;margin:0 auto}
+  .note{color:var(--mut);font-size:12px;margin-bottom:16px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}
+  .ev{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;transition:border .15s}
+  .ev.agree{border-color:var(--good)} .ev.dis{border-color:var(--bad)}
+  .ev img{width:100%;height:200px;object-fit:cover;display:block;background:#0c0c0c;cursor:zoom-in}
+  .ev .body{padding:9px 10px}
+  .pred{font-size:11px;color:var(--mut);margin-bottom:7px}
+  .bk{font-weight:600} .bk.personal{color:var(--p)} .bk.in_between{color:var(--i)} .bk.reference{color:var(--r)}
+  .btns{display:flex;gap:5px}
+  .btns button{flex:1;font-size:11px;padding:6px 0;border-radius:6px;border:1px solid var(--line);
+               background:#222;color:var(--ink);cursor:pointer;transition:.1s}
+  .btns button:hover{border-color:var(--amber)}
+  .btns button.guess{border-color:#3a3a3a;box-shadow:inset 0 0 0 1px #333}
+  .btns button.on{background:var(--amber);color:#111;border-color:var(--amber);font-weight:600}
+  .conf{margin-top:22px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 18px}
+  .conf h2{font-size:12px;color:var(--amber);text-transform:uppercase;margin:0 0 12px}
+  .cm{display:grid;grid-template-columns:auto repeat(3,90px);gap:6px}
+  .cm .h{color:var(--mut);font-size:11px;display:flex;align-items:center;justify-content:center;text-transform:capitalize}
+  .cm .rh{justify-content:flex-end;padding-right:8px}
+  .cm .cell{height:40px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:600}
+  #more{margin:22px auto 60px;display:block}
+  .lightbox{position:fixed;inset:0;background:rgba(0,0,0,.9);display:none;align-items:center;justify-content:center;z-index:20;cursor:zoom-out}
+  .lightbox img{max-width:94vw;max-height:94vh;object-fit:contain}
+</style>
+</head>
+<body>
+<header>
+  <h1>Evaluate</h1>
+  <div class="met">
+    <span><span class="b" id="mLabeled">0</span> <span class="l">labeled</span></span>
+    <span><span class="b good" id="mAcc">–</span> <span class="l">exact accuracy</span></span>
+    <span><span class="b amber" id="mBinP">–</span> <span class="l">personal vs ref</span></span>
+    <span><span class="b amber" id="mBinR">–</span> <span class="l">reference vs personal</span></span>
+  </div>
+  <span class="sp"></span>
+  <button class="ghost" id="newBatch">New batch ↻</button>
+  <a href="/report">Results dashboard →</a>
+</header>
+<main>
+  <div class="note" id="note">Tap the bucket each image really belongs to — the model's guess is outlined. Your labels are the ground truth; accuracy updates live. (Image classification is preliminary while faces are still computing.)</div>
+  <div class="grid" id="grid"></div>
+  <div class="conf" id="confWrap" style="display:none">
+    <h2>Your labels vs the model</h2>
+    <div class="cm" id="cm"></div>
+  </div>
+  <button class="ghost" id="more">Load 30 more</button>
+</main>
+<div class="lightbox" id="lb"><img id="lbImg"></div>
+
+<script>
+const BN={personal:"Personal",in_between:"In-between",reference:"Reference"};
+const COL={personal:"#5b9bd5",in_between:"#caa468",reference:"#7a7a7a"};
+const enc=encodeURIComponent; const $=s=>document.querySelector(s);
+let seed=Math.floor((performance.now()*1000)%100000), seen=new Set();
+
+async function batch(n){
+  const r=await (await fetch(`/api/personal/eval-sample?n=${n}&seed=${seed}`)).json();
+  seed++;
+  const g=$("#grid");
+  for(const it of r.items){
+    if(seen.has(it.path)) continue; seen.add(it.path);
+    g.appendChild(card(it));
+  }
+  refreshResults();
+}
+function card(it){
+  const d=document.createElement("div"); d.className="ev"; d.dataset.path=it.path; d.dataset.model=it.bucket;
+  const sig=it.sig||{}; const tags=[]; if(sig.people)tags.push("ppl"); if(sig.cam)tags.push("cam"); if((sig.F||0)>0)tags.push("face"); if(sig.doc)tags.push("doc");
+  d.innerHTML=`
+    <img loading="lazy" src="/api/thumb?path=${enc(it.path)}&size=300" title="${it.album}">
+    <div class="body">
+      <div class="pred">model: <span class="bk ${it.bucket}">${BN[it.bucket]}</span> · P${Math.round((it.p||0)*100)} u${Math.round((it.unc||0)*100)}${tags.length?" · "+tags.join(" "):""}</div>
+      <div class="btns">
+        ${["personal","in_between","reference"].map(b=>`<button data-l="${b}" class="${b===it.bucket?'guess':''}">${BN[b].replace('In-between','In·b')}</button>`).join("")}
+      </div>
+    </div>`;
+  d.querySelector("img").onclick=()=>{ $("#lbImg").src=`/api/image?path=${enc(it.path)}`; $("#lb").style.display="flex"; };
+  d.querySelectorAll(".btns button").forEach(btn=>btn.onclick=()=>setLabel(d,it,btn.dataset.l));
+  if(it.label) markChosen(d,it,it.label,false);
+  return d;
+}
+function markChosen(d,it,label,post){
+  d.querySelectorAll(".btns button").forEach(b=>b.classList.toggle("on", b.dataset.l===label));
+  d.classList.toggle("agree", label===it.bucket);
+  d.classList.toggle("dis", label!==it.bucket);
+}
+async function setLabel(d,it,label){
+  markChosen(d,it,label,true);
+  try{ await fetch("/api/personal/eval-label",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({path:it.path,label,model:it.bucket})}); }catch(e){}
+  refreshResults();
+}
+async function refreshResults(){
+  let r; try{ r=await (await fetch("/api/personal/eval-results")).json(); }catch(e){ return; }
+  $("#mLabeled").textContent=r.labeled;
+  $("#mAcc").textContent = r.accuracy!=null ? Math.round(r.accuracy*100)+"%" : "–";
+  $("#mBinP").textContent = r.labeled ? Math.round(r.binary_personal*100)+"%" : "–";
+  $("#mBinR").textContent = r.labeled ? Math.round(r.binary_reference*100)+"%" : "–";
+  if(r.labeled>=3){ $("#confWrap").style.display=""; renderCM(r.confusion); }
+}
+function renderCM(cm){
+  const order=["personal","in_between","reference"];
+  const mx=Math.max(1,...order.flatMap(a=>order.map(c=>cm[a][c])));
+  let h=`<div></div>`+order.map(c=>`<div class="h">you: ${BN[c]}</div>`).join("");
+  for(const a of order){
+    h+=`<div class="h rh">model ${BN[a]}</div>`;
+    for(const c of order){const v=cm[a][c],diag=a===c,al=0.12+0.55*(v/mx);
+      h+=`<div class="cell" style="background:${diag?`rgba(106,176,76,${al})`:`rgba(208,135,112,${al})`}">${v}</div>`;}
+  }
+  $("#cm").innerHTML=h;
+}
+$("#more").onclick=()=>batch(30);
+$("#newBatch").onclick=()=>{ seen.clear(); $("#grid").innerHTML=""; batch(45); };
+$("#lb").onclick=()=>$("#lb").style.display="none";
+batch(45);
+</script>
+</body>
+</html>
