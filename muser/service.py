@@ -190,6 +190,8 @@ class State:
         self.aidet = {"scanning": False, "done": 0, "total": 0}
         # Face detect/embed/cluster facet progress (People), polled by /api/faces.
         self.faces = {"scanning": False, "done": 0, "total": 0}
+        # Delete-candidate (junk) facet scan progress, polled by the Cleanup tab.
+        self.cleanup = {"scanning": False, "done": 0, "total": 0}
         # Training result from /api/personal/train (personal instance only). Stored
         # for a short window after completion so the UI can fetch it via polling.
         self.training_result: dict | None = None
@@ -701,6 +703,74 @@ def create_app(model: str = DEFAULT_MODEL):
     def personal_eval_flagged():
         from .personal import evaluate as _ev
         return _ev.flagged()
+
+    # ---- Cleanup: algorithmic delete-candidate review ----
+    @app.get("/api/personal/cleanup-status")
+    def cleanup_status():
+        from .personal import cleanup as _cu
+        return {"available": _cu.available(), "built": _cu.cache_exists(),
+                "scan": state.cleanup}
+
+    @app.post("/api/personal/cleanup-scan")
+    def cleanup_scan():
+        """Compute the junk facet (blur/exposure/tiny) over the library in a
+        daemon thread; poll /api/personal/cleanup-status. Incremental."""
+        from .personal import cleanup as _cu
+        if not _cu.available():
+            return {"started": False, "reason": "opencv missing"}
+        if state.cleanup.get("scanning"):
+            return {"started": False, "reason": "already running"}
+        paths = state.index.paths(state.model_name)
+        if not paths:
+            return {"started": False, "reason": "nothing indexed"}
+        state.cleanup = {"scanning": True, "done": 0, "total": len(paths)}
+
+        def _bg():
+            try:
+                _cu.scan(paths, progress=lambda d, t: state.cleanup.update(done=d, total=t))
+            finally:
+                state.cleanup["scanning"] = False
+        threading.Thread(target=_bg, daemon=True, name="muser-cleanup-scan").start()
+        return {"started": True, "total": len(paths)}
+
+    @app.get("/api/personal/delete-candidates")
+    def delete_candidates(min_score: int = 55, offset: int = 0, limit: int = 120):
+        """Ranked delete candidates (worst first). Folds near-duplicate membership
+        in from scores.json: a non-representative member of a dupe group is a
+        delete candidate ('duplicate'). Live-file filtered; current delete flags
+        marked so the UI can show what's already flagged."""
+        from .personal import cleanup as _cu
+        from .personal import evaluate as _ev
+        if not _cu.cache_exists():
+            return {"built": False, "total": 0, "items": []}
+        # near-dup: non-rep members of a dupe group → strong candidate
+        extra: dict = {}
+        try:
+            rep_of = _refresh_scores_cache().get("rep_of", {})
+            for path, rep in rep_of.items():
+                if rep and rep != path:
+                    extra[path] = (70, "duplicate")
+        except Exception:
+            pass
+        cands = [c for c in _cu.candidates(min_score, extra) if not _hidden(c["path"])]
+        flagged = _ev.flagged()
+        delset = set(flagged.get("delete", []))
+        total = len(cands)
+        page = cands[offset:offset + limit]
+        items = [{"path": c["path"], "name": os.path.basename(c["path"]), "uid": uid_for(c["path"]),
+                  "score": c["score"], "reasons": c["reasons"],
+                  "flagged": c["path"] in delset} for c in page]
+        return {"built": True, "total": total, "offset": offset, "items": items}
+
+    @app.post("/api/personal/flag-bulk")
+    def personal_flag_bulk(req: dict):
+        """Set one disposition flag on many paths at once (Cleanup → mark delete)."""
+        from .personal import evaluate as _ev
+        flag = req.get("flag")
+        paths = req.get("paths", [])
+        for p in paths:
+            _ev.set_flag(p, flag)
+        return {"ok": True, "n": len(paths)}
 
     @app.post("/api/personal/train")
     def personal_train(hold_out: float = 0.2):

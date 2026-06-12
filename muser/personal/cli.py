@@ -101,6 +101,28 @@ def classify(
 
 
 @app.command()
+def cleanup(min_score: int = typer.Option(55, help="Min junk score to list as a candidate")):
+    """Scan the junk facet (blur/exposure/tiny) → delete candidates for the Cleanup tab."""
+    ensure_personal_root()
+    from . import cleanup as _cu
+    from ..index import MuserIndex
+
+    if not _cu.available():
+        con.print("[red]opencv missing[/] — uv pip install opencv-python-headless")
+        raise typer.Exit(1)
+    paths = MuserIndex().paths("siglip2-b")
+    if not paths:
+        con.print("[red]no personal index[/] — run `muser personal ingest` first")
+        raise typer.Exit(1)
+    with _progress("cleanup", len(paths)) as prog:
+        t = prog.add_task("cleanup", total=len(paths))
+        _cu.scan(paths, progress=lambda d, n: prog.update(t, completed=d, total=n))
+    cands = _cu.candidates(min_score)
+    con.print(f"[bold]{len(cands)}[/] delete candidates ≥ {min_score} junk score "
+              f"(of {len(paths)}). Review in the Cleanup tab.")
+
+
+@app.command()
 def train(
     model: str = typer.Option("siglip2-b", help="Embedding model"),
     hold_out: float = typer.Option(0.2, "--hold-out", help="Fraction for held-out test"),

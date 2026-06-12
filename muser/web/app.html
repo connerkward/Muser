@@ -614,6 +614,40 @@
                   font-size:12px; cursor:pointer; border-bottom:1px solid transparent; }
   #facesView .cluster .frow button:hover { color:var(--fg); border-bottom-color:var(--fg); }
   #facesView .cluster .frow button.on { color:var(--fg); border-bottom-color:var(--fg); }
+  /* Evaluate tab cards */
+  #evaluateView .evb { font-size:20px; font-weight:600; }
+  #evaluateView .evgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:14px; }
+  #evaluateView .ev { background:var(--card,#1b1b1b); border:1px solid var(--line); border-radius:10px;
+                      overflow:hidden; transition:border .15s; }
+  #evaluateView .ev.agree { border-color:var(--good,#6ab04c); }
+  #evaluateView .ev.dis { border-color:#d08770; }
+  #evaluateView .ev img { width:100%; height:190px; object-fit:cover; display:block; background:#0c0c0c; cursor:zoom-in; }
+  #evaluateView .ev .body { padding:9px 10px; }
+  #evaluateView .ev .pred { font-size:11px; color:var(--mut); margin-bottom:7px; }
+  #evaluateView .ev .bk { font-weight:600; } #evaluateView .bk.personal { color:#5b9bd5; }
+  #evaluateView .bk.in_between { color:#caa468; } #evaluateView .bk.reference { color:#9a9a9a; }
+  #evaluateView .btns, #evaluateView .flags { display:flex; gap:5px; }
+  #evaluateView .flags { margin-top:6px; }
+  #evaluateView .btns button { flex:1; font-size:11px; padding:6px 0; border-radius:6px; border:1px solid var(--line);
+                      background:#222; color:var(--fg); cursor:pointer; transition:.1s; }
+  #evaluateView .btns button:hover { border-color:#caa468; }
+  #evaluateView .btns button.guess { box-shadow:inset 0 0 0 1px #444; }
+  #evaluateView .btns button.on { background:#caa468; color:#111; border-color:#caa468; font-weight:600; }
+  #evaluateView .flags button { flex:1; font-size:11px; padding:5px 0; border-radius:6px; border:1px solid var(--line);
+                      background:#1d1d1d; color:var(--mut); cursor:pointer; transition:.1s; }
+  #evaluateView .flags button.on[data-f="depri"] { background:#3a3320; color:#e3c97a; border-color:#7a6a30; }
+  #evaluateView .flags button.on[data-f="delete"] { background:#3a2020; color:#e89b86; border-color:#7a3030; }
+  #evaluateView .ev.flag-delete img { opacity:.45; filter:grayscale(.4); }
+  #evaluateView .ev.flag-depri img { opacity:.7; }
+  #evaluateView .cm { display:grid; grid-template-columns:auto repeat(3,84px); gap:6px; max-width:420px; }
+  #evaluateView .cm .h { color:var(--mut); font-size:11px; display:flex; align-items:center; justify-content:center; text-transform:capitalize; }
+  #evaluateView .cm .rh { justify-content:flex-end; padding-right:8px; }
+  #evaluateView .cm .cell { height:38px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-weight:600; }
+  /* Cleanup tab: delete-candidate cards with select + reason chips */
+  #cleanupView .card.sel .thumb { outline:2px solid #e89b86; outline-offset:-2px; }
+  #cleanupView .card .reasons { display:flex; gap:4px; flex-wrap:wrap; padding:4px 0 0; }
+  #cleanupView .card .chip { font-size:10px; color:#e89b86; border:1px solid #5a3030; border-radius:4px; padding:1px 5px; }
+  #cleanupView .card .jscore { font-variant-numeric:tabular-nums; }
   #cback { margin-bottom:8px; background:transparent; border:0; padding:0; color:var(--mut);
            font-size:12px; cursor:pointer; }
   #cback:hover { color:var(--fg); }
@@ -1050,6 +1084,8 @@
     <button class="nav" data-view="jobs">Jobs</button>
     <!-- Triage = hidden personal Google-Photos sub-tool; only on the personal instance -->
     <button class="nav" data-view="triage" style="display:none">Triage</button>
+    <button class="nav" data-view="evaluate" style="display:none">Evaluate</button>
+    <button class="nav" data-view="cleanup" style="display:none">Cleanup</button>
   </nav>
   <input id="qMini" placeholder="Search…" autocomplete="off" />
   <input id="negMini" placeholder="Exclude…" autocomplete="off" />
@@ -1070,8 +1106,10 @@
   <button class="nav" id="navJobs">Jobs</button>
   <!-- Triage = hidden personal Google-Photos sub-tool; revealed only when /api/status personal=true -->
   <button class="nav" id="navTriage" style="display:none">Triage</button>
-  <!-- Evaluate = label buckets + mark for deletion; separate page, personal instance only -->
-  <a class="nav" id="navEvaluate" href="/evaluate" style="display:none;text-decoration:none">Evaluate</a>
+  <!-- Evaluate = label buckets + flags; native tab, personal instance only -->
+  <button class="nav" id="navEvaluate" style="display:none">Evaluate</button>
+  <!-- Cleanup = algorithmic delete-candidate review; personal instance only -->
+  <button class="nav" id="navCleanup" style="display:none">Cleanup</button>
   <span class="mut" id="status">…</span>
   <span class="sp"></span>
   <span class="spinner" id="spinner" style="display:none" title="Working…"></span>
@@ -1381,6 +1419,52 @@
   <div class="grid" id="triageGrid"></div>
   <div class="row" style="margin-top:10px"><button id="triageMore" style="display:none">Load more</button></div>
 </div>
+
+<!-- Evaluate — label buckets (ground truth) + Deprioritize/Delete flags; personal only -->
+<div class="wrap" id="evaluateView" style="display:none">
+  <div class="row" id="evMet" style="display:flex;gap:18px;align-items:baseline;flex-wrap:wrap;margin-bottom:8px">
+    <span><span class="evb" id="evLabeled">0</span> <span class="mut">labeled</span></span>
+    <span><span class="evb" id="evAcc" style="color:var(--good,#6ab04c)">–</span> <span class="mut">exact accuracy</span></span>
+    <span><span class="evb" id="evBinP" style="color:#caa468">–</span> <span class="mut">personal vs ref</span></span>
+    <span><span class="evb" id="evBinR" style="color:#caa468">–</span> <span class="mut">reference vs personal</span></span>
+    <span><span class="evb" id="evFlag" style="color:#e89b86">0</span> <span class="mut">flagged ↓/🗑</span></span>
+    <span style="flex:1"></span>
+    <button id="evTrain" style="display:none">Retrain on labels 🧠</button>
+    <button id="evNew">New batch ↻</button>
+  </div>
+  <div class="mut" style="font-size:12px;margin-bottom:14px">Tap the bucket each image really belongs to — the model's guess is outlined. Your labels are ground truth; accuracy updates live. Flag junk with 🗑 (feeds the Cleanup tab).</div>
+  <div class="evgrid" id="evGrid"></div>
+  <div class="conf" id="evConfWrap" style="display:none">
+    <h3 style="font-size:12px;color:#caa468;text-transform:uppercase;margin:18px 0 12px">Your labels vs the model</h3>
+    <div class="cm" id="evCm"></div>
+  </div>
+  <div class="row" style="margin-top:18px"><button id="evMore">Load 30 more</button></div>
+</div>
+
+<!-- Cleanup — algorithmic delete-candidate review; personal only -->
+<div class="wrap" id="cleanupView" style="display:none">
+  <div class="row" style="margin-bottom:6px">
+    <b>Cleanup</b>
+    <span class="mut">— likely <b>delete candidates</b> ranked by a local junk score (blur · over/under-exposure · tiny · near-duplicate). Local, $0. Select and mark 🗑 to flag for deletion (no files are touched — flags land in the Evaluate set).</span>
+  </div>
+  <div class="row" id="cleanupToolbar" style="margin-bottom:12px;gap:12px;align-items:center;flex-wrap:wrap">
+    <label class="mut" style="font-size:12px">min junk score
+      <input type="range" id="cuThresh" min="30" max="90" value="55" style="width:140px;vertical-align:middle"></label>
+    <span class="mut" id="cuThreshLabel" style="font-size:12px">55</span>
+    <span class="mut" id="cleanupMsg" style="font-size:12px"></span>
+    <button id="cuScan" style="display:none">Scan library</button>
+    <span style="flex:1"></span>
+    <span class="mut" id="cuSelMsg" style="display:none;font-size:12px"></span>
+    <button id="cuSelAll" style="display:none">Select all shown</button>
+    <button id="cuMark" class="primary" style="display:none">🗑 Mark selected for delete</button>
+    <button id="cuClear" style="display:none">Clear</button>
+  </div>
+  <div class="grid" id="cleanupGrid"></div>
+  <div class="row" style="margin-top:10px"><button id="cleanupMore" style="display:none">Load more</button></div>
+</div>
+
+<!-- shared lightbox for Evaluate/Cleanup zoom -->
+<div id="evLb" style="position:fixed;inset:0;background:rgba(0,0,0,.92);display:none;align-items:center;justify-content:center;z-index:60;cursor:zoom-out"><img id="evLbImg" style="max-width:94vw;max-height:94vh;object-fit:contain"></div>
 
 <div class="wrap" id="colorView" style="display:none">
   <div class="row" style="margin-bottom:8px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
@@ -3962,9 +4046,9 @@ function openDetail(uid){ showView("image", {uid}); }
 // ---- view switching (Search / Explore / Interesting / Review / AI / Image) ----
 // `image` is a *detail* view (no nav button) — it's only reached from hash
 // routing (#/image/<uid>) or programmatically via openDetail(uid).
-const VIEWS={search:"searchView",explore:"exploreView",faces:"facesView",interesting:"interestingView",review:"reviewView",color:"colorView",ai:"aiView",results:"resultsView",jobs:"jobsView",triage:"triageView",image:"imageView"};
-const NAVS={search:"navSearch",explore:"navExplore",faces:"navFaces",interesting:"navInteresting",review:"navReview",color:"navColor",ai:"navAI",results:"navResults",jobs:"navJobs",triage:"navTriage"};
-const VIEW_TITLES={search:"Search",explore:"Explore",faces:"Faces",interesting:"Interesting",review:"Review",color:"Color",ai:"AI",results:"Results",jobs:"Jobs",triage:"Triage",image:"Image"};
+const VIEWS={search:"searchView",explore:"exploreView",faces:"facesView",interesting:"interestingView",review:"reviewView",color:"colorView",ai:"aiView",results:"resultsView",jobs:"jobsView",triage:"triageView",evaluate:"evaluateView",cleanup:"cleanupView",image:"imageView"};
+const NAVS={search:"navSearch",explore:"navExplore",faces:"navFaces",interesting:"navInteresting",review:"navReview",color:"navColor",ai:"navAI",results:"navResults",jobs:"navJobs",triage:"navTriage",evaluate:"navEvaluate",cleanup:"navCleanup"};
+const VIEW_TITLES={search:"Search",explore:"Explore",faces:"Faces",interesting:"Interesting",review:"Review",color:"Color",ai:"AI",results:"Results",jobs:"Jobs",triage:"Triage",evaluate:"Evaluate",cleanup:"Cleanup",image:"Image"};
 // Internal flag: when popstate or initial-route call showView, suppress the
 // pushState so back/forward don't double-stack history entries.
 let _suppressHistory=false;
@@ -3995,6 +4079,8 @@ function showView(v, opts){
   if(v==="results") openResults(opts.runId);
   if(v==="jobs") startJobsPoll();
   if(v==="triage") loadTriage();
+  if(v==="evaluate") loadEvaluate();
+  if(v==="cleanup") loadCleanup();
   if(v==="image" && opts.uid) loadImageDetail(opts.uid);
   // Returning to Search with no query + no filter and an empty grid → showcase.
   if(v==="search" && typeof showShowcase==="function"
@@ -5124,6 +5210,198 @@ async function loadMoreFaceMembers(){
 $("#fback").onclick=()=>{ $("#facesDetail").style.display="none"; loadFaces(); };
 $("#fdmore").onclick=()=>loadMoreFaceMembers();
 
+// ---- Evaluate tab (ported from /evaluate; same /api/personal/eval-* endpoints) ----
+const EV_BN={personal:"Personal",in_between:"In-between",reference:"Reference"};
+let _evSeed=Math.floor((performance.now()*1000)%100000), _evSeen=new Set();
+function loadEvaluate(){ if(!$("#evGrid").children.length) evBatch(45); }
+async function evBatch(n){
+  let r; try{ r=await (await fetch(`/api/personal/eval-sample?n=${n}&seed=${_evSeed}`)).json(); }catch(e){ return; }
+  _evSeed++;
+  const g=$("#evGrid");
+  for(const it of (r.items||[])){
+    if(_evSeen.has(it.path)) continue; _evSeen.add(it.path);
+    g.appendChild(evCard(it));
+  }
+  evRefreshResults(); evRefreshFlags();
+}
+function evCard(it){
+  const d=document.createElement("div"); d.className="ev"; d.dataset.path=it.path; d.dataset.model=it.bucket;
+  const sig=it.sig||{}; const tags=[]; if(sig.people)tags.push("ppl"); if(sig.cam)tags.push("cam"); if((sig.F||0)>0)tags.push("face"); if(sig.doc)tags.push("doc");
+  d.innerHTML=`
+    <img loading="lazy" src="/api/thumb?path=${enc(it.path)}&size=300" title="${esc(it.album||"")}">
+    <div class="body">
+      <div class="pred">model: <span class="bk ${it.bucket}">${EV_BN[it.bucket]}</span> · P${Math.round((it.p||0)*100)} u${Math.round((it.unc||0)*100)}${tags.length?" · "+tags.join(" "):""}</div>
+      <div class="btns">
+        ${["personal","in_between","reference"].map(b=>`<button data-l="${b}" class="${b===it.bucket?'guess':''}">${EV_BN[b].replace('In-between','In·b')}</button>`).join("")}
+      </div>
+      <div class="flags">
+        <button data-f="depri" title="Keep but rank down">↓ Deprioritize</button>
+        <button data-f="delete" title="Delete candidate (junk/unwanted)">🗑 Delete</button>
+      </div>
+    </div>`;
+  d.querySelector("img").onclick=()=>{ $("#evLbImg").src=`/api/image?path=${enc(it.path)}`; $("#evLb").style.display="flex"; };
+  d.querySelectorAll(".btns button").forEach(btn=>btn.onclick=()=>evSetLabel(d,it,btn.dataset.l));
+  d.querySelectorAll(".flags button").forEach(btn=>btn.onclick=()=>evSetFlag(d,it,btn.dataset.f));
+  if(it.label) evMarkChosen(d,it,it.label);
+  if(it.flag) evMarkFlag(d,it.flag);
+  return d;
+}
+function evMarkChosen(d,it,label){
+  d.querySelectorAll(".btns button").forEach(b=>b.classList.toggle("on", b.dataset.l===label));
+  d.classList.toggle("agree", label===it.bucket);
+  d.classList.toggle("dis", label!==it.bucket);
+}
+async function evSetLabel(d,it,label){
+  evMarkChosen(d,it,label);
+  try{ await fetch("/api/personal/eval-label",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({path:it.path,label,model:it.bucket})}); }catch(e){}
+  evRefreshResults();
+}
+function evMarkFlag(d,flag){
+  d.dataset.flag=flag||"";
+  d.classList.toggle("flag-depri", flag==="depri");
+  d.classList.toggle("flag-delete", flag==="delete");
+  d.querySelectorAll(".flags button").forEach(b=>b.classList.toggle("on", b.dataset.f===flag));
+}
+async function evSetFlag(d,it,flag){
+  const next = d.dataset.flag===flag ? null : flag;
+  evMarkFlag(d,next);
+  try{ await fetch("/api/personal/eval-flag",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({path:it.path,flag:next})}); }catch(e){}
+  evRefreshFlags();
+}
+async function evRefreshFlags(){
+  try{ const f=await (await fetch("/api/personal/eval-flagged")).json();
+    $("#evFlag").textContent=(f.counts.depri||0)+(f.counts.delete||0); }catch(e){}
+}
+async function evRefreshResults(){
+  let r; try{ r=await (await fetch("/api/personal/eval-results")).json(); }catch(e){ return; }
+  $("#evLabeled").textContent=r.labeled;
+  $("#evAcc").textContent = r.accuracy!=null ? Math.round(r.accuracy*100)+"%" : "–";
+  $("#evBinP").textContent = r.labeled ? Math.round(r.binary_personal*100)+"%" : "–";
+  $("#evBinR").textContent = r.labeled ? Math.round(r.binary_reference*100)+"%" : "–";
+  $("#evTrain").style.display = r.labeled>=5 ? "" : "none";
+  if(r.labeled>=3){ $("#evConfWrap").style.display=""; evRenderCM(r.confusion); }
+}
+function evRenderCM(cm){
+  const order=["personal","in_between","reference"];
+  const mx=Math.max(1,...order.flatMap(a=>order.map(c=>cm[a][c])));
+  let h=`<div></div>`+order.map(c=>`<div class="h">you: ${EV_BN[c]}</div>`).join("");
+  for(const a of order){
+    h+=`<div class="h rh">model ${EV_BN[a]}</div>`;
+    for(const c of order){const v=cm[a][c],diag=a===c,al=0.12+0.55*(v/mx);
+      h+=`<div class="cell" style="background:${diag?`rgba(106,176,76,${al})`:`rgba(208,135,112,${al})`}">${v}</div>`;}
+  }
+  $("#evCm").innerHTML=h;
+}
+async function evTrainOnLabels(){
+  const btn=$("#evTrain"), orig=btn.textContent; btn.disabled=true; btn.textContent="Training…";
+  try{
+    const r=await (await fetch("/api/personal/train",{method:"POST"})).json();
+    if(r.started){
+      for(let i=0;i<120;i++){
+        const tr=await (await fetch("/api/personal/train-result")).json();
+        if(tr.ready && tr.result){
+          const res=tr.result; btn.textContent=orig; btn.disabled=false;
+          if(res.trained){ toast(`Trained on ${res.n_labeled} labels — ${Math.round(res.accuracy*100)}% acc`); evRefreshResults(); }
+          else toast(`Training failed: ${res.message||res.error||""}`);
+          return;
+        }
+        await new Promise(r=>setTimeout(r,500));
+      }
+      btn.textContent=orig; btn.disabled=false; toast("Training timed out");
+    } else { btn.textContent=orig; btn.disabled=false; }
+  }catch(e){ btn.textContent=orig; btn.disabled=false; toast("Train error"); }
+}
+$("#evTrain").onclick=evTrainOnLabels;
+$("#evMore").onclick=()=>evBatch(30);
+$("#evNew").onclick=()=>{ _evSeen.clear(); $("#evGrid").innerHTML=""; evBatch(45); };
+$("#evLb").onclick=()=>$("#evLb").style.display="none";
+
+// ---- Cleanup tab — algorithmic delete-candidate review ----
+const _cu={offset:0, total:0, loading:false, min:55};
+const _cuSel=new Set();
+let _cuScanPoll=null;
+async function loadCleanup(){
+  let s; try{ s=await (await fetch("/api/personal/cleanup-status")).json(); }catch(e){ return; }
+  if(!s.available){ $("#cleanupMsg").textContent="opencv unavailable — install the [personal] extra"; return; }
+  if(s.scan && s.scan.scanning){ _cuWatchScan(); return; }
+  if(!s.built){
+    $("#cleanupMsg").textContent="Not scanned yet — compute the junk score over the library (local, ~minutes).";
+    $("#cuScan").style.display=""; $("#cleanupGrid").innerHTML="";
+    return;
+  }
+  $("#cuScan").style.display="";   // allow re-scan (incremental)
+  _cuLoad(true);
+}
+$("#cuScan").onclick=async()=>{
+  $("#cuScan").disabled=true;
+  const r=await (await fetch("/api/personal/cleanup-scan",{method:"POST"})).json();
+  $("#cuScan").disabled=false;
+  if(r.started) _cuWatchScan(); else $("#cleanupMsg").textContent="scan: "+(r.reason||"failed");
+};
+function _cuWatchScan(){
+  clearInterval(_cuScanPoll);
+  _cuScanPoll=setInterval(async()=>{
+    let s; try{ s=await (await fetch("/api/personal/cleanup-status")).json(); }catch(e){ return; }
+    const sc=s.scan||{};
+    if(sc.scanning){ $("#cleanupMsg").textContent=`scanning ${sc.done}/${sc.total}…`; }
+    else { clearInterval(_cuScanPoll); $("#cleanupMsg").textContent="scan done"; _cuLoad(true); }
+  }, 1000);
+}
+$("#cuThresh").oninput=()=>{ _cu.min=+$("#cuThresh").value; $("#cuThreshLabel").textContent=_cu.min; };
+$("#cuThresh").onchange=()=>_cuLoad(true);
+async function _cuLoad(clean){
+  if(_cu.loading) return; _cu.loading=true;
+  const g=$("#cleanupGrid");
+  if(clean){ g.innerHTML=""; _cu.offset=0; _cuSel.clear(); _cuSyncSel(); }
+  try{
+    const r=await (await fetch(`/api/personal/delete-candidates?min_score=${_cu.min}&offset=${_cu.offset}&limit=120`)).json();
+    if(!r.built){ $("#cleanupMsg").textContent="Not scanned yet."; return; }
+    _cu.total=r.total;
+    $("#cleanupMsg").textContent=`${r.total.toLocaleString()} candidates ≥ ${_cu.min} junk score`;
+    r.items.forEach(it=> g.appendChild(_cuCard(it)));
+    _cu.offset+=r.items.length;
+    $("#cleanupMore").style.display = _cu.offset<_cu.total ? "" : "none";
+    $("#cuSelAll").style.display = r.total ? "" : "none";
+  } finally { _cu.loading=false; }
+}
+function _cuCard(it){
+  const c=document.createElement("div"); c.className="card"; c.dataset.path=it.path;
+  if(it.flagged) c.classList.add("sel");
+  if(it.flagged) _cuSel.add(it.path);
+  const chips=(it.reasons||[]).map(r=>`<span class="chip">${esc(r)}</span>`).join("");
+  c.innerHTML=`<div class="thumb"><span class="scoreb jscore" title="junk score">${it.score}</span>
+      <img loading="lazy" src="/api/thumb?path=${enc(it.path)}&size=${typeof THUMB!=='undefined'?THUMB:200}" title="${esc(it.name)}"></div>
+    <div class="reasons">${chips}</div>`;
+  c.querySelector(".thumb").onclick=()=> it.uid ? openDetail(it.uid) : window.open(`/api/image?path=${enc(it.path)}`,"_blank");
+  c.querySelector(".reasons").onclick=()=>_cuToggle(c, it.path);
+  // also allow clicking the score badge to toggle select
+  c.querySelector(".scoreb").onclick=(ev)=>{ ev.stopPropagation(); _cuToggle(c, it.path); };
+  return c;
+}
+function _cuToggle(card, path){
+  if(_cuSel.has(path)) _cuSel.delete(path); else _cuSel.add(path);
+  card.classList.toggle("sel", _cuSel.has(path));
+  _cuSyncSel();
+}
+function _cuSyncSel(){
+  const n=_cuSel.size;
+  $("#cuSelMsg").style.display=n?"":"none"; $("#cuSelMsg").textContent=`${n} selected`;
+  $("#cuMark").style.display=n?"":"none"; $("#cuClear").style.display=n?"":"none";
+}
+$("#cuSelAll").onclick=()=>{ document.querySelectorAll("#cleanupGrid .card").forEach(c=>{ _cuSel.add(c.dataset.path); c.classList.add("sel"); }); _cuSyncSel(); };
+$("#cuClear").onclick=()=>{ _cuSel.clear(); document.querySelectorAll("#cleanupGrid .card.sel").forEach(c=>c.classList.remove("sel")); _cuSyncSel(); };
+$("#cuMark").onclick=async()=>{
+  if(!_cuSel.size) return;
+  const paths=[..._cuSel];
+  await fetch("/api/personal/flag-bulk",{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({paths, flag:"delete"})});
+  toast(`flagged ${paths.length} for delete (review in Evaluate)`);
+  _cuSel.clear(); _cuSyncSel();
+};
+$("#cleanupMore").onclick=()=>_cuLoad(false);
+
 $("#indexPick").onclick = async () => {
   const folder = await pickFolder("index"); if (!folder) return;
   try {
@@ -5783,8 +6061,9 @@ function syncPersonalNav(){
       document.querySelectorAll('[data-view="faces"], #navFaces').forEach(b=>b.style.display="");
     if(!s.personal) return;
     document.querySelectorAll('[data-view="triage"], #navTriage').forEach(b=>b.style.display="");
-    // Evaluate (label/dispose) link — only the personal instance has the page + data.
-    document.querySelectorAll('#navEvaluate').forEach(b=>b.style.display="");
+    // Evaluate (label/dispose) + Cleanup (delete-candidate review) — personal only.
+    document.querySelectorAll('[data-view="evaluate"], #navEvaluate, [data-view="cleanup"], #navCleanup')
+      .forEach(b=>b.style.display="");
   }).catch(()=>{});
 }
 const _triage={bucket:"personal", sort:"p", offset:0, total:0, loading:false};
