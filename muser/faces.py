@@ -187,6 +187,7 @@ def scan(paths, progress=None, checkpoint_every: int = 500) -> dict:
     def _flush():
         _SIDE.save(cache)
         _save_npz(emb)
+        emb.clear()  # free memory after saving to npz
         _SIDE._primed = False
         _SIDE.prime()
 
