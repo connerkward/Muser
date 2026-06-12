@@ -704,6 +704,31 @@ def create_app(model: str = DEFAULT_MODEL):
         from .personal import evaluate as _ev
         return _ev.flagged()
 
+    @app.post("/api/personal/set-bucket")
+    def personal_set_bucket(req: dict):
+        """Manually assign an image's bucket from ANY tab. Overrides the model's
+        bucket in personalness.json (forced='manual', original kept in obucket for
+        revert) AND records it as a ground-truth eval label. bucket ∈ personal |
+        in_between | reference."""
+        from .personal import evaluate as _ev
+        from .personal import personalness as _pn
+        path = req.get("path")
+        bucket = req.get("bucket")
+        if bucket not in ("personal", "in_between", "reference") or not path:
+            return {"ok": False, "error": "bad bucket/path"}
+        entries = _pn.all_entries()
+        e = entries.get(path)
+        if e is not None:
+            if "obucket" not in e:
+                e["obucket"] = e.get("bucket")
+            e["bucket"] = bucket
+            e["forced"] = "manual"
+            _pn.sidecar().save(entries)
+            _pn.sidecar()._primed = False
+            _pn.sidecar().prime()
+        _ev.label(path, bucket)          # also record as ground truth for accuracy/training
+        return {"ok": True, "bucket": bucket}
+
     # ---- Cleanup: algorithmic delete-candidate review ----
     @app.get("/api/personal/cleanup-status")
     def cleanup_status():

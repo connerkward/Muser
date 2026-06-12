@@ -643,6 +643,15 @@
   #evaluateView .cm .h { color:var(--mut); font-size:11px; display:flex; align-items:center; justify-content:center; text-transform:capitalize; }
   #evaluateView .cm .rh { justify-content:flex-end; padding-right:8px; }
   #evaluateView .cm .cell { height:38px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-weight:600; }
+  /* Cross-tab quick-mark bar: assign bucket / flag delete on any thumbnail (personal instance) */
+  .qabar { position:absolute; top:0; left:0; right:0; display:flex; gap:2px; padding:3px; z-index:6;
+           background:linear-gradient(rgba(0,0,0,.55), rgba(0,0,0,0)); opacity:0; transition:opacity .12s; }
+  .thumb:hover .qabar, .qabar:hover { opacity:1; }
+  .qabar button { flex:1; font-size:11px; font-weight:700; line-height:1; padding:4px 0; border:0;
+                  border-radius:4px; background:rgba(255,255,255,.88); color:#1a1a1a; cursor:pointer; }
+  .qabar button:hover { background:#fff; }
+  .qabar button[data-b="__del"] { background:rgba(208,80,80,.92); color:#fff; }
+  .qabar button.done { outline:2px solid #6ab04c; outline-offset:-2px; }
   /* Cleanup tab: delete-candidate cards with select + reason chips */
   #cleanupView .card.sel .thumb { outline:2px solid #e89b86; outline-offset:-2px; }
   #cleanupView .card .reasons { display:flex; gap:4px; flex-wrap:wrap; padding:4px 0 0; }
@@ -6054,16 +6063,63 @@ function syncNsfwNav(){
 }
 
 // ---- Hidden personal-triage tab (only on the ~/.muser-personal instance) ----
+// Cross-tab quick-mark: a P / In-b / R / 🗑 bar on every thumbnail (personal only).
+// Delegated + lazy — injects once per .thumb on first hover, so it works across ALL
+// tabs (Search, Explore, Faces, Triage, Interesting, Cleanup…) without touching each
+// render function. Path is read straight from the thumb's /api/thumb?path= img.
+let _quickMark=false;
+function enableQuickMark(){
+  if(_quickMark) return; _quickMark=true;
+  document.addEventListener("mouseover", e=>{
+    const thumb=e.target.closest(".thumb"); if(!thumb || thumb.querySelector(".qabar")) return;
+    const img=thumb.querySelector('img[src*="/api/thumb"]'); if(!img) return;
+    let path; try{ path=new URL(img.src, location.origin).searchParams.get("path"); }catch(_){ return; }
+    if(!path) return;
+    thumb.appendChild(_makeQabar(path));
+  });
+}
+function _makeQabar(path){
+  const bar=document.createElement("div"); bar.className="qabar";
+  const defs=[["personal","P","Mark Personal"],["in_between","I·b","Mark In-between"],
+              ["reference","R","Mark Reference"],["__del","🗑","Mark for delete"]];
+  bar.innerHTML=defs.map(([b,l,t])=>`<button data-b="${b}" title="${t}">${l}</button>`).join("");
+  bar.querySelectorAll("button").forEach(btn=> btn.onclick=async ev=>{
+    ev.stopPropagation(); ev.preventDefault();
+    const b=btn.dataset.b;
+    try{
+      if(b==="__del"){
+        await fetch("/api/personal/eval-flag",{method:"POST",headers:{"content-type":"application/json"},
+          body:JSON.stringify({path, flag:"delete"})});
+        toast("flagged for delete");
+      } else {
+        await fetch("/api/personal/set-bucket",{method:"POST",headers:{"content-type":"application/json"},
+          body:JSON.stringify({path, bucket:b})});
+        toast("→ "+b.replace("_"," "));
+      }
+      bar.querySelectorAll("button").forEach(x=>x.classList.remove("done"));
+      btn.classList.add("done");
+    }catch(_){ toast("failed"); }
+  });
+  return bar;
+}
+
 function syncPersonalNav(){
   fetch("/api/status").then(r=>r.json()).then(s=>{
     // Faces tab: wherever face clustering has run (main OR personal).
     if(s.faces)
       document.querySelectorAll('[data-view="faces"], #navFaces').forEach(b=>b.style.display="");
     if(!s.personal) return;
+    enableQuickMark();   // quick bucket/delete marking on every thumbnail
     document.querySelectorAll('[data-view="triage"], #navTriage').forEach(b=>b.style.display="");
     // Evaluate (label/dispose) + Cleanup (delete-candidate review) — personal only.
     document.querySelectorAll('[data-view="evaluate"], #navEvaluate, [data-view="cleanup"], #navCleanup')
       .forEach(b=>b.style.display="");
+    // AI (C2PA AI-origin) + Jobs tabs are noise for a personal camera roll — hide
+    // them on the personal instance; the Faces tab takes the AI slot.
+    document.querySelectorAll('[data-view="ai"], #navAI, [data-view="jobs"], #navJobs')
+      .forEach(b=>b.style.display="none");
+    const cur=location.hash.replace(/^#\/?/,"");
+    if(cur==="ai"||cur==="jobs") showView("faces");   // redirect off a hidden tab
   }).catch(()=>{});
 }
 const _triage={bucket:"personal", sort:"p", offset:0, total:0, loading:false};
