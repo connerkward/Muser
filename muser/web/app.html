@@ -652,8 +652,15 @@
   .qabar button:hover { background:#fff; }
   .qabar button[data-b="__del"] { background:rgba(208,80,80,.92); color:#fff; }
   .qabar button.done { outline:2px solid #6ab04c; outline-offset:-2px; }
-  /* Cleanup tab: delete-candidate cards with select + reason chips */
-  #cleanupView .card.sel .thumb { outline:2px solid #e89b86; outline-offset:-2px; }
+  /* Cleanup tab: save-from-deletion cards + reason chips. Everything shown is a
+     presumed delete; a click SAVES it (green) and the bulk action flags the rest. */
+  #cleanupView .card .thumb { cursor:pointer; }
+  #cleanupView .card.saved .thumb { outline:3px solid #6ab04c; outline-offset:-3px; }
+  #cleanupView .card.saved .thumb::after { content:"✓ saved"; position:absolute; right:6px; top:6px;
+      background:#6ab04c; color:#fff; font-size:10px; font-weight:700; padding:2px 6px; border-radius:4px; z-index:5; }
+  #cleanupView .card.flagged .thumb img { opacity:.4; filter:grayscale(.5); }
+  #cleanupView .card.flagged .thumb::before { content:"🗑 flagged"; position:absolute; right:6px; top:6px;
+      color:#e89b86; font-size:10px; font-weight:700; z-index:5; }
   #cleanupView .card .reasons { display:flex; gap:4px; flex-wrap:wrap; padding:4px 0 0; }
   #cleanupView .card .chip { font-size:10px; color:#e89b86; border:1px solid #5a3030; border-radius:4px; padding:1px 5px; }
   #cleanupView .card .jscore { font-variant-numeric:tabular-nums; }
@@ -1454,7 +1461,7 @@
 <div class="wrap" id="cleanupView" style="display:none">
   <div class="row" style="margin-bottom:6px">
     <b>Cleanup</b>
-    <span class="mut">— likely <b>delete candidates</b> ranked by a local junk score (blur · over/under-exposure · tiny · near-duplicate). Local, $0. Select and mark 🗑 to flag for deletion (no files are touched — flags land in the Evaluate set).</span>
+    <span class="mut">— likely <b>delete candidates</b> ranked by a local junk score (blur · over/under-exposure · tiny · near-duplicate). Everything shown is presumed junk: <b>click an image to SAVE it</b> (green), then flag the rest. No files are touched — flags land in the Evaluate set.</span>
   </div>
   <div class="row" id="cleanupToolbar" style="margin-bottom:12px;gap:12px;align-items:center;flex-wrap:wrap">
     <label class="mut" style="font-size:12px">min junk score
@@ -1464,9 +1471,8 @@
     <button id="cuScan" style="display:none">Scan library</button>
     <span style="flex:1"></span>
     <span class="mut" id="cuSelMsg" style="display:none;font-size:12px"></span>
-    <button id="cuSelAll" style="display:none">Select all shown</button>
-    <button id="cuMark" class="primary" style="display:none">🗑 Mark selected for delete</button>
-    <button id="cuClear" style="display:none">Clear</button>
+    <button id="cuMark" class="primary" style="display:none">🗑 Flag all shown except saved</button>
+    <button id="cuClear" style="display:none">Clear saved</button>
   </div>
   <div class="grid" id="cleanupGrid"></div>
   <div class="row" style="margin-top:10px"><button id="cleanupMore" style="display:none">Load more</button></div>
@@ -5328,8 +5334,10 @@ $("#evNew").onclick=()=>{ _evSeen.clear(); $("#evGrid").innerHTML=""; evBatch(45
 $("#evLb").onclick=()=>$("#evLb").style.display="none";
 
 // ---- Cleanup tab — algorithmic delete-candidate review ----
+// Inverted selection: every shown candidate is a PRESUMED delete; clicking a card
+// SAVES it (green). The bulk action flags everything shown except the saved ones.
 const _cu={offset:0, total:0, loading:false, min:55};
-const _cuSel=new Set();
+const _cuSaved=new Set();
 let _cuScanPoll=null;
 async function loadCleanup(){
   let s; try{ s=await (await fetch("/api/personal/cleanup-status")).json(); }catch(e){ return; }
@@ -5363,7 +5371,7 @@ $("#cuThresh").onchange=()=>_cuLoad(true);
 async function _cuLoad(clean){
   if(_cu.loading) return; _cu.loading=true;
   const g=$("#cleanupGrid");
-  if(clean){ g.innerHTML=""; _cu.offset=0; _cuSel.clear(); _cuSyncSel(); }
+  if(clean){ g.innerHTML=""; _cu.offset=0; _cuSaved.clear(); _cuSyncSel(); }
   try{
     const r=await (await fetch(`/api/personal/delete-candidates?min_score=${_cu.min}&offset=${_cu.offset}&limit=120`)).json();
     if(!r.built){ $("#cleanupMsg").textContent="Not scanned yet."; return; }
@@ -5372,42 +5380,50 @@ async function _cuLoad(clean){
     r.items.forEach(it=> g.appendChild(_cuCard(it)));
     _cu.offset+=r.items.length;
     $("#cleanupMore").style.display = _cu.offset<_cu.total ? "" : "none";
-    $("#cuSelAll").style.display = r.total ? "" : "none";
+    _cuSyncSel();
   } finally { _cu.loading=false; }
 }
 function _cuCard(it){
   const c=document.createElement("div"); c.className="card"; c.dataset.path=it.path;
-  if(it.flagged) c.classList.add("sel");
-  if(it.flagged) _cuSel.add(it.path);
+  if(it.flagged) c.classList.add("flagged");           // already in the delete set
+  if(_cuSaved.has(it.path)) c.classList.add("saved");
   const chips=(it.reasons||[]).map(r=>`<span class="chip">${esc(r)}</span>`).join("");
-  c.innerHTML=`<div class="thumb"><span class="scoreb jscore" title="junk score">${it.score}</span>
-      <img loading="lazy" src="/api/thumb?path=${enc(it.path)}&size=${typeof THUMB!=='undefined'?THUMB:200}" title="${esc(it.name)}"></div>
+  c.innerHTML=`<div class="thumb"><span class="scoreb jscore" title="junk score — dblclick image to zoom">${it.score}</span>
+      <img loading="lazy" src="/api/thumb?path=${enc(it.path)}&size=${typeof THUMB!=='undefined'?THUMB:200}" title="${esc(it.name)} — click to save, dblclick to zoom"></div>
     <div class="reasons">${chips}</div>`;
-  c.querySelector(".thumb").onclick=()=> it.uid ? openDetail(it.uid) : window.open(`/api/image?path=${enc(it.path)}`,"_blank");
-  c.querySelector(".reasons").onclick=()=>_cuToggle(c, it.path);
-  // also allow clicking the score badge to toggle select
-  c.querySelector(".scoreb").onclick=(ev)=>{ ev.stopPropagation(); _cuToggle(c, it.path); };
+  // click = SAVE from deletion; dblclick = zoom (judge blur at full size)
+  c.querySelector(".thumb").onclick=()=>_cuToggleSave(c, it.path);
+  c.querySelector(".thumb").ondblclick=(ev)=>{ ev.preventDefault();
+    $("#evLbImg").src=`/api/image?path=${enc(it.path)}`; $("#evLb").style.display="flex"; };
   return c;
 }
-function _cuToggle(card, path){
-  if(_cuSel.has(path)) _cuSel.delete(path); else _cuSel.add(path);
-  card.classList.toggle("sel", _cuSel.has(path));
+function _cuToggleSave(card, path){
+  if(_cuSaved.has(path)) _cuSaved.delete(path); else _cuSaved.add(path);
+  card.classList.toggle("saved", _cuSaved.has(path));
   _cuSyncSel();
 }
 function _cuSyncSel(){
-  const n=_cuSel.size;
-  $("#cuSelMsg").style.display=n?"":"none"; $("#cuSelMsg").textContent=`${n} selected`;
-  $("#cuMark").style.display=n?"":"none"; $("#cuClear").style.display=n?"":"none";
+  const n=_cuSaved.size, shown=document.querySelectorAll("#cleanupGrid .card").length;
+  $("#cuSelMsg").style.display=n?"":"none"; $("#cuSelMsg").textContent=`${n} saved`;
+  $("#cuMark").style.display=shown?"":"none";
+  $("#cuMark").textContent=`🗑 Flag ${Math.max(0,shown-n).toLocaleString()} shown (keep ${n} saved)`;
+  $("#cuClear").style.display=n?"":"none";
 }
-$("#cuSelAll").onclick=()=>{ document.querySelectorAll("#cleanupGrid .card").forEach(c=>{ _cuSel.add(c.dataset.path); c.classList.add("sel"); }); _cuSyncSel(); };
-$("#cuClear").onclick=()=>{ _cuSel.clear(); document.querySelectorAll("#cleanupGrid .card.sel").forEach(c=>c.classList.remove("sel")); _cuSyncSel(); };
+$("#cuClear").onclick=()=>{ _cuSaved.clear(); document.querySelectorAll("#cleanupGrid .card.saved").forEach(c=>c.classList.remove("saved")); _cuSyncSel(); };
 $("#cuMark").onclick=async()=>{
-  if(!_cuSel.size) return;
-  const paths=[..._cuSel];
-  await fetch("/api/personal/flag-bulk",{method:"POST",headers:{"content-type":"application/json"},
-    body:JSON.stringify({paths, flag:"delete"})});
-  toast(`flagged ${paths.length} for delete (review in Evaluate)`);
-  _cuSel.clear(); _cuSyncSel();
+  const cards=[...document.querySelectorAll("#cleanupGrid .card")];
+  const doomed=cards.filter(c=>!_cuSaved.has(c.dataset.path)).map(c=>c.dataset.path);
+  const rescued=cards.filter(c=> _cuSaved.has(c.dataset.path) && c.classList.contains("flagged")).map(c=>c.dataset.path);
+  if(!doomed.length && !rescued.length) return;
+  if(!confirm(`Flag ${doomed.length} images for delete${rescued.length?` and un-flag ${rescued.length} saved`:""}? (No files are deleted — flags only.)`)) return;
+  if(doomed.length)
+    await fetch("/api/personal/flag-bulk",{method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({paths:doomed, flag:"delete"})});
+  if(rescued.length)                                    // saving also rescinds an earlier flag
+    await fetch("/api/personal/flag-bulk",{method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({paths:rescued, flag:null})});
+  cards.forEach(c=>{ c.classList.toggle("flagged", !_cuSaved.has(c.dataset.path)); });
+  toast(`flagged ${doomed.length} for delete${rescued.length?`, rescued ${rescued.length}`:""}`);
 };
 $("#cleanupMore").onclick=()=>_cuLoad(false);
 

@@ -798,9 +798,10 @@ def create_app(model: str = DEFAULT_MODEL):
         return {"ok": True, "n": len(paths)}
 
     @app.post("/api/personal/train")
-    def personal_train(hold_out: float = 0.2):
-        """Train a supervised head on accumulated user labels (asynchronous).
-        Returns {started: true, message: string}. Polls /api/personal/train-result for result."""
+    def personal_train():
+        """Train the embedding head on accumulated user labels and RE-BUCKET the
+        corpus with it (asynchronous). Returns {started: true}; poll
+        /api/personal/train-result. Accuracy reported is k-fold cross-validated."""
         if state.task is not None:
             raise HTTPException(409, f"busy: {state.task.get('kind')}")
         state.task = {"kind": "personal_training", "done": 0, "total": 100}
@@ -813,8 +814,7 @@ def create_app(model: str = DEFAULT_MODEL):
         def _bg():
             try:
                 from .personal import personalness as _pn
-                result = _pn.train(model=state.model_name, hold_out_fraction=hold_out,
-                                   progress=_progress)
+                result = _pn.train(model=state.model_name, progress=_progress)
                 state.training_result = result
                 state.training_result_time = time.time()
                 state.task = {
