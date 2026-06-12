@@ -26,6 +26,10 @@ from .registry import DEFAULT_MODEL, load_model, model_names
 app = typer.Typer(add_completion=False, help="Local-first semantic image search + eval harness.")
 con = Console()
 
+# Hidden Google-Photos triage sub-tool (isolated ~/.muser-personal root). See muser/personal/.
+from .personal.cli import app as _personal_app  # noqa: E402
+app.add_typer(_personal_app, name="personal")
+
 # ---------------------------------------------------------------------------
 # Thin-client: index/search talk to the warm `muser serve` process over HTTP
 # (auto-spawned if down) so the terminal path is instant. `--local` bypasses it.
