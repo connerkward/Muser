@@ -188,6 +188,8 @@ class State:
         self.color = {"scanning": False, "done": 0, "total": 0}
         # AI-likelihood (GRIP) facet scan progress, polled by /api/ai-likelihood.
         self.aidet = {"scanning": False, "done": 0, "total": 0}
+        # Face detect/embed/cluster facet progress (People), polled by /api/faces.
+        self.faces = {"scanning": False, "done": 0, "total": 0}
 
     def warm(self):
         # Idempotent. Holds a lock so two concurrent first-callers don't both
@@ -404,6 +406,12 @@ def create_app(model: str = DEFAULT_MODEL):
         aprimed = _aidet.prime_cache_from_sidecar()
         if aprimed:
             print(f"  primed aidet cache: {aprimed} entries", flush=True)
+        # Face metadata cache (per-image faces + cluster ids) for People enrichment
+        # and the personal-tool's recurring-person signal.
+        from . import faces as _faces
+        fprimed = _faces.prime_cache_from_sidecar()
+        if fprimed:
+            print(f"  primed faces cache: {fprimed} entries", flush=True)
         # Prime the result-hiding sets (NSFW from scores.json, hidden-cluster
         # paths from clusters.json) so the first request's _hidden() lookups are
         # O(1) RAM hits, not a cold disk parse. Both are mtime-cached and refresh
@@ -602,6 +610,7 @@ def create_app(model: str = DEFAULT_MODEL):
                 _scan_c2pa(folder)
                 _scan_color(folder)
                 _scan_aidet(folder)
+                _scan_faces(folder)
 
         threading.Thread(target=_bg, daemon=True, name="muser-index").start()
         return {"started": True, "folder": folder}
@@ -655,6 +664,25 @@ def create_app(model: str = DEFAULT_MODEL):
             _aidet.scan(paths, progress=lambda d, t: state.aidet.update(done=d, total=t))
         finally:
             state.aidet["scanning"] = False
+
+    def _scan_faces(folder: str | None = None):
+        # Shared by the post-index hook and POST /api/faces/scan. Detects + embeds
+        # faces over the (sub)tree, then re-clusters ALL faces into people (HDBSCAN is
+        # global, so new faces can join/extend existing clusters). No-op if insightface
+        # is absent or a scan is running; incremental, so only new/changed files run the
+        # forward. Slow — daemon thread off the busy overlay, progress in state.faces.
+        from . import faces as _faces
+        if not _faces.available() or state.faces.get("scanning"):
+            return
+        paths = state.index.paths(state.model_name, under=folder)
+        if not paths:
+            return
+        state.faces = {"scanning": True, "done": 0, "total": len(paths), "started": time.time()}
+        try:
+            _faces.scan(paths, progress=lambda d, t: state.faces.update(done=d, total=t))
+            _faces.cluster()  # re-cluster the full face set; cheap vs the detection pass
+        finally:
+            state.faces["scanning"] = False
 
     # ---- path → cluster-label map, used for the post-search refinement chips ----
     # Reads ~/.muser/clusters.json once and caches a path → cluster-label dict.

@@ -490,6 +490,54 @@ def color(
 
 
 @app.command()
+def faces(
+    folder: str = typer.Option(None, "--in", help="Restrict to images under this folder"),
+    model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to scan"),
+    min_cluster_size: int = typer.Option(4, help="HDBSCAN min cluster size (a 'person')"),
+    no_cluster: bool = typer.Option(False, "--no-cluster", help="Detect/embed only, skip clustering"),
+):
+    """Face facet — detect + embed faces (InsightFace buffalo_l), then cluster into people.
+
+    Writes per-image face metadata to ~/.muser/faces.json, 512-d ArcFace embeddings to
+    ~/.muser/faces_emb.npz, and HDBSCAN people-clusters to ~/.muser/face_clusters.json.
+    Standalone (no `muser serve` needed). Incremental by mtime+size; buffalo_l weights
+    (~280 MB) download once. Install with the `[faces]` extra. The hidden `personal`
+    sub-tool reuses this under MUSER_HOME=~/.muser-personal for its recurring-person signal.
+    """
+    from . import faces as _faces
+
+    if not _faces.available():
+        con.print("[red]insightface/onnxruntime missing[/] — install with: uv pip install -e \".[faces]\"")
+        raise typer.Exit(1)
+    from .index import MuserIndex
+
+    under = str(Path(folder).expanduser()) if folder else None
+    paths = MuserIndex().paths(model, under=under)
+    if not paths:
+        con.print("[red]no indexed images[/] — run `muser index <folder>` first")
+        raise typer.Exit(1)
+    from rich.progress import (BarColumn, MofNCompleteColumn, Progress,
+                               TaskProgressColumn, TextColumn, TimeElapsedColumn,
+                               TimeRemainingColumn)
+    with Progress(
+        TextColumn("[bold]faces"), BarColumn(), TaskProgressColumn(),
+        MofNCompleteColumn(), TextColumn("•"), TimeElapsedColumn(),
+        TextColumn("• ETA"), TimeRemainingColumn(), console=con,
+    ) as prog:
+        task = prog.add_task("detecting", total=len(paths))
+        cache = _faces.scan(paths, progress=lambda d, t: prog.update(task, completed=d, total=t))
+    nfaces = sum(e.get("n", 0) for e in cache.values())
+    nimgs = sum(1 for e in cache.values() if e.get("n", 0) > 0)
+    con.print(f"[bold]detected[/] {nfaces} faces across {nimgs}/{len(paths)} images")
+    if not no_cluster:
+        con.print("clustering into people …")
+        out = _faces.cluster(min_cluster_size=min_cluster_size)
+        big = sorted(out.values(), key=lambda c: -c["size"])[:5]
+        con.print(f"[bold]{len(out)}[/] people-clusters → ~/.muser/face_clusters.json  "
+                  f"(largest: {', '.join(str(c['size']) for c in big)})")
+
+
+@app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", help="Bind address"),
     port: int = typer.Option(7777, help="Port"),
