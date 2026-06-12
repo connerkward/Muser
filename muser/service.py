@@ -15,6 +15,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+from .paths import MUSER_HOME
 
 # Module-level so `from __future__ import annotations` can resolve the UploadFile
 # annotation on /api/search-upload (a function-scope import leaves it an
@@ -58,7 +59,7 @@ HIDDEN_CLUSTER_MATCHERS = [
 # restarts** via ~/.muser/demo_mode.json — so once you turn it on it stays on
 # until you turn it off. Toggled from the web debug menu via /api/demo-mode.
 # Dead-file hiding is unconditional (not part of demo mode).
-_DEMO_FILE = Path.home() / ".muser" / "demo_mode.json"
+_DEMO_FILE = MUSER_HOME / "demo_mode.json"
 
 
 def _load_demo_hide() -> bool:
@@ -662,7 +663,7 @@ def create_app(model: str = DEFAULT_MODEL):
     def _path_to_label():
         if state.label_index is not None:
             return state.label_index
-        clusters_file = Path.home() / ".muser" / "clusters.json"
+        clusters_file = MUSER_HOME / "clusters.json"
         if not clusters_file.exists():
             state.label_index = {}
             return state.label_index
@@ -988,7 +989,7 @@ def create_app(model: str = DEFAULT_MODEL):
     def _refresh_scores_cache():
         # Reload _scores_cache from disk if scores.json has changed. Returns
         # the cache dict (caller already holds _scores_lock or doesn't care).
-        scores_path = Path.home() / ".muser" / "scores.json"
+        scores_path = MUSER_HOME / "scores.json"
         try:
             mt = scores_path.stat().st_mtime
         except OSError:
@@ -1033,7 +1034,7 @@ def create_app(model: str = DEFAULT_MODEL):
     _hidden_clusters_lock = threading.Lock()
 
     def _hidden_cluster_paths() -> set[str]:
-        clusters_path = Path.home() / ".muser" / "clusters.json"
+        clusters_path = MUSER_HOME / "clusters.json"
         if not HIDDEN_CLUSTER_MATCHERS:
             return set()
         try:
@@ -2077,7 +2078,7 @@ def create_app(model: str = DEFAULT_MODEL):
     # unchanged file always hits. Lives at ~/.muser/thumb_cache; delete
     # the dir to invalidate everything. Versioned key prefix so we can
     # bust the cache when the crop algorithm changes.
-    THUMB_CACHE = Path.home() / ".muser" / "thumb_cache"
+    THUMB_CACHE = MUSER_HOME / "thumb_cache"
     THUMB_CACHE.mkdir(parents=True, exist_ok=True)
     THUMB_KEY_VERSION = "v2-smartcrop"
 
@@ -2496,7 +2497,7 @@ def create_app(model: str = DEFAULT_MODEL):
         return {"started": True, "model": state.model_name}
 
     # ---- Explore: clusters (read ~/.muser/clusters.json, written by `muser cluster`) ----
-    CLUSTERS = Path.home() / ".muser" / "clusters.json"
+    CLUSTERS = MUSER_HOME / "clusters.json"
 
     def _clusters():
         return json.loads(CLUSTERS.read_text()) if CLUSTERS.exists() else None
@@ -2688,7 +2689,7 @@ def create_app(model: str = DEFAULT_MODEL):
     # file). Cached by file mtime; the captioning pass may append while we read,
     # but `stat().st_mtime` jumps on each append, so the next request re-parses.
     # Reads-of-partial-final-line are safe: we skip lines that fail to JSON-parse.
-    CAPTIONS = Path.home() / ".muser" / "captions.jsonl"
+    CAPTIONS = MUSER_HOME / "captions.jsonl"
     _captions: dict = {"mtime": -1.0, "map": {}}
     _captions_lock = threading.Lock()
 
@@ -2853,8 +2854,8 @@ def create_app(model: str = DEFAULT_MODEL):
         }
 
     # ---- per-image scores: Interesting / Review (read ~/.muser/scores.json) ----
-    SCORES = Path.home() / ".muser" / "scores.json"
-    MUSER_DIR = Path.home() / ".muser"
+    SCORES = MUSER_HOME / "scores.json"
+    MUSER_DIR = MUSER_HOME
     # Metrics backed by a per-image model pass (slow, often subset-scored). Coverage
     # = entries in the cache file / total canonical. Everything else is derived
     # in-script from the SigLIP embeddings and is implicitly 100% covered.

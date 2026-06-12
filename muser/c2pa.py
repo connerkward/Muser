@@ -28,6 +28,7 @@ import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from .paths import MUSER_HOME
 
 # IPTC digitalSourceType codes that mean "AI was involved". Matched as a
 # case-insensitive substring against the whole report, so the check survives
@@ -124,7 +125,7 @@ def verdict(path: str) -> dict:
 # is subprocess-bound, so a thread pool parallelizes it (GIL released in execve).
 # ---------------------------------------------------------------------------
 
-CACHE_JSON = Path.home() / ".muser" / "c2pa.json"
+CACHE_JSON = MUSER_HOME / "c2pa.json"
 
 
 def cache_exists() -> bool:

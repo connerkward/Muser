@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from .paths import MUSER_HOME
 
 import numpy as np
 
 from .index import MuserIndex
 from .registry import load_model
 
-CLUSTERS_JSON = Path.home() / ".muser" / "clusters.json"
+CLUSTERS_JSON = MUSER_HOME / "clusters.json"
 
 # Headline-label vocabulary — broad coverage of a creative/design/photo library.
 VOCAB = [

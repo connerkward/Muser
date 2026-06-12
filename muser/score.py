@@ -58,13 +58,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from .paths import MUSER_HOME
 
 import numpy as np
 
 from .index import MuserIndex
 from .registry import load_model
 
-SCORES_JSON = Path.home() / ".muser" / "scores.json"
+SCORES_JSON = MUSER_HOME / "scores.json"
 
 AESTHETIC_POS = [
     "a beautiful, striking, high-quality photograph", "stunning professional photography",
@@ -108,9 +109,9 @@ ADAMCODD_NSFW_LABELS = {"nsfw", "porn"}
 
 # Per-model on-disk caches so re-runs are incremental — keyed by path|mtime|size
 # (same key shape as aesthetic_v2/pickscore/etc.).
-NSFW_FALCONSAI_CACHE = Path.home() / ".muser" / "nsfw_falconsai_cache.json"
-NSFW_ADAMCODD_CACHE = Path.home() / ".muser" / "nsfw_adamcodd_cache.json"
-NSFW_MARQO_CACHE = Path.home() / ".muser" / "nsfw_marqo_cache.json"
+NSFW_FALCONSAI_CACHE = MUSER_HOME / "nsfw_falconsai_cache.json"
+NSFW_ADAMCODD_CACHE = MUSER_HOME / "nsfw_adamcodd_cache.json"
+NSFW_MARQO_CACHE = MUSER_HOME / "nsfw_marqo_cache.json"
 
 
 def _classifier_nsfw(paths, on_progress, *, name: str, model_id: str, pos_labels: set[str],
@@ -309,7 +310,7 @@ def _write_cache(path: Path, data: dict) -> None:
 # OpenAI CLIP-ViT-L/14 L2-normalized image features. ~3.7 MB checkpoint.
 AES_V2_REPO = "camenduru/improved-aesthetic-predictor"
 AES_V2_FILE = "sac+logos+ava1-l14-linearMSE.pth"
-AES_V2_CACHE = Path.home() / ".muser" / "aesthetic_v2_cache.json"
+AES_V2_CACHE = MUSER_HOME / "aesthetic_v2_cache.json"
 
 
 def _laion_aes_mlp(state_path: str):
@@ -409,7 +410,7 @@ def _aesthetic_v2(paths: list[str], active_model: str, X: np.ndarray, on_progres
 PICKSCORE_MODEL = "yuvalkirstain/PickScore_v1"
 PICKSCORE_PROCESSOR = "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"
 PICKSCORE_PROMPT = "a high-quality image"
-PICKSCORE_CACHE = Path.home() / ".muser" / "pickscore_cache.json"
+PICKSCORE_CACHE = MUSER_HOME / "pickscore_cache.json"
 
 
 def _now() -> float:
@@ -499,7 +500,7 @@ AES_V25_HEAD_URL = (
     "aesthetic_predictor_v2_5.pth"
 )
 AES_V25_BACKBONE = "google/siglip-so400m-patch14-384"
-AES_V25_CACHE = Path.home() / ".muser" / "aesthetic_v25_cache.json"
+AES_V25_CACHE = MUSER_HOME / "aesthetic_v25_cache.json"
 
 
 def _aes_v25_head(hidden_size: int):
@@ -595,7 +596,7 @@ HPS_V21_REPO = "xswu/HPSv2"
 HPS_V21_FILE = "HPS_v2.1_compressed.pt"
 HPS_V21_BASE = ("ViT-H-14", "laion2b_s32b_b79k")
 HPS_V21_PROMPT = ""  # unconditional aesthetic reading
-HPS_V21_CACHE = Path.home() / ".muser" / "hps_v21_cache.json"
+HPS_V21_CACHE = MUSER_HOME / "hps_v21_cache.json"
 
 
 def _hps_v21(paths: list[str], on_progress, batch_size: int = 8) -> np.ndarray:

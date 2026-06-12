@@ -20,6 +20,7 @@ import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from .paths import MUSER_HOME
 
 
 def blake2b_file(path: str, _buf: int = 1 << 20) -> str | None:
@@ -41,7 +42,7 @@ def blake2b_file(path: str, _buf: int = 1 << 20) -> str | None:
 class Sidecar:
     def __init__(self, name: str):
         self.name = name
-        self.path = Path.home() / ".muser" / f"{name}.json"
+        self.path = MUSER_HOME / f"{name}.json"
         self._cache: dict[tuple, dict] = {}  # (path, mtime_ns, size) -> payload
         self._primed = False
         self._sidecar_mtime = -1.0  # mtime of self.path at last prime, for auto-reprime

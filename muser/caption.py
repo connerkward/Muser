@@ -34,8 +34,9 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from .paths import MUSER_HOME
 
-CAPTIONS_JSONL = Path.home() / ".muser" / "captions.jsonl"
+CAPTIONS_JSONL = MUSER_HOME / "captions.jsonl"
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 
 # OpenAI public pricing for gpt-4o-mini (per 1M tokens) — used only to print the

@@ -38,10 +38,11 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from .paths import MUSER_HOME
 
 from . import generators as gen
 
-PIPELINES_DIR = Path.home() / ".muser" / "pipelines"
+PIPELINES_DIR = MUSER_HOME / "pipelines"
 INDEX_JSON = PIPELINES_DIR / "index.json"
 
 # One lock per run_id guards its run.json + index.json writes.

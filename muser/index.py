@@ -12,13 +12,14 @@ import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from .paths import MUSER_HOME
 from typing import Callable, Iterable, Sequence
 
 import numpy as np
 
 from .embedders import Embedder
 
-DEFAULT_DB = Path.home() / ".muser" / "db"
+DEFAULT_DB = MUSER_HOME / "db"
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif", ".tiff"}
 
 # Metadata columns added to LanceDB tables in 2026-06 for the Filter panel

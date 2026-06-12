@@ -50,6 +50,19 @@ mac = [
     "mlx>=0.31.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "mlx-lm>=0.29.1; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
+# Face detection/clustering (mainline `muser faces` facet). Heavy (onnxruntime +
+# the buffalo_l model), so opt-in — the facet degrades to available()==False when
+# absent, exactly like aidet's torch check. Cross-platform wheels exist for both.
+faces = [
+    "insightface>=0.7.3",
+    "onnxruntime>=1.18",
+]
+# The hidden Google-Photos "personal" sub-tool. Adds HEIC decode for Takeout
+# (iPhone exports). Reuses the core embedder/index/score/caption + the `faces`
+# extra; nothing here touches the aesthetic library (separate MUSER_HOME root).
+personal = [
+    "pillow-heif>=0.18",
+]
 
 [build-system]
 requires = ["hatchling"]

@@ -22,9 +22,10 @@ import json
 import os
 import threading
 from pathlib import Path
+from .paths import MUSER_HOME
 
-NPZ = Path.home() / ".muser" / "dinov3_canon.npz"
-CLUSTERS = Path.home() / ".muser" / "dinov3_clusters.json"
+NPZ = MUSER_HOME / "dinov3_canon.npz"
+CLUSTERS = MUSER_HOME / "dinov3_clusters.json"
 
 _lock = threading.Lock()
 _store: dict | None = None  # {"paths": np.ndarray[str], "X": float32 N×D (L2-normed), "idx": {path: row}}

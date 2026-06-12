@@ -34,11 +34,12 @@ import os
 import threading
 import time
 from pathlib import Path
+from .paths import MUSER_HOME
 
 from .index import uid_for
 
 # ----- on-disk locations -----------------------------------------------------
-MUSER_DIR = Path.home() / ".muser"
+MUSER_DIR = MUSER_HOME
 UPSCALE_CACHE = MUSER_DIR / "upscale_cache"
 WEIGHTS_DIR = MUSER_DIR / "upscaler"
 WEIGHTS_PATH = WEIGHTS_DIR / "4x-UltraSharp.pth"
