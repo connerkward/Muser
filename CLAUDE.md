@@ -348,6 +348,38 @@ pass over the 17.9k uniques, so reserved for selective lookups, not wired in.
   (Interesting/Review tabs), which walks past `offset+limit` to fill the page with live
   entries. ~1 ms overhead per search.
 
+## Hidden "personal" sub-tool (Google-Photos triage) + faces facet
+
+`muser/faces.py` — **mainline** face facet: InsightFace `buffalo_l` (RetinaFace+ArcFace)
+detect/embed per image → `faces.json` (light metadata via `facets.Sidecar`) + `faces_emb.npz`
+(512-d embeddings) + HDBSCAN people-clusters → `face_clusters.json`. `available()` degrades
+when the `[faces]` extra is absent. CLI `muser faces`, post-index auto-trigger + startup prime
+alongside c2pa/color/aidet.
+
+`muser/personal/` — a **hidden, completely isolated** Google-Photos triage tool that sorts a
+Takeout export into **personal / in_between / reference**. Isolation is via `muser/paths.py`
+`MUSER_HOME` (env-overridable root); every `~/.muser` path now routes through it, and the
+personal sub-tool runs as a separate process under `MUSER_HOME=~/.muser-personal` (own DB,
+scores, facets, captions — never mixes with the aesthetic library). `personal/__init__.py`
+`ensure_personal_root()` **re-execs** with that env so import-time root resolution is correct.
+- `takeout.py` — parse Takeout JSON sidecars → per-image meta (capture time, GPS, **people
+  tags**, album, `roll`=camera-roll, **`cam`**=EXIF Make/Model present).
+- `personalness.py` — fuse 5 local signals into **P∈[0,1]** + bucket + **uncertainty**.
+  **R** = logreg reference-likeness trained with the aesthetic library (`~/.muser/db`) as the
+  reference pole. Fusion is **evidence-driven** (`W_EVIDENCE .50 / W_CAMERA .30 / W_APPEARANCE
+  .20`): personal-ness needs POSITIVE evidence (faces / people-tags / camera-capture) — `1-R`
+  alone wrongly tags saved internet media (game caps, movie stills) as personal (verified on the
+  2007-13 slice; the fix demoted them to reference).
+- `vlm_triage.py` — resolve an **uncertainty band** with gpt-4o-mini (reuses `caption.py` plumbing);
+  `estimate(umin,umax)` shows count + ~$ **before** running (~$0.0002/img; full 46k ≈ $5-14).
+- `sheets.py` — labeled contact sheets per bucket to `~/Desktop` (independent verification).
+- CLI `muser personal {ingest,faces,classify,triage,sheets,serve}`. Served at
+  **http://personal.muser.local** (Caddy→7780, LaunchAgent `com.muser-personal.serve`); the web
+  **Triage** tab (gated on `/api/status personal:true`) shows bucket galleries + a VLM
+  uncertainty-band slider with live count/cost. Endpoints: `/api/personal/{summary,bucket,
+  vlm-estimate,vlm-run,vlm-status}`. New extras: `[faces]` (insightface+onnxruntime), `[personal]`
+  (pillow-heif for HEIC).
+
 ## Status
 
 Default model: **siglip2-b** (Apache, best quality/speed/license — see reports/).
