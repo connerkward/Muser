@@ -1031,6 +1031,8 @@
   <nav class="mini-nav">
     <button class="nav" data-view="search">Search</button>
     <button class="nav" data-view="explore">Explore</button>
+    <!-- Faces = people-clusters; revealed only when /api/status faces=true -->
+    <button class="nav" data-view="faces" style="display:none">Faces</button>
     <button class="nav" data-view="interesting">Interesting</button>
     <!-- Review = NSFW tab; visible in normal mode, hidden in demo mode (syncNsfwNav) -->
     <button class="nav" data-view="review" style="display:none">Review</button>
@@ -1048,6 +1050,8 @@
   <h1>Muser</h1>
   <button class="nav on" id="navSearch">Search</button>
   <button class="nav" id="navExplore">Explore</button>
+  <!-- Faces = people-clusters; revealed only when /api/status faces=true -->
+  <button class="nav" id="navFaces" style="display:none">Faces</button>
   <button class="nav" id="navInteresting">Interesting</button>
   <!-- Review = NSFW tab; visible in normal mode, hidden in demo mode (syncNsfwNav) -->
   <button class="nav" id="navReview" style="display:none">Review</button>
@@ -1057,6 +1061,8 @@
   <button class="nav" id="navJobs">Jobs</button>
   <!-- Triage = hidden personal Google-Photos sub-tool; revealed only when /api/status personal=true -->
   <button class="nav" id="navTriage" style="display:none">Triage</button>
+  <!-- Evaluate = label buckets + mark for deletion; separate page, personal instance only -->
+  <a class="nav" id="navEvaluate" href="/evaluate" style="display:none;text-decoration:none">Evaluate</a>
   <span class="mut" id="status">…</span>
   <span class="sp"></span>
   <span class="spinner" id="spinner" style="display:none" title="Working…"></span>
@@ -1241,6 +1247,23 @@
     <h3 id="cdtitle" style="margin:14px 0 2px;text-transform:capitalize"></h3>
     <div class="mut" id="cdsub"></div>
     <div class="grid" id="cdgrid" style="margin-top:16px"></div>
+  </div>
+</div>
+
+<!-- Faces (People) — face_clusters.json people-groups; revealed when /api/status faces=true -->
+<div class="wrap" id="facesView" style="display:none">
+  <div class="row" style="margin-bottom:14px">
+    <b>People</b>
+    <span class="mut">— faces grouped into recurring people (InsightFace ArcFace + HDBSCAN). Local, $0.</span>
+    <span class="mut" id="facesMsg" style="margin-left:8px"></span>
+  </div>
+  <div class="grid" id="facesGrid"></div>
+  <div id="facesDetail" style="display:none">
+    <button id="fback">← back to people</button>
+    <h3 id="fdtitle" style="margin:14px 0 2px"></h3>
+    <div class="mut" id="fdsub"></div>
+    <div class="grid" id="fdgrid" style="margin-top:16px"></div>
+    <div class="row" style="margin-top:10px"><button id="fdmore" style="display:none">Load more</button></div>
   </div>
 </div>
 
@@ -3919,9 +3942,9 @@ function openDetail(uid){ showView("image", {uid}); }
 // ---- view switching (Search / Explore / Interesting / Review / AI / Image) ----
 // `image` is a *detail* view (no nav button) — it's only reached from hash
 // routing (#/image/<uid>) or programmatically via openDetail(uid).
-const VIEWS={search:"searchView",explore:"exploreView",interesting:"interestingView",review:"reviewView",color:"colorView",ai:"aiView",results:"resultsView",jobs:"jobsView",triage:"triageView",image:"imageView"};
-const NAVS={search:"navSearch",explore:"navExplore",interesting:"navInteresting",review:"navReview",color:"navColor",ai:"navAI",results:"navResults",jobs:"navJobs",triage:"navTriage"};
-const VIEW_TITLES={search:"Search",explore:"Explore",interesting:"Interesting",review:"Review",color:"Color",ai:"AI",results:"Results",jobs:"Jobs",triage:"Triage",image:"Image"};
+const VIEWS={search:"searchView",explore:"exploreView",faces:"facesView",interesting:"interestingView",review:"reviewView",color:"colorView",ai:"aiView",results:"resultsView",jobs:"jobsView",triage:"triageView",image:"imageView"};
+const NAVS={search:"navSearch",explore:"navExplore",faces:"navFaces",interesting:"navInteresting",review:"navReview",color:"navColor",ai:"navAI",results:"navResults",jobs:"navJobs",triage:"navTriage"};
+const VIEW_TITLES={search:"Search",explore:"Explore",faces:"Faces",interesting:"Interesting",review:"Review",color:"Color",ai:"AI",results:"Results",jobs:"Jobs",triage:"Triage",image:"Image"};
 // Internal flag: when popstate or initial-route call showView, suppress the
 // pushState so back/forward don't double-stack history entries.
 let _suppressHistory=false;
@@ -3943,6 +3966,8 @@ function showView(v, opts){
   if(v!=="jobs") clearJobsPoll();
   if(v==="explore" && !$("#clusterGrid").children.length) loadClusters();
   if(v==="explore" && typeof loadProjectionViz==="function") loadProjectionViz();
+  if(v==="faces"){ $("#facesDetail").style.display="none"; $("#facesGrid").style.display="";
+    if(!$("#facesGrid").children.length) loadFaces(); }
   if(v==="interesting") loadScores("#scoreGrid","#imsg","#imetric");
   if(v==="review") loadScores("#reviewGrid","#rmsg","#rcat");
   if(v==="color") loadColor();
@@ -4956,6 +4981,61 @@ async function loadMoreClusterMembers(isFirst){
   _cdMaybeLoadMore();                                 // short page / tall window: keep filling until the buffer is satisfied
 }
 
+// ---- Faces (People) tab — people-clusters from face_clusters.json ----
+// Self-contained (own state + simple Load-more paging) so it never collides with
+// the Explore cluster-detail state machine above.
+const _fd={id:null, offset:0, total:0, loading:false};
+async function loadFaces(){
+  $("#facesDetail").style.display="none"; $("#facesGrid").style.display="";
+  $("#facesMsg").textContent="loading…";
+  let r; try{ r=await (await fetch("/api/faces")).json(); }catch(e){ $("#facesMsg").textContent="failed"; return; }
+  const g=$("#facesGrid"); g.innerHTML="";
+  if(!r.built){ $("#facesMsg").textContent="Not built yet — run:  muser faces"; return; }
+  const total=r.clusters.reduce((a,c)=>a+c.size,0);
+  $("#facesMsg").textContent=`${r.clusters.length} people · ${total.toLocaleString()} face-photos`;
+  r.clusters.forEach((c,i)=>{
+    const mos=c.reps.slice(0,4).map(rp=>`<img loading="lazy" src="/api/thumb?path=${enc(rp.path)}" title="${rp.path}">`).join("");
+    // span_days from file mtime is meaningless for Takeout (all share the extract
+    // time), so only surface it when it's actually informative.
+    const span = c.span_days>=1 ? `${Math.round(c.span_days)}d span · ` : "";
+    const card=document.createElement("div"); card.className="card cluster";
+    card.innerHTML=`<div class="mos">${mos}</div><div class="lab">Person ${i+1}</div>
+      <div class="sub">${span}${c.size.toLocaleString()} photos</div>`;
+    card.onclick=()=>openFacePerson(c.id, i+1, c.size);
+    g.appendChild(card);
+  });
+}
+async function openFacePerson(id, num, size){
+  $("#facesGrid").style.display="none"; $("#facesDetail").style.display="";
+  $("#fdtitle").textContent=`Person ${num}`;
+  $("#fdsub").textContent=`${size.toLocaleString()} photos`;
+  $("#fdgrid").innerHTML="";
+  _fd.id=id; _fd.offset=0; _fd.total=size; _fd.loading=false;
+  await loadMoreFaceMembers();
+}
+async function loadMoreFaceMembers(){
+  if(_fd.loading) return; _fd.loading=true;
+  const id=_fd.id, offset=_fd.offset;
+  let r; try{ r=await (await fetch(`/api/face-cluster?id=${id}&offset=${offset}&limit=120`)).json(); }
+  catch(e){ _fd.loading=false; return; }
+  if(id!==_fd.id){ _fd.loading=false; return; }   // a newer person was opened mid-fetch
+  const g=$("#fdgrid");
+  r.members.forEach(h=>{
+    const uid=h.uid||"";
+    const c=document.createElement("div"); c.className="card"; c.dataset.uid=uid;
+    c.innerHTML=`<div class="thumb"><img loading="lazy" src="/api/thumb?path=${enc(h.path)}" title="${h.name}${uid?' · uid:'+uid:''}"></div>
+      <div class="meta"><div class="name" title="${h.path}">${h.name}</div></div>`;
+    c.querySelector(".thumb").onclick=()=> uid ? openDetail(uid) : window.open(`/api/image?path=${enc(h.path)}`,"_blank");
+    g.appendChild(c);
+  });
+  _fd.offset = offset + r.members.length;
+  _fd.total  = r.total;
+  $("#fdmore").style.display = _fd.offset < _fd.total ? "" : "none";
+  _fd.loading=false;
+}
+$("#fback").onclick=()=>{ $("#facesDetail").style.display="none"; $("#facesGrid").style.display=""; };
+$("#fdmore").onclick=()=>loadMoreFaceMembers();
+
 $("#indexPick").onclick = async () => {
   const folder = await pickFolder("index"); if (!folder) return;
   try {
@@ -5610,8 +5690,13 @@ function syncNsfwNav(){
 // ---- Hidden personal-triage tab (only on the ~/.muser-personal instance) ----
 function syncPersonalNav(){
   fetch("/api/status").then(r=>r.json()).then(s=>{
+    // Faces tab: wherever face clustering has run (main OR personal).
+    if(s.faces)
+      document.querySelectorAll('[data-view="faces"], #navFaces').forEach(b=>b.style.display="");
     if(!s.personal) return;
     document.querySelectorAll('[data-view="triage"], #navTriage').forEach(b=>b.style.display="");
+    // Evaluate (label/dispose) link — only the personal instance has the page + data.
+    document.querySelectorAll('#navEvaluate').forEach(b=>b.style.display="");
   }).catch(()=>{});
 }
 const _triage={bucket:"personal", sort:"p", offset:0, total:0, loading:false};

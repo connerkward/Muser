@@ -27,6 +27,15 @@ def _load_rgb(path: str, max_side: int = 1024):
     """
     from PIL import Image
 
+    # Register the HEIF/HEIC opener if pillow-heif is installed (the `[personal]`
+    # extra) so iPhone .heic Takeout files decode here too — same best-effort
+    # pattern as faces.py. Idempotent; no-op when the package is absent.
+    try:
+        from pillow_heif import register_heif_opener
+        register_heif_opener()
+    except Exception:
+        pass
+
     Image.MAX_IMAGE_PIXELS = None
     img = Image.open(path)
     img.draft("RGB", (max_side, max_side))  # cheap pre-decode downscale for JPEG

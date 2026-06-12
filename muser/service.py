@@ -520,6 +520,7 @@ def create_app(model: str = DEFAULT_MODEL):
     def status():
         from . import c2pa as _c2pa
         from . import aidet as _aidet_mod
+        from . import faces as _faces_mod
         # `ready` flips true once the model is warm. `task` is the single
         # in-flight long-running activity (loading_model / indexing) for the
         # busy overlay; null when idle. Frontend polls this — 4s idle,
@@ -540,6 +541,9 @@ def create_app(model: str = DEFAULT_MODEL):
             # True only on the hidden personal instance (MUSER_HOME=~/.muser-personal).
             # The frontend uses this to reveal the Triage tab; never set on the main one.
             "personal": _is_personal_instance(),
+            # True once face clustering has run (face_clusters.json exists) — reveals
+            # the Faces (people) tab on whichever instance has clustered faces.
+            "faces": bool(_faces_mod.clusters()),
         }
 
     # ---- Hidden personal-triage endpoints (only meaningful on the personal root) ----
@@ -2866,6 +2870,36 @@ def create_app(model: str = DEFAULT_MODEL):
         # Centralized hide policy: drop dead / NSFW / hidden-cluster members
         # before pagination (no gaps, honest total).
         members = [p for p in members if not _hidden(p)]
+        page = members[offset : offset + limit]
+        return {
+            "total": len(members),
+            "members": [{"path": p, "name": os.path.basename(p), "uid": uid_for(p)} for p in page],
+        }
+
+    # ---- Faces (people) tab: HDBSCAN people-clusters from face_clusters.json ----
+    @app.get("/api/faces")
+    def faces_list():
+        """People-clusters (largest first): {id, size, span_days, reps:[{path,uid}]}.
+        `built:false` until `muser faces` has clustered. Hidden reps dropped."""
+        from . import faces as _faces
+        cl = _faces.clusters()
+        if not cl:
+            return {"built": False, "clusters": []}
+        out = []
+        for label, c in cl.items():
+            reps = [{"path": p, "uid": uid_for(p)} for p in c.get("reps", []) if not _hidden(p)]
+            if not reps:
+                continue  # whole cluster hidden → skip
+            out.append({"id": int(label), "size": c.get("size", 0),
+                        "span_days": c.get("span_days", 0), "reps": reps})
+        out.sort(key=lambda c: -c["size"])
+        return {"built": True, "clusters": out}
+
+    @app.get("/api/face-cluster")
+    def face_cluster_members(id: int, offset: int = 0, limit: int = 120):
+        """All images containing a face from people-cluster `id` (full membership)."""
+        from . import faces as _faces
+        members = [p for p in _faces.cluster_members(int(id)) if not _hidden(p)]
         page = members[offset : offset + limit]
         return {
             "total": len(members),

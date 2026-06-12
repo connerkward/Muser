@@ -298,6 +298,19 @@ def clusters() -> dict:
         return {}
 
 
+def cluster_members(label: int) -> list[str]:
+    """All indexed paths whose faces include people-cluster `label` — the FULL
+    membership, not just the ≤9 thumbnail `reps` stored in face_clusters.json.
+    Reads the back-annotated `clusters` list each image carries post-`cluster()`."""
+    out = []
+    # entries() is keyed by (path, mtime_ns, size) tuples; unpack the path.
+    for key, e in _SIDE.entries().items():
+        path = key[0] if isinstance(key, tuple) else key
+        if label in (e.get("clusters") or []):
+            out.append(path)
+    return out
+
+
 def prime_cache_from_sidecar() -> int:
     return _SIDE.prime()
 

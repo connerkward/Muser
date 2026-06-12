@@ -24,3 +24,7 @@ scripts/.lookdev-*/
 .scratch/
 .playwright-mcp/
 scripts/.lookdev-*
+
+# Large model checkpoints (downloaded, not versioned)
+sam2.1_b.pt
+*.pt
