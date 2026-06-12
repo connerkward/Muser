@@ -115,6 +115,31 @@ def sheets(out: str = typer.Option(None, "--out", help="Output dir (default ~/De
 
 
 @app.command()
+def benchmark(
+    per_bucket: int = typer.Option(70, help="Images sampled per local bucket"),
+    seed: int = typer.Option(0, help="Sampling seed"),
+):
+    """Independent quality benchmark — gpt-4o-mini judges a random sample vs the local buckets."""
+    ensure_personal_root()
+    from . import benchmark as _bm
+    n = per_bucket * 3
+    con.print(f"judging ~{n} images with gpt-4o-mini (~${n*0.0002:.2f}) …")
+    r = _bm.run(per_bucket=per_bucket, seed=seed, progress=lambda m: con.print(m))
+    if "error" in r:
+        con.print(f"[red]{r['error']}[/]"); raise typer.Exit(1)
+    con.print(f"\n[bold]overall agreement with VLM: {r['overall_agreement']*100:.0f}%[/]  ({r['judged']} judged)")
+    for b, s in r["per_bucket"].items():
+        a = s["agreement"]
+        con.print(f"  {b:11s} n={s['n']:3d}  agreement={a*100:.0f}%" if a is not None else f"  {b}: n=0")
+    con.print("  confusion (rows=local, cols=VLM):")
+    cols = list(r["confusion"]["personal"].keys())
+    con.print("              " + "  ".join(f"{c[:6]:>6s}" for c in cols))
+    for a in cols:
+        con.print(f"    {a:11s} " + "  ".join(f"{r['confusion'][a][c]:6d}" for c in cols))
+    con.print(f"  {r['n_disagreements']} disagreements → {r['_saved']}")
+
+
+@app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", help="Bind address (Caddy proxies to here)"),
     port: int = typer.Option(7780, help="Port (Caddy maps personal.muser.local → here; 7777 muser/7778 feedsieve/7779 local)"),

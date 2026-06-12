@@ -52,7 +52,12 @@ P_REFERENCE = 0.40         # P ≤ this ⇒ reference
 W_EVIDENCE = 0.45   # recurring-face / selfie geometry
 W_CAMERA = 0.40     # EXIF camera capture — "a real photo I took"
 W_APPEARANCE = 0.15 # 1-R, weak tiebreak only
-CAM_FLOOR = 0.62    # a camera-taken photo is personal unless other signals fight it
+# Benchmark (gpt-4o-mini judge) finding: camera-EXIF ALONE over-promotes reference —
+# the user photographs reference material too (paintball gear, vehicle interiors, textures,
+# LEGO). So camera no longer FORCES personal; it floors to in_between (reviewable) and the
+# W_CAMERA weight + faces/people decide personal. Honors the camera bias without the false
+# positives. (Takeout also strips EXIF from ~94% of files, so this only fires on ~6% anyway.)
+CAM_FLOOR = 0.48    # camera-taken → at least in_between (not buried in reference, not forced personal)
 PEOPLE_FLOOR = 0.95 # an image with a person the user TAGGED in Google Photos → decisive
 DOC_FLOOR = 0.50    # docs/screenshots → reviewable in_between, NOT auto-personal (logos etc.)
 Q_AESTHETIC = 0.70         # aesthetic_v2 ≥ this + personal ⇒ in_between

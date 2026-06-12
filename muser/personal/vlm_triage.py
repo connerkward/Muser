@@ -15,7 +15,9 @@ from __future__ import annotations
 import json
 
 from ..caption import _api_key, _encode_image_b64, _post_openai, _retry
-from . import personalness
+from . import personalness, register_heic
+
+register_heic()  # so _encode_image_b64 (PIL) can open iPhone .heic Takeout files
 
 # gpt-4o-mini, detail:"low" (~85 image tokens) + ~150 prompt + ~60 completion, at
 # $0.15/1M input · $0.60/1M output ≈ $0.0002/image with overhead. The cost shown to the
@@ -54,7 +56,10 @@ def estimate(umin: float = 0.0, umax: float = 1.0) -> tuple[int, float]:
 
 
 def _classify_one(path: str) -> dict | None:
-    b64 = _encode_image_b64(path)
+    try:
+        b64 = _encode_image_b64(path)
+    except Exception:
+        return None   # unreadable image → skip, never abort the batch
     payload = {
         "model": "gpt-4o-mini",
         "messages": [
