@@ -45,8 +45,13 @@ VERSION = 1
 # Fusion weights / thresholds — tune via the verification loop, not by eye.
 RECURRING_FACE_FULL = 12   # a people-cluster this big ⇒ recurring person ⇒ F≈1
 SELFIE_AREA_FULL = 0.18    # face-box area / image area at/above this ⇒ selfie ⇒ F≈1
-P_PERSONAL = 0.58          # P ≥ this ⇒ personal (or in_between if also aesthetic)
-P_REFERENCE = 0.42         # P ≤ this ⇒ reference
+P_PERSONAL = 0.55          # P ≥ this ⇒ personal (or in_between if also aesthetic)
+P_REFERENCE = 0.40         # P ≤ this ⇒ reference
+# Evidence-driven fusion weights (sum≈1). Faces/people dominate; camera capture is a
+# strong secondary; appearance (1-R) is only a weak tiebreak — see _classify_one.
+W_EVIDENCE = 0.50
+W_CAMERA = 0.30
+W_APPEARANCE = 0.20
 Q_AESTHETIC = 0.70         # aesthetic_v2 ≥ this + personal ⇒ in_between
 ALBUM_NUDGE = 0.08         # ± nudge from camera-roll vs named album
 DOC_PCTL = 0.90            # zero-shot doc/screenshot above this percentile ⇒ utility
@@ -151,12 +156,17 @@ def _face_signal(entry: dict, wh, clusters: dict) -> float:
     return max(recurring, selfie)
 
 
-def _classify_one(R, F, A, Q, M, doc, has_people) -> tuple[float, str, float, dict]:
-    base = 1.0 - float(R)                  # appearance-based personal-ness
-    strong = max(float(F), 1.0 if has_people else 0.0)
-    p = max(base, strong) if strong > 0 else base
-    if doc:                                # utility shots are personal regardless
-        p = max(p, 0.9)
+def _classify_one(R, F, A, Q, M, doc, has_people, cam) -> tuple[float, str, float, dict]:
+    # Evidence-driven: personal-ness needs POSITIVE evidence (faces / people-tags /
+    # camera capture), NOT merely "doesn't look like the aesthetic library". The early
+    # verification showed `1-R` alone tags saved internet media (game caps, movie stills,
+    # downloaded art) as personal — they're just non-aesthetic, not personal. So the
+    # appearance prior `base` is only a weak tiebreak; faces/people/camera carry it.
+    base = 1.0 - float(R)
+    evidence = max(float(F), 1.0 if has_people else 0.0)   # high-precision personal
+    p = W_EVIDENCE * evidence + W_CAMERA * float(cam) + W_APPEARANCE * base
+    if doc:                                 # screenshots/docs = personal utility
+        p = max(p, 0.88)
     p = float(np.clip(p + ALBUM_NUDGE * (2 * A - 1), 0.0, 1.0))
 
     if p >= P_PERSONAL:
@@ -166,16 +176,14 @@ def _classify_one(R, F, A, Q, M, doc, has_people) -> tuple[float, str, float, di
     else:
         bucket = "in_between"
 
-    # uncertainty: near a boundary OR the high-precision signals disagree with the
-    # appearance base. The weak album prior A is excluded — it would inflate
-    # uncertainty uniformly and isn't real evidence of conflict.
+    # uncertainty: near a boundary OR the personal-evidence signals disagree.
     boundary = 1.0 - 2.0 * abs(p - 0.5)
-    personal_views = [base, float(F), (1.0 if has_people else base)]
+    personal_views = [evidence, float(cam), base]
     disagree = float(np.std(personal_views)) * 2.0
     unc = float(np.clip(max(boundary, disagree), 0.0, 1.0))
     sig = {"R": round(float(R), 3), "F": round(float(F), 3), "A": round(float(A), 3),
            "Q": round(float(Q), 3), "M": round(float(M), 3), "doc": bool(doc),
-           "people": bool(has_people)}
+           "people": bool(has_people), "cam": bool(cam)}
     return round(p, 4), bucket, round(unc, 4), sig
 
 
@@ -234,9 +242,10 @@ def classify(model: str = "siglip2-b", retrain: bool = False, progress=None) -> 
         A = float(np.clip(A, 0.0, 1.0))
         Q = float((scores.get(path, {}) or {}).get("aesthetic_v2", 0.5))
         has_people = bool(tm.get("people"))
+        cam = bool(tm.get("cam"))
         doc = doc_pctl[i] >= DOC_PCTL or _is_screenshot(path, wh[i])
         M = 1.0 if has_people else (0.85 if doc else 0.5)
-        p, bucket, unc, sig = _classify_one(Rproba[i], F, A, Q, M, doc, has_people)
+        p, bucket, unc, sig = _classify_one(Rproba[i], F, A, Q, M, doc, has_people, cam)
         counts[bucket] += 1
         try:
             st = os.stat(path)

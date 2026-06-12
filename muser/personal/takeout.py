@@ -112,7 +112,20 @@ def _compute(path: str) -> dict:
             meta["taken"] = int(os.stat(path).st_mtime)  # fallback: file mtime
         except OSError:
             pass
+    # EXIF camera capture — a strong "this is a real photo I took" signal that
+    # separates personal photos from saved internet media (screenshots, game caps,
+    # movie stills, downloaded art carry no camera Make/Model). Quick header read.
+    meta["cam"] = _has_camera_exif(path)
     return meta
+
+
+def _has_camera_exif(path: str) -> bool:
+    try:
+        from PIL import Image
+        ex = Image.open(path).getexif()
+        return bool(ex.get(271) or ex.get(272))  # 271=Make, 272=Model
+    except Exception:
+        return False
 
 
 def scan(paths, progress=None) -> dict:
