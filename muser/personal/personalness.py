@@ -47,11 +47,14 @@ RECURRING_FACE_FULL = 12   # a people-cluster this big ⇒ recurring person ⇒ 
 SELFIE_AREA_FULL = 0.18    # face-box area / image area at/above this ⇒ selfie ⇒ F≈1
 P_PERSONAL = 0.55          # P ≥ this ⇒ personal (or in_between if also aesthetic)
 P_REFERENCE = 0.40         # P ≤ this ⇒ reference
-# Evidence-driven fusion weights (sum≈1). Faces/people dominate; camera capture is a
-# strong secondary; appearance (1-R) is only a weak tiebreak — see _classify_one.
-W_EVIDENCE = 0.50
-W_CAMERA = 0.30
-W_APPEARANCE = 0.20
+# Evidence-driven fusion weights (sum≈1). Per user directive: HEAVILY bias toward
+# camera-capture + user-tagged people; appearance (1-R) is only a faint tiebreak.
+W_EVIDENCE = 0.45   # recurring-face / selfie geometry
+W_CAMERA = 0.40     # EXIF camera capture — "a real photo I took"
+W_APPEARANCE = 0.15 # 1-R, weak tiebreak only
+CAM_FLOOR = 0.62    # a camera-taken photo is personal unless other signals fight it
+PEOPLE_FLOOR = 0.95 # an image with a person the user TAGGED in Google Photos → decisive
+DOC_FLOOR = 0.50    # docs/screenshots → reviewable in_between, NOT auto-personal (logos etc.)
 Q_AESTHETIC = 0.70         # aesthetic_v2 ≥ this + personal ⇒ in_between
 ALBUM_NUDGE = 0.08         # ± nudge from camera-roll vs named album
 DOC_PCTL = 0.90            # zero-shot doc/screenshot above this percentile ⇒ utility
@@ -163,10 +166,16 @@ def _classify_one(R, F, A, Q, M, doc, has_people, cam) -> tuple[float, str, floa
     # downloaded art) as personal — they're just non-aesthetic, not personal. So the
     # appearance prior `base` is only a weak tiebreak; faces/people/camera carry it.
     base = 1.0 - float(R)
-    evidence = max(float(F), 1.0 if has_people else 0.0)   # high-precision personal
-    p = W_EVIDENCE * evidence + W_CAMERA * float(cam) + W_APPEARANCE * base
-    if doc:                                 # screenshots/docs = personal utility
-        p = max(p, 0.88)
+    p = W_EVIDENCE * float(F) + W_CAMERA * float(cam) + W_APPEARANCE * base
+    # Floors, weakest→strongest. A doc/screenshot is at most reviewable (in_between);
+    # a camera capture is personal; a user-TAGGED person is decisive. This ordering is
+    # the user's explicit bias: camera-taken / camera-metadata / tagged-people first.
+    if doc:
+        p = max(p, DOC_FLOOR)
+    if cam:
+        p = max(p, CAM_FLOOR)
+    if has_people:
+        p = max(p, PEOPLE_FLOOR)
     p = float(np.clip(p + ALBUM_NUDGE * (2 * A - 1), 0.0, 1.0))
 
     if p >= P_PERSONAL:
@@ -178,6 +187,7 @@ def _classify_one(R, F, A, Q, M, doc, has_people, cam) -> tuple[float, str, floa
 
     # uncertainty: near a boundary OR the personal-evidence signals disagree.
     boundary = 1.0 - 2.0 * abs(p - 0.5)
+    evidence = max(float(F), 1.0 if has_people else 0.0)
     personal_views = [evidence, float(cam), base]
     disagree = float(np.std(personal_views)) * 2.0
     unc = float(np.clip(max(boundary, disagree), 0.0, 1.0))
