@@ -35,7 +35,7 @@ _SIDE = Sidecar("faces")
 EMB_NPZ = MUSER_HOME / "faces_emb.npz"          # face-id -> 512-d ArcFace vector
 CLUSTERS_JSON = data_file("face_clusters.json")  # cluster-id -> {size, reps, span}
 VERSION = 1
-DET_SIZE = 640        # RetinaFace input; smaller misses tiny faces, larger is slower
+DET_SIZE = 480        # RetinaFace input; reduced from 640 to lower memory footprint (still detects faces well)
 MAX_SIDE = 1600       # cap decode size — enough to keep small faces detectable
 
 _app = None
