@@ -683,6 +683,17 @@ def create_app(model: str = DEFAULT_MODEL):
         from .personal import evaluate as _ev
         return _ev.results()
 
+    @app.post("/api/personal/eval-flag")
+    def personal_eval_flag(req: dict):
+        from .personal import evaluate as _ev
+        _ev.set_flag(req["path"], req.get("flag"))
+        return {"ok": True}
+
+    @app.get("/api/personal/eval-flagged")
+    def personal_eval_flagged():
+        from .personal import evaluate as _ev
+        return _ev.flagged()
+
     @app.get("/evaluate", response_class=HTMLResponse)
     def personal_evaluate_page():
         f = Path(__file__).resolve().parent / "web" / "personal_evaluate.html"

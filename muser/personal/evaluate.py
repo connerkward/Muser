@@ -57,8 +57,15 @@ def sample(n: int = 60, seed: int = 0) -> list[dict]:
     rng.shuffle(chosen)
     labels = _load_labels()
     return [{"path": p, "bucket": e.get("bucket"), "p": e.get("p"), "unc": e.get("unc"),
-             "sig": e.get("sig"), "album": _album(p), "label": labels.get(p, {}).get("label")}
+             "sig": e.get("sig"), "album": _album(p),
+             "label": labels.get(p, {}).get("label"),
+             "flag": labels.get(p, {}).get("flag")}
             for p, e in chosen]
+
+
+# Disposition flags — orthogonal to the personal/reference bucket. A "delete" image is
+# a delete-candidate (junk / blurry / unwanted); "depri" = keep but rank it down.
+FLAGS = ("depri", "delete")
 
 
 def _load_labels() -> dict:
@@ -68,16 +75,50 @@ def _load_labels() -> dict:
         return {}
 
 
-def label(path: str, verdict: str | None, model_bucket: str | None = None) -> None:
-    """Persist (or clear, if verdict is None) one human label."""
-    labels = _load_labels()
-    if verdict is None:
-        labels.pop(path, None)
-    else:
-        labels[path] = {"label": verdict, "model": model_bucket}
+def _save(labels: dict) -> None:
     tmp = LABELS_FILE.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(labels))
     os.replace(tmp, LABELS_FILE)
+
+
+def label(path: str, verdict: str | None, model_bucket: str | None = None) -> None:
+    """Persist (or clear, if verdict is None) one human bucket label; keeps any flag."""
+    labels = _load_labels()
+    e = labels.get(path, {})
+    if verdict is None:
+        e.pop("label", None); e.pop("model", None)
+    else:
+        e["label"] = verdict; e["model"] = model_bucket
+    if e:
+        labels[path] = e
+    else:
+        labels.pop(path, None)
+    _save(labels)
+
+
+def set_flag(path: str, flag: str | None) -> None:
+    """Set/clear the disposition flag ('depri' | 'delete' | None); keeps any bucket label."""
+    labels = _load_labels()
+    e = labels.get(path, {})
+    if flag in FLAGS:
+        e["flag"] = flag
+    else:
+        e.pop("flag", None)
+    if e:
+        labels[path] = e
+    else:
+        labels.pop(path, None)
+    _save(labels)
+
+
+def flagged() -> dict:
+    """Lists of paths the user flagged, by disposition — actionable (export/trash later)."""
+    labels = _load_labels()
+    out = {f: [] for f in FLAGS}
+    for p, e in labels.items():
+        if e.get("flag") in FLAGS:
+            out[e["flag"]].append(p)
+    return {**out, "counts": {f: len(out[f]) for f in FLAGS}}
 
 
 def results() -> dict:
