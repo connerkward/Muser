@@ -60,8 +60,10 @@ def test_clipboard_copy(tmp_path):
         assert ok is False  # must degrade to False, never raise
 
 
-def test_reveal_never_raises(tmp_path):
+def test_reveal_never_raises(tmp_path, monkeypatch):
     # _reveal shells out per-OS with check=False / try-except; must not raise anywhere.
+    # Stub subprocess so the test never actually pops a Finder window (open -R) / file manager.
+    monkeypatch.setattr(service.subprocess, "run", lambda *a, **k: None)
     service._reveal(_png(tmp_path / "r.png"))
 
 
