@@ -3181,12 +3181,16 @@ def create_app(model: str = DEFAULT_MODEL):
         }
 
     # ---- Faces (people) tab: HDBSCAN people-clusters + user-curated people ----
+    _faces_order = {"mtime": None, "order": None}
+
     @app.get("/api/faces")
-    def faces_list():
-        """Curated `people` (named/merged, largest first) + unnamed raw `clusters`
-        (those not yet claimed by a named person). Both: {..., reps:[{path,uid}]}.
-        `built:false` until `muser faces` has clustered."""
+    def faces_list(sort: str = "similar", hide_done: bool = True):
+        """Curated `people` + unnamed raw `clusters`. `sort=similar` (default)
+        orders unnamed clusters so look-alike groups sit adjacent (easy merge);
+        `sort=size` is largest-first. `hide_done=True` drops clusters whose every
+        member is already human-labeled/flagged (fully triaged → decluttered)."""
         from . import faces as _faces
+        from .personal import evaluate as _ev
         from .personal import people as _people
         cl = _faces.clusters()
         if not cl:
@@ -3195,25 +3199,47 @@ def create_app(model: str = DEFAULT_MODEL):
         def _reps(paths, k=4):
             return [{"path": p, "uid": uid_for(p)} for p in paths if not _hidden(p)][:k]
 
-        # Curated, named people (path-anchored — stable across re-clusters).
         people = []
         for pe in _people.list_people():
             reps = _reps(pe["paths"], 4)
             live = sum(1 for p in pe["paths"] if not _hidden(p))
             people.append({"id": pe["id"], "name": pe["name"], "size": live, "reps": reps})
 
-        # Unnamed raw clusters, minus those a named person already claims.
         claimed = set(_people.claimed_clusters().keys())
+        mbc = _faces.members_by_cluster()
+        labels = _ev._load_labels()
+        done_paths = {p for p, e in labels.items() if e.get("label") or e.get("flag")}
+
         clusters = []
+        done_n = 0
         for label, c in cl.items():
-            if int(label) in claimed:
+            lab = int(label)
+            if lab in claimed:
                 continue
+            members = mbc.get(lab, [])
+            labeled = sum(1 for m in members if m in done_paths)
+            if hide_done and members and labeled == len(members):
+                done_n += 1
+                continue  # fully triaged — declutter
             reps = [{"path": p, "uid": uid_for(p)} for p in c.get("reps", []) if not _hidden(p)][:4]
             if not reps:
-                continue  # whole cluster hidden → skip
-            clusters.append({"id": int(label), "size": c.get("size", 0), "reps": reps})
-        clusters.sort(key=lambda c: -c["size"])
-        return {"built": True, "people": people, "clusters": clusters}
+                continue
+            clusters.append({"id": lab, "size": c.get("size", 0), "labeled": labeled, "reps": reps})
+
+        if sort == "similar":
+            # Read a PRECOMPUTED similar-order list from the sidecar (written by
+            # faces clustering). Never compute centroids in-request — loading the
+            # 33k-vector npz in the warm service process OOM-killed it. Falls back
+            # to size order if the sidecar has none yet.
+            order = _faces.cluster_order()
+            if order:
+                rank = {l: i for i, l in enumerate(order)}
+                clusters.sort(key=lambda c: rank.get(c["id"], 1e9))
+            else:
+                clusters.sort(key=lambda c: -c["size"])
+        else:
+            clusters.sort(key=lambda c: -c["size"])
+        return {"built": True, "people": people, "clusters": clusters, "done_hidden": done_n}
 
     @app.get("/api/face-cluster")
     def face_cluster_members(id: int, offset: int = 0, limit: int = 120):

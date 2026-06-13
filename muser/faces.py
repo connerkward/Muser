@@ -141,7 +141,12 @@ def _load_npz() -> dict[str, np.ndarray]:
         return {}
     try:
         z = np.load(EMB_NPZ, allow_pickle=False)
-        return {fid: z["X"][k] for k, fid in enumerate(z["ids"])}
+        # Materialize X and ids ONCE. `z["X"]` on an NpzFile re-reads+decompresses
+        # the whole array on every access — doing it inside the comprehension made
+        # this O(n) decompressions (~1 TB of work at 33k faces → process hang/kill).
+        X = z["X"]
+        ids = z["ids"]
+        return {fid: X[k] for k, fid in enumerate(ids)}
     except Exception:
         return {}
 
@@ -317,6 +322,95 @@ def clusters() -> dict:
         return json.loads(CLUSTERS_JSON.read_text()).get("clusters", {})
     except Exception:
         return {}
+
+
+def members_by_cluster() -> dict[int, list[str]]:
+    """{cluster-label: [all member image paths]} in ONE pass over the sidecar —
+    cheaper than calling cluster_members() per cluster when you need them all."""
+    out: dict[int, list[str]] = {}
+    for key, e in _SIDE.entries().items():
+        path = key[0] if isinstance(key, tuple) else key
+        for c in (e.get("clusters") or []):
+            out.setdefault(int(c), []).append(path)
+    return out
+
+
+def _centroids() -> dict[int, "np.ndarray"]:
+    """Per-cluster mean ArcFace vector (L2-normalized) — the 'average face' of
+    each person-cluster. Maps each npz face to its cluster via the back-annotated
+    sidecar `faces[i]['c']`."""
+    emb = _load_npz()
+    if not emb:
+        return {}
+    cache = _SIDE.load()
+    sums: dict[int, np.ndarray] = {}
+    counts: dict[int, int] = {}
+    for fid, v in emb.items():
+        path, _, i = fid.rpartition("#")
+        try:
+            i = int(i)
+        except ValueError:
+            continue
+        e = cache.get(path)
+        if not e:
+            continue
+        fs = e.get("faces", [])
+        if i >= len(fs):
+            continue
+        c = fs[i].get("c", -1)
+        if c is None or c < 0:
+            continue
+        if c not in sums:
+            sums[c] = np.zeros(len(v), np.float64)
+            counts[c] = 0
+        sums[c] += v
+        counts[c] += 1
+    cents: dict[int, np.ndarray] = {}
+    for c, s in sums.items():
+        v = s / max(1, counts[c])
+        n = np.linalg.norm(v)
+        cents[c] = (v / n) if n else v
+    return cents
+
+
+def similar_order(labels: list[int]) -> list[int]:
+    """Order cluster labels so visually-similar people sit adjacent — a greedy
+    nearest-neighbour chain over centroid cosine, seeded from the first label
+    (callers pass size-desc, so it starts at the largest). Makes the same person
+    split across clusters easy to spot and merge. Labels without a centroid keep
+    their order at the end."""
+    cents = _centroids()
+    labs = [l for l in labels if l in cents]
+    rest = [l for l in labels if l not in cents]
+    if len(labs) < 3:
+        return labels
+    M = np.stack([cents[l] for l in labs])
+    sim = M @ M.T
+    n = len(labs)
+    used = np.zeros(n, bool)
+    cur = 0
+    used[0] = True
+    order = [0]
+    for _ in range(n - 1):
+        row = sim[cur].copy()
+        row[used] = -2.0
+        nxt = int(row.argmax())
+        used[nxt] = True
+        order.append(nxt)
+        cur = nxt
+    return [labs[i] for i in order] + rest
+
+
+def cluster_order() -> list[int]:
+    """Precomputed similar-adjacent cluster ordering from face_clusters.json
+    (written at cluster time). Cheap file read — no embedding load. [] if absent."""
+    if not CLUSTERS_JSON.exists():
+        return []
+    try:
+        import json
+        return [int(x) for x in json.loads(CLUSTERS_JSON.read_text()).get("order", [])]
+    except Exception:
+        return []
 
 
 def cluster_members(label: int) -> list[str]:

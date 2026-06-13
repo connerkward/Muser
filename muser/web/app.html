@@ -1390,12 +1390,18 @@
     <b>People</b>
     <span class="mut">— faces grouped into recurring people (InsightFace ArcFace + HDBSCAN). Name a group, or select several and merge. Named people's photos are auto-classified <b>personal</b>. Local, $0.</span>
   </div>
-  <div class="row" id="facesToolbar" style="margin-bottom:12px;gap:8px;align-items:center">
+  <div class="row" id="facesToolbar" style="margin-bottom:12px;gap:8px;align-items:center;flex-wrap:wrap">
     <span class="mut" id="facesMsg"></span>
+    <label class="mut" style="font-size:12px;margin-left:6px">sort
+      <select id="facesSort"><option value="similar">look-alike (merge dupes)</option><option value="size">most photos</option></select>
+    </label>
+    <label class="mut" style="font-size:12px"><input type="checkbox" id="facesHideDone" checked style="vertical-align:middle"> hide fully-tagged</label>
     <span class="sp" style="flex:1"></span>
     <span class="mut" id="facesSelMsg" style="display:none"></span>
-    <button id="facesPersonalBtn" class="primary" style="display:none">👤 Mark selected personal</button>
-    <button id="facesMergeBtn" style="display:none">Merge selected…</button>
+    <button id="facesSelAll">Select all</button>
+    <button id="facesPersonalBtn" class="primary" style="display:none">👤 Personal</button>
+    <button id="facesMergeBtn" style="display:none">Merge…</button>
+    <button id="facesDeleteBtn" style="display:none">🗑 Mark for deletion</button>
     <button id="facesSelClear" style="display:none">Clear</button>
   </div>
   <div id="facesPeopleWrap" style="display:none">
@@ -1409,8 +1415,10 @@
     <h3 id="fdtitle" style="margin:14px 0 2px"></h3>
     <div class="mut" id="fdsub"></div>
     <div class="row" id="fdActions" style="margin:8px 0 0;gap:12px;align-items:center;flex-wrap:wrap">
-      <span class="mut" style="font-size:12px">Click a photo to <b>exclude</b> it (not this person); then label the rest:</span>
+      <span class="mut" style="font-size:12px">Click photos to <b>select</b> the odd ones out, then:</span>
+      <button id="fdSelAll">Select all</button>
       <button id="fdLabelPersonal" class="primary">👤 Label remaining as personal</button>
+      <button id="fdDeleteBtn">🗑 Mark selected for deletion</button>
       <span class="mut" id="fdExclMsg" style="font-size:12px"></span>
     </div>
     <div class="grid" id="fdgrid" style="margin-top:16px"></div>
@@ -5267,11 +5275,14 @@ async function loadFaces(){
   $("#facesDetail").style.display="none"; $("#facesGrid").style.display="";
   _faceSel.clear(); _syncFaceSel();
   $("#facesMsg").textContent="loading…";
-  let r; try{ r=await (await fetch("/api/faces")).json(); }catch(e){ $("#facesMsg").textContent="failed"; return; }
+  const sort=$("#facesSort")?.value||"similar";
+  const hideDone=$("#facesHideDone")?.checked ? 1 : 0;
+  let r; try{ r=await (await fetch(`/api/faces?sort=${sort}&hide_done=${hideDone}`)).json(); }catch(e){ $("#facesMsg").textContent="failed"; return; }
   if(!r.built){ $("#facesMsg").textContent="Not built yet — run:  muser faces"; $("#facesGrid").innerHTML=""; return; }
   const people=r.people||[], clusters=r.clusters||[];
   const tot=[...people,...clusters].reduce((a,c)=>a+c.size,0);
-  $("#facesMsg").textContent=`${people.length} named · ${clusters.length} unnamed · ${tot.toLocaleString()} face-photos`;
+  const doneTxt = r.done_hidden ? ` · ${r.done_hidden} fully-tagged hidden` : "";
+  $("#facesMsg").textContent=`${people.length} named · ${clusters.length} unnamed · ${tot.toLocaleString()} face-photos${doneTxt}`;
   // Named people section (only shown when there are any)
   const pw=$("#facesPeopleWrap"), pg=$("#facesPeople");
   pw.style.display = people.length ? "" : "none";
@@ -5335,8 +5346,30 @@ function _syncFaceSel(){
   $("#facesSelMsg").style.display=n?"":"none"; $("#facesSelMsg").textContent=`${n} selected`;
   $("#facesPersonalBtn").style.display=n>=1?"":"none";
   $("#facesMergeBtn").style.display=n>=2?"":"none";
+  $("#facesDeleteBtn").style.display=n>=1?"":"none";
   $("#facesSelClear").style.display=n?"":"none";
 }
+$("#facesSort").onchange=()=>loadFaces();
+$("#facesHideDone").onchange=()=>loadFaces();
+$("#facesSelAll").onclick=()=>{
+  document.querySelectorAll('#facesGrid .card.cluster, #facesPeople .card.cluster')
+    .forEach(c=>_faceSel.add(c.dataset.ref));
+  _syncFaceSel();
+};
+$("#facesDeleteBtn").onclick=async()=>{
+  if(!_faceSel.size) return;
+  const btn=$("#facesDeleteBtn"); btn.disabled=true; btn.textContent="gathering…";
+  const seen=new Set();
+  for(const ref of _faceSel){ (await _faceAllMembers(ref)).forEach(p=>seen.add(p)); }
+  const paths=[...seen]; btn.disabled=false; btn.textContent="🗑 Mark for deletion";
+  if(!paths.length) return;
+  if(!confirm(`Mark all ${paths.length} photos in ${_faceSel.size} selected group${_faceSel.size>1?"s":""} for DELETION? (Flag only — review in Trash, nothing deleted.)`)) return;
+  const r=await fetch("/api/personal/flag-bulk",{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({paths, flag:"delete"})});
+  if(!r.ok){ toast("failed"); return; }
+  toast(`flagged ${paths.length} for deletion`);
+  _faceSel.clear(); loadFaces();
+};
 // gather every member path of a cluster/person ref (paginate to the end)
 async function _faceAllMembers(ref){
   const out=[]; let off=0;
@@ -5383,7 +5416,7 @@ const _fdExcl=new Set();   // member paths excluded from "label rest personal"
 function _fdSyncExcl(){
   const remaining=Math.max(0,(_fd.total||0)-_fdExcl.size);
   $("#fdLabelPersonal").textContent=`👤 Label remaining ${remaining.toLocaleString()} as personal`;
-  $("#fdExclMsg").textContent=_fdExcl.size?`${_fdExcl.size} excluded`:"";
+  $("#fdExclMsg").textContent=_fdExcl.size?`${_fdExcl.size} selected`:"";
 }
 async function openFacePerson(ref, label, size){
   $("#facesGrid").style.display="none"; $("#facesPeopleWrap").style.display="none";
@@ -5398,13 +5431,29 @@ async function openFacePerson(ref, label, size){
 $("#fdLabelPersonal").onclick=async()=>{
   const btn=$("#fdLabelPersonal"); btn.disabled=true;
   const all=await _faceAllMembers(_fd.ref);
-  const paths=all.filter(p=>!_fdExcl.has(p));
+  const paths=all.filter(p=>!_fdExcl.has(p));   // label the UNSELECTED ("remaining")
   btn.disabled=false;
   if(!paths.length){ toast("nothing to label"); return; }
-  if(!confirm(`Label ${paths.length} photos of "${_fd.label}" as PERSONAL${_fdExcl.size?` (excluding ${_fdExcl.size})`:""}?`)) return;
+  if(!confirm(`Label ${paths.length} photos of "${_fd.label}" as PERSONAL${_fdExcl.size?` (excluding ${_fdExcl.size} selected)`:""}?`)) return;
   if(!await _bucketBulk(paths,"personal")){ toast("failed"); return; }
   toast(`labeled ${paths.length} personal`);
   $("#facesDetail").style.display="none"; loadFaces();
+};
+$("#fdSelAll").onclick=()=>{
+  document.querySelectorAll("#fdgrid .card").forEach(c=>{ _fdExcl.add(c.dataset.path); c.classList.add("excl"); });
+  _fdSyncExcl();
+};
+$("#fdDeleteBtn").onclick=async()=>{
+  const paths=[..._fdExcl];   // the SELECTED odd-ones-out
+  if(!paths.length){ toast("select photos first (click them)"); return; }
+  if(!confirm(`Mark ${paths.length} selected photos for DELETION? (Flag only — review in Trash.)`)) return;
+  const r=await fetch("/api/personal/flag-bulk",{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({paths, flag:"delete"})});
+  if(!r.ok){ toast("failed"); return; }
+  toast(`flagged ${paths.length} for deletion`);
+  // drop the now-flagged cards from the grid; keep the rest for further triage
+  paths.forEach(p=>{ const c=document.querySelector(`#fdgrid .card[data-path="${CSS.escape(p)}"]`); if(c) c.remove(); });
+  _fdExcl.clear(); _fd.total=Math.max(0,_fd.total-paths.length); _fdSyncExcl();
 };
 async function loadMoreFaceMembers(){
   if(_fd.loading) return; _fd.loading=true;
