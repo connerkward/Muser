@@ -652,6 +652,21 @@
   .qabar button:hover { background:#fff; }
   .qabar button[data-b="__del"] { background:rgba(208,80,80,.92); color:#fff; }
   .qabar button.done { outline:2px solid #6ab04c; outline-offset:-2px; }
+  /* Algorithm explainer drawer */
+  #algoPanel { position:fixed; top:54px; right:14px; width:min(480px, calc(100vw - 28px));
+               max-height:calc(100vh - 80px); overflow-y:auto; z-index:55;
+               background:var(--paper); color:var(--fg); border:1px solid var(--line); border-radius:10px;
+               padding:14px 18px 16px; box-shadow:0 8px 32px rgba(0,0,0,.25); font-size:12.5px; line-height:1.55; }
+  #algoPanel .algo-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+  #algoPanel .algo-head b { font-size:14px; }
+  #algoPanel #algoClose { background:transparent; border:0; color:var(--mut); font-size:18px; cursor:pointer; }
+  #algoPanel #algoClose:hover { color:var(--fg); }
+  #algoPanel details { margin:6px 0; border-left:2px solid var(--line); padding-left:10px; }
+  #algoPanel details[open] { border-left-color:#caa468; }
+  #algoPanel summary { cursor:pointer; font-weight:600; }
+  #algoPanel p, #algoPanel li { color:var(--mut); margin:4px 0; }
+  #algoPanel code { font-size:11px; background:rgba(128,128,128,.13); padding:0 4px; border-radius:3px; }
+  #algoPanel ul { margin:4px 0; padding-left:16px; }
   /* Cleanup tab: save-from-deletion cards + reason chips. Everything shown is a
      presumed delete; a click SAVES it (green) and the bulk action flags the rest. */
   #cleanupView .card .thumb { cursor:pointer; }
@@ -1128,6 +1143,8 @@
   <button class="nav" id="navCleanup" style="display:none">Cleanup</button>
   <!-- Toggle: hide 🗑-flagged images everywhere (server-side, persisted); personal only -->
   <button class="nav" id="hideFlaggedBtn" style="display:none" title="Toggle hiding images flagged for deletion across all tabs">🗑 hidden</button>
+  <!-- Algorithm explainer: expands a panel describing the active tab's exact algorithm -->
+  <button class="nav" id="algoBtn" title="How does this tab work? Exact algorithms + components">ⓘ</button>
   <span class="mut" id="status">…</span>
   <span class="sp"></span>
   <span class="spinner" id="spinner" style="display:none" title="Working…"></span>
@@ -1471,6 +1488,7 @@
     <span class="mut" id="cuThreshLabel" style="font-size:12px">55</span>
     <span class="mut" id="cleanupMsg" style="font-size:12px"></span>
     <button id="cuScan" style="display:none">Scan library</button>
+    <button id="cuTrain" title="Train a P(delete) model on your 🗑/saved flags; its suspects join the list as 'model NN%'">🧠 Retrain deletion model</button>
     <span style="flex:1"></span>
     <span class="mut" id="cuSelMsg" style="display:none;font-size:12px"></span>
     <button id="cuSaveAll" style="display:none">✓ Save all shown</button>
@@ -1483,6 +1501,12 @@
 
 <!-- shared lightbox for Evaluate/Cleanup zoom -->
 <div id="evLb" style="position:fixed;inset:0;background:rgba(0,0,0,.92);display:none;align-items:center;justify-content:center;z-index:60;cursor:zoom-out"><img id="evLbImg" style="max-width:94vw;max-height:94vh;object-fit:contain"></div>
+
+<!-- Algorithm explainer drawer (ⓘ in header): exact algorithms behind the active tab -->
+<div id="algoPanel" style="display:none">
+  <div class="algo-head"><b id="algoTitle"></b><button id="algoClose" title="Close">×</button></div>
+  <div id="algoBody"></div>
+</div>
 
 <div class="wrap" id="colorView" style="display:none">
   <div class="row" style="margin-bottom:8px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
@@ -4100,6 +4124,7 @@ function showView(v, opts){
   if(v==="evaluate") loadEvaluate();
   if(v==="cleanup") loadCleanup();
   if(v==="image" && opts.uid) loadImageDetail(opts.uid);
+  if(typeof refreshAlgoPanel==="function") refreshAlgoPanel(v);
   // Returning to Search with no query + no filter and an empty grid → showcase.
   if(v==="search" && typeof showShowcase==="function"
      && $("#q").value.trim().length < 2 && !filterActive()
@@ -5360,6 +5385,16 @@ $("#cuScan").onclick=async()=>{
   $("#cuScan").disabled=false;
   if(r.started) _cuWatchScan(); else $("#cleanupMsg").textContent="scan: "+(r.reason||"failed");
 };
+$("#cuTrain").onclick=async()=>{
+  const btn=$("#cuTrain"), orig=btn.textContent;
+  btn.disabled=true; btn.textContent="Training…";
+  try{
+    const r=await (await fetch("/api/personal/cleanup-train",{method:"POST"})).json();
+    toast(r.trained ? r.message : ("train failed: "+(r.message||"")));
+    if(r.trained) _cuLoad(true);                       // model suspects join the list
+  }catch(e){ toast("train error"); }
+  btn.disabled=false; btn.textContent=orig;
+};
 function _cuWatchScan(){
   clearInterval(_cuScanPoll);
   _cuScanPoll=setInterval(async()=>{
@@ -5450,6 +5485,73 @@ $("#cuMark").onclick=async()=>{
   _cuLoad(true);                                        // flagged + saved both leave the page
 };
 $("#cleanupMore").onclick=()=>_cuLoad(false);
+
+// ---- Algorithm explainer (ⓘ): exact algorithms behind each tab ----
+const ALGO = {
+search:{t:"Search — semantic embedding retrieval",h:`
+<p>Text and images live in one vector space; search is geometry, not keywords.</p>
+<details open><summary>Embedding model</summary><p><code>siglip2-b</code> (Google SigLIP 2 Base) encodes the query text and every indexed image to L2-normalized vectors in a shared space. Queries are lowercased (the tokenizer is case-sensitive).</p></details>
+<details><summary>Index + ranking</summary><p>Vectors live in an embedded <b>LanceDB</b>; results = cosine k-nearest-neighbors (path-only projection, ~10&nbsp;ms at k=288). Score badge = cosine similarity.</p></details>
+<details><summary>Multi-concept queries</summary><p>Commas split into signed concepts. <b>Blend</b>: each concept embedded separately, summed (prompt-ensembling — equal weight per concept); a leading <code>-</code> subtracts. <b>Match&nbsp;all</b>: one kNN per concept; an image scores the MINIMUM of its per-concept similarities — high only when every concept is present.</p></details>
+<details><summary>Dedup + hide</summary><p>Near-duplicates collapse via precomputed dupe groups (<code>scores.json</code>, O(1) rep lookup). A global hide filter drops dead files, 🗑-flagged (toggleable), NSFW-above-percentile and hidden clusters (demo mode).</p></details>
+<details><summary>Badges</summary><p>Amber <b>AI?</b> = C2PA Content Credentials declare AI origin. <code>ai%</code> = Community Forensics detector (see AI tab).</p></details>`},
+explore:{t:"Explore — unsupervised visual clustering",h:`
+<details open><summary>Clusters</summary><p>SigLIP vectors → <b>UMAP</b> dimensionality reduction → <b>HDBSCAN</b> (density-based, auto cluster count) or <b>K-means</b>. Each cluster is labeled by zero-shot SigLIP concepts + a <b>BLIP</b> caption of its representative images.</p></details>
+<details><summary>3D point cloud</summary><p>A sample (≤5000) of embeddings projected to 3D by <b>PCA</b> (numpy SVD), colored by HDBSCAN cluster (golden-angle palette). Pure geometry of the embedding space — nearby points look alike.</p></details>
+<details><summary>Spaces</summary><p><b>SigLIP</b> (default) is text-aligned; <b>DINOv2</b> (main library only, precomputed) is self-supervised visual structure — finer grouping, no text alignment.</p></details>`},
+faces:{t:"Faces — detection, identity embedding, people clustering",h:`
+<details open><summary>Detect + embed</summary><p><b>InsightFace buffalo_l</b>: RetinaFace finds faces; ArcFace encodes each to a 512-d identity vector (same person ⇒ nearby vectors, robust to age/lighting).</p></details>
+<details><summary>People clusters</summary><p><b>HDBSCAN</b> over all face vectors (min cluster 4; vectors are normalized so euclidean ≡ cosine). A recurring cluster = one person.</p></details>
+<details><summary>Naming / merging</summary><p>Names are anchored to <i>image paths</i>, not cluster ids — they survive re-clustering. Naming or merging force-buckets every photo of that person as <b>personal</b> (reversible; original bucket kept).</p></details>`},
+interesting:{t:"Interesting — novelty + learned aesthetics",h:`
+<details open><summary>Novelty</summary><p>Distance to the k nearest neighbors in embedding space — far from everything ⇒ visually unusual in <i>your</i> library.</p></details>
+<details><summary>Aesthetic models</summary><p>Learned scorers over the embeddings/pixels: <b>LAION Aesthetic v2 / v2.5</b>, <b>PickScore</b> (human-preference trained), <b>HPS v2.1</b>, plus a zero-shot prompt baseline. "Interesting" = novelty + aesthetic blend; the dropdown picks the raw metric.</p></details>`},
+review:{t:"Review — NSFW consensus",h:`
+<details open><summary>Consensus of 3 classifiers</summary><p>Three independent ViT NSFW classifiers (<b>Falconsai</b>, <b>AdamCodd</b>, <b>Marqo</b>) score every image; consensus = elementwise <b>max</b> — flagged if ANY model flags it (recall-biased; you review, it ranks).</p></details>
+<details><summary>Hiding</summary><p>In demo mode, images above the 90th percentile of consensus are hidden everywhere. This tab ranks by consensus, worst first.</p></details>`},
+color:{t:"Color — LAB palette search",h:`
+<details open><summary>Palette index</summary><p>Per image: <b>median-cut</b> quantization → dominant colors converted to <b>CIE-LAB</b> (perceptually uniform) with area fractions. Separate index — no neural net.</p></details>
+<details><summary>Scoring</summary><p>score = Σ fraction · sim, where sim decays with LAB ΔE. Multi-color: <b>all</b> = mean, every color must be present; <b>any</b> = max.</p></details>`},
+ai:{t:"AI — origin detection (two complementary signals)",h:`
+<details open><summary>C2PA Content Credentials</summary><p><code>c2patool</code> reads cryptographically signed metadata; this tab lists images whose credentials <i>declare</i> AI generation/editing (OpenAI, Firefly, Google…). Positive-only <b>lower bound</b> — local SD/Flux output carries no credentials.</p></details>
+<details><summary>Pixel-level likelihood (ai%)</summary><p><b>Community Forensics</b> (Park &amp; Owens, CVPR'25): ViT-S/16 trained on 4,803 generators; its sigmoid output IS the calibrated P(AI). A soft hint, never a verdict.</p></details>`},
+triage:{t:"Triage — personal vs reference classification",h:`
+<details open><summary>Trained head (when you've retrained)</summary><p>P(personal) = logistic regression on the raw 1152-d SigLIP embedding, trained on YOUR Evaluate labels (5-fold cross-validated ≈86% on 317 labels — beat the 8-signal fusion's 59% and the heuristic's 71%).</p></details>
+<details><summary>Evidence floor</summary><p>Google <b>people-tags</b> ⇒ P≥0.95 (100% personal in your labels, 79/79). Camera-EXIF and doc floors were dropped — measured wrong 31%/40% of the time against your labels.</p></details>
+<details><summary>Buckets + uncertainty</summary><p>P≥0.5 → personal, unless aesthetic Q≥0.7 → <b>in-between</b> (a personal photo that's also strong). Else reference. Uncertainty = 1−2|P−0.5|; the histogram band selects images for the optional gpt-4o-mini VLM pass (cost shown first). Named people and manual marks always win.</p></details>
+<details><summary>Fallback heuristic (before any retrain)</summary><p>Weighted fusion: reference-likeness R (logreg vs the aesthetic library), face signal F (recurring cluster / selfie geometry), album prior, people/doc metadata.</p></details>`},
+evaluate:{t:"Evaluate — ground truth + retraining",h:`
+<details open><summary>Labeling</summary><p>A bucket-balanced, album-diverse sample. Your clicks are ground truth; live accuracy + confusion matrix compare you vs the model. 🗑/↓ flags are dispositions, orthogonal to buckets.</p></details>
+<details><summary>Retrain on labels</summary><p>Fits the embedding logistic head on ALL your labels (k-fold CV for the honest accuracy number), then re-buckets the whole corpus — pure LanceDB read + matrix multiply, seconds.</p></details>`},
+cleanup:{t:"Cleanup — delete-candidate detection",h:`
+<details open><summary>Pixel heuristics (no model)</summary><ul>
+<li><b>blur</b>: variance of the Laplacian &lt;140 (out-of-focus / motion blur)</li>
+<li><b>exposure</b>: ≥70% near-black or ≥60% near-white pixels</li>
+<li><b>tiny</b>: original &lt;0.08 MP</li></ul>
+<p>Junk score = the WORST single defect (one bad axis ⇒ candidate).</p></details>
+<details><summary>Near-duplicates</summary><p>Non-representative members of a dupe group (from <code>scores.json</code>) join at score 70.</p></details>
+<details><summary>Learned deletion model</summary><p>Logistic regression on SigLIP embeddings trained on YOUR 🗑 flags (positives) vs saved + bucket-labeled-not-flagged (negatives) — 97% precision / 54% recall @P≥0.7 (5-fold CV). Suspects join as <code>model NN%</code>; retrain anytime with the 🧠 button.</p></details>
+<details><summary>Review flow</summary><p>Click = SAVE (persists as 'keep', never resurfaces here). Flag-the-rest bulk-flags. Nothing is ever deleted — flags only.</p></details>`},
+results:{t:"Results — generate pipeline outputs",h:`<p>Outputs of the cart→fal.ai generate pipeline (nano-banana / gpt-image / LoRA, BiRefNet cutout, Meshy/Hunyuan 3D). Each run's stages and fal queue status are recorded in <code>run.json</code>.</p>`},
+jobs:{t:"Jobs — background work",h:`<p>Foreground task + background checkout/generate jobs with per-stage progress and live fal queue status. RAM-backed (evicted after 1h/32 newer); persisted runs survive restarts.</p>`},
+};
+let _algoOpen=false;
+function refreshAlgoPanel(v){
+  if(!_algoOpen) return;
+  const a=ALGO[v]||{t:VIEW_TITLES[v]||v, h:"<p>No algorithm notes for this view.</p>"};
+  $("#algoTitle").textContent=a.t;
+  $("#algoBody").innerHTML=a.h;
+}
+$("#algoBtn").onclick=()=>{
+  _algoOpen=!_algoOpen;
+  $("#algoPanel").style.display=_algoOpen?"":"none";
+  $("#algoBtn").classList.toggle("on",_algoOpen);
+  if(_algoOpen){
+    const v=Object.keys(VIEWS).find(k=>{const el=$("#"+VIEWS[k]);return el&&el.style.display!=="none";})||"search";
+    refreshAlgoPanel(v);
+  }
+};
+$("#algoClose").onclick=()=>{ _algoOpen=false; $("#algoPanel").style.display="none"; $("#algoBtn").classList.remove("on"); };
 
 $("#indexPick").onclick = async () => {
   const folder = await pickFolder("index"); if (!folder) return;

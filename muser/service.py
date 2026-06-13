@@ -822,6 +822,13 @@ def create_app(model: str = DEFAULT_MODEL):
                     extra[path] = (70, "duplicate")
         except Exception:
             pass
+        # learned deletion model (trained on the user's 🗑/saved flags): fold its
+        # P(delete) in as a candidate source — catches junk the pixel heuristics
+        # can't see (memes, expired screenshots, unwanted saves).
+        for path, pct in _cu.model_preds().items():
+            cur = extra.get(path)
+            if cur is None or pct > cur[0]:
+                extra[path] = (pct, f"model {pct}%")
         # Respects the hide-flagged toggle like every other endpoint: toggle ON →
         # flagged candidates vanish here too; toggle OFF → they show dimmed and can
         # be rescued. SAVED images (flag='keep') are excluded unconditionally —
@@ -837,6 +844,13 @@ def create_app(model: str = DEFAULT_MODEL):
                   "score": c["score"], "reasons": c["reasons"],
                   "flagged": c["path"] in delset} for c in page]
         return {"built": True, "total": total, "offset": offset, "items": items}
+
+    @app.post("/api/personal/cleanup-train")
+    def cleanup_train():
+        """Train the P(delete) head on the user's 🗑/saved flags and re-score the
+        corpus (synchronous, ~15 s — logreg + one matrix multiply, no model load)."""
+        from .personal import cleanup as _cu
+        return _cu.train_model(model=state.model_name)
 
     @app.post("/api/personal/flag-bulk")
     def personal_flag_bulk(req: dict):
