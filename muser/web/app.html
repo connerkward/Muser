@@ -18,7 +18,7 @@
   }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.55 var(--sans);
-         -webkit-font-smoothing:antialiased; }
+         -webkit-font-smoothing:antialiased; overflow-x:clip; }  /* backstop: never a horizontal page scroll (clip keeps sticky/anchored layouts working) */
   /* Subtle film-grain / paper-noise overlay — a fixed, full-viewport inline-SVG
      feTurbulence tile at very low opacity, pinned BEHIND all content (z-index:-1)
      and inert to the pointer. Gives the paper theme a faint hand-made texture
@@ -34,9 +34,14 @@
     body::before { mix-blend-mode:screen; opacity:.05; }
   }
 
-  header { display:flex; align-items:center; gap:22px; padding:10px 28px 9px;
+  /* flex-wrap:wrap (not nowrap): the header has many tabs now (more on the
+     personal instance) and a growing .sp spacer — nowrap pushed controls past
+     the right edge and created horizontal page scroll between ~720–1200px.
+     Wrapping is a no-op on wide desktop (everything fits one row) and lets
+     controls flow to a second row when narrower, instead of overflowing. */
+  header { display:flex; align-items:center; gap:14px 18px; padding:10px 28px 9px;
            border-bottom:1px solid var(--line);
-           flex-wrap:nowrap; min-height:32px; }
+           flex-wrap:wrap; min-height:32px; }
   header h1 { font:italic 400 22px/1 var(--serif); margin:0; letter-spacing:-.01em;
               text-transform:lowercase; flex:0 0 auto; }
   header > .nav, header > .upload, header > h1, header > select,
