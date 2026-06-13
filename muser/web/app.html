@@ -614,6 +614,11 @@
                   font-size:12px; cursor:pointer; border-bottom:1px solid transparent; }
   #facesView .cluster .frow button:hover { color:var(--fg); border-bottom-color:var(--fg); }
   #facesView .cluster .frow button.on { color:var(--fg); border-bottom-color:var(--fg); }
+  /* faces detail: click a member to EXCLUDE it from the "label rest personal" set */
+  #fdgrid .card .thumb { cursor:pointer; position:relative; }
+  #fdgrid .card.excl .thumb img { opacity:.32; filter:grayscale(.6); }
+  #fdgrid .card.excl .thumb::after { content:"✕ excluded"; position:absolute; inset:0; display:flex;
+      align-items:center; justify-content:center; color:#e89b86; font-size:12px; font-weight:700; z-index:3; }
   /* Evaluate tab cards */
   #evaluateView .evb { font-size:20px; font-weight:600; }
   #evaluateView .evgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:14px; }
@@ -652,6 +657,13 @@
   .qabar button:hover { background:#fff; }
   .qabar button[data-b="__del"] { background:rgba(208,80,80,.92); color:#fff; }
   .qabar button.done { outline:2px solid #6ab04c; outline-offset:-2px; }
+  /* Inline model-breakdown box on Evaluate + Cleanup */
+  .modelbox { margin:0 0 16px; border:1px solid var(--line); border-radius:8px; padding:8px 14px; background:var(--paper); }
+  .modelbox summary { cursor:pointer; font-weight:600; font-size:12.5px; }
+  .modelbox[open] summary { margin-bottom:6px; }
+  .modelbox p, .modelbox li { color:var(--mut); font-size:12px; line-height:1.55; margin:5px 0; }
+  .modelbox code { font-size:11px; background:rgba(128,128,128,.13); padding:0 4px; border-radius:3px; }
+  .modelbox ul { margin:5px 0; padding-left:16px; }
   /* Label-milestone learning-curve timeline (Evaluate + Cleanup) */
   .lcwrap { margin:0 0 16px; }
   .lc { border:1px solid var(--line); border-radius:8px; padding:10px 14px 12px; background:var(--paper); }
@@ -1371,6 +1383,7 @@
     <span class="mut" id="facesMsg"></span>
     <span class="sp" style="flex:1"></span>
     <span class="mut" id="facesSelMsg" style="display:none"></span>
+    <button id="facesPersonalBtn" class="primary" style="display:none">👤 Mark selected personal</button>
     <button id="facesMergeBtn" style="display:none">Merge selected…</button>
     <button id="facesSelClear" style="display:none">Clear</button>
   </div>
@@ -1384,6 +1397,11 @@
     <button id="fback">← back to people</button>
     <h3 id="fdtitle" style="margin:14px 0 2px"></h3>
     <div class="mut" id="fdsub"></div>
+    <div class="row" id="fdActions" style="margin:8px 0 0;gap:12px;align-items:center;flex-wrap:wrap">
+      <span class="mut" style="font-size:12px">Click a photo to <b>exclude</b> it (not this person); then label the rest:</span>
+      <button id="fdLabelPersonal" class="primary">👤 Label remaining as personal</button>
+      <span class="mut" id="fdExclMsg" style="font-size:12px"></span>
+    </div>
     <div class="grid" id="fdgrid" style="margin-top:16px"></div>
     <div class="row" style="margin-top:10px"><button id="fdmore" style="display:none">Load more</button></div>
   </div>
@@ -1500,6 +1518,13 @@
   </div>
   <div class="mut" style="font-size:12px;margin-bottom:14px">Tap the bucket each image really belongs to — the model's guess is outlined. Your labels are ground truth; accuracy updates live. Flag junk with 🗑 (feeds the Cleanup tab).</div>
   <div class="lcwrap" id="evCurve" data-kind="bucket"></div>
+  <details class="modelbox">
+    <summary>How the personal-vs-reference model works</summary>
+    <p><b>Model:</b> logistic regression on the raw 768-d <b>SigLIP</b> image embedding — P(personal). Trained on the bucket labels you give right here (personal / in-between / reference). No model load; vectors come from the index. Hit <b>Retrain on labels</b> to refit and re-bucket the whole corpus.</p>
+    <p><b>Why embeddings, not hand-features:</b> measured on your labels, a head on 8 fused signals cross-validated ~59% (below chance-majority); the same head on the embedding hits ~86%.</p>
+    <p><b>Evidence floor:</b> a Google people-tag forces personal (100% personal in your labels). <b>in-between</b> isn't learned — it's derived: predicted-personal AND aesthetically strong.</p>
+    <p><b>Relationship to the Cleanup model:</b> <b>separate model, separate labels, separate weights file</b> — this predicts <i>is-it-personal</i> from bucket labels; Cleanup's predicts <i>is-it-junk</i> from 🗑/keep flags. They only share the SigLIP embedding as input. An image can be both personal and junk (a blurry selfie).</p>
+  </details>
   <div class="evgrid" id="evGrid"></div>
   <div class="conf" id="evConfWrap" style="display:none">
     <h3 style="font-size:12px;color:#caa468;text-transform:uppercase;margin:18px 0 12px">Your labels vs the model</h3>
@@ -1536,6 +1561,16 @@
     <button id="cuUndo" style="display:none" title="Un-flag the images from the last 'Flag shown' click">↩︎ Undo last flag</button>
   </div>
   <div class="lcwrap" id="cuCurve" data-kind="delete"></div>
+  <details class="modelbox">
+    <summary>How delete candidates are scored</summary>
+    <p><b>Three sources, ranked by a 0–100 junk score (worst defect wins):</b></p>
+    <ul>
+      <li><b>Pixel heuristics</b> (no ML): blur = variance of the Laplacian &lt;140; exposure = ≥70% near-black or ≥60% near-white; tiny = &lt;0.08 MP.</li>
+      <li><b>Near-duplicate</b>: a non-representative member of a dupe group joins at 70.</li>
+      <li><b>Learned deletion model</b>: logistic regression on the 768-d <b>SigLIP</b> embedding — P(delete) — trained on YOUR 🗑 flags (positives) vs saved + bucket-labeled-not-flagged (negatives). Surfaces as <code>model NN%</code>; <b>Retrain deletion model</b> refits it.</li>
+    </ul>
+    <p><b>Relationship to the Evaluate/Triage model:</b> <b>separate model, separate labels, separate weights file</b> — this predicts <i>is-it-junk</i> from your delete/keep flags; Triage's predicts <i>is-it-personal</i> from bucket labels. They only share the SigLIP embedding as input features (same recipe — a linear head over those vectors — but independent targets). An image can be personal <i>and</i> junk.</p>
+  </details>
   <div class="grid" id="cleanupGrid"></div>
   <!-- Bottom action bar (design-spatial §5): the task ends down here after reviewing
        the page — confirming must not require scrolling back to the top toolbar. -->
@@ -5278,9 +5313,39 @@ function _syncFaceSel(){
   });
   const n=_faceSel.size;
   $("#facesSelMsg").style.display=n?"":"none"; $("#facesSelMsg").textContent=`${n} selected`;
+  $("#facesPersonalBtn").style.display=n>=1?"":"none";
   $("#facesMergeBtn").style.display=n>=2?"":"none";
   $("#facesSelClear").style.display=n?"":"none";
 }
+// gather every member path of a cluster/person ref (paginate to the end)
+async function _faceAllMembers(ref){
+  const out=[]; let off=0;
+  while(true){
+    let r; try{ r=await (await fetch(_faceMemUrl(ref,off))).json(); }catch(e){ break; }
+    out.push(...r.members.map(m=>m.path));
+    off+=r.members.length;
+    if(off>=r.total || !r.members.length) break;
+  }
+  return out;
+}
+async function _bucketBulk(paths, bucket){
+  const r=await fetch("/api/personal/set-bucket-bulk",{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({paths, bucket})});
+  return r.ok;
+}
+$("#facesPersonalBtn").onclick=async()=>{
+  if(!_faceSel.size) return;
+  const btn=$("#facesPersonalBtn"); btn.disabled=true; btn.textContent="gathering…";
+  const seen=new Set();
+  for(const ref of _faceSel){ (await _faceAllMembers(ref)).forEach(p=>seen.add(p)); }
+  const paths=[...seen];
+  btn.disabled=false; btn.textContent="👤 Mark selected personal";
+  if(!paths.length) return;
+  if(!confirm(`Label all ${paths.length} photos in ${_faceSel.size} selected ${_faceSel.size>1?"groups":"group"} as PERSONAL? (Ground truth + bucket override.)`)) return;
+  if(!await _bucketBulk(paths,"personal")){ toast("failed"); return; }
+  toast(`labeled ${paths.length} photos personal`);
+  _faceSel.clear(); loadFaces();
+};
 $("#facesMergeBtn").onclick=async()=>{
   if(_faceSel.size<2) return;
   const name=prompt(`Merge ${_faceSel.size} groups into one person named:`, "");
@@ -5294,6 +5359,12 @@ $("#facesSelClear").onclick=()=>{ _faceSel.clear(); _syncFaceSel(); };
 const _faceMemUrl=(ref,off)=> ref.startsWith("p:")
   ? `/api/person?id=${ref.slice(2)}&offset=${off}&limit=120`
   : `/api/face-cluster?id=${ref.slice(2)}&offset=${off}&limit=120`;
+const _fdExcl=new Set();   // member paths excluded from "label rest personal"
+function _fdSyncExcl(){
+  const remaining=Math.max(0,(_fd.total||0)-_fdExcl.size);
+  $("#fdLabelPersonal").textContent=`👤 Label remaining ${remaining.toLocaleString()} as personal`;
+  $("#fdExclMsg").textContent=_fdExcl.size?`${_fdExcl.size} excluded`:"";
+}
 async function openFacePerson(ref, label, size){
   $("#facesGrid").style.display="none"; $("#facesPeopleWrap").style.display="none";
   $("#facesDetail").style.display="";
@@ -5301,8 +5372,20 @@ async function openFacePerson(ref, label, size){
   $("#fdsub").textContent=`${size.toLocaleString()} photos`;
   $("#fdgrid").innerHTML="";
   _fd.ref=ref; _fd.offset=0; _fd.total=size; _fd.loading=false;
+  _fd.label=label; _fdExcl.clear(); _fdSyncExcl();
   await loadMoreFaceMembers();
 }
+$("#fdLabelPersonal").onclick=async()=>{
+  const btn=$("#fdLabelPersonal"); btn.disabled=true;
+  const all=await _faceAllMembers(_fd.ref);
+  const paths=all.filter(p=>!_fdExcl.has(p));
+  btn.disabled=false;
+  if(!paths.length){ toast("nothing to label"); return; }
+  if(!confirm(`Label ${paths.length} photos of "${_fd.label}" as PERSONAL${_fdExcl.size?` (excluding ${_fdExcl.size})`:""}?`)) return;
+  if(!await _bucketBulk(paths,"personal")){ toast("failed"); return; }
+  toast(`labeled ${paths.length} personal`);
+  $("#facesDetail").style.display="none"; loadFaces();
+};
 async function loadMoreFaceMembers(){
   if(_fd.loading) return; _fd.loading=true;
   const ref=_fd.ref, offset=_fd.offset;
@@ -5312,16 +5395,25 @@ async function loadMoreFaceMembers(){
   const g=$("#fdgrid");
   r.members.forEach(h=>{
     const uid=h.uid||"";
-    const c=document.createElement("div"); c.className="card"; c.dataset.uid=uid;
-    c.innerHTML=`<div class="thumb"><img loading="lazy" src="/api/thumb?path=${enc(h.path)}" title="${h.name}${uid?' · uid:'+uid:''}"></div>
+    const c=document.createElement("div"); c.className="card"; c.dataset.uid=uid; c.dataset.path=h.path;
+    if(_fdExcl.has(h.path)) c.classList.add("excl");
+    c.innerHTML=`<div class="thumb"><img loading="lazy" src="/api/thumb?path=${enc(h.path)}&fit=contain" title="${h.name} — click to exclude, dblclick to zoom"></div>
       <div class="meta"><div class="name" title="${h.path}">${h.name}</div></div>`;
-    c.querySelector(".thumb").onclick=()=> uid ? openDetail(uid) : window.open(`/api/image?path=${enc(h.path)}`,"_blank");
+    // click toggles EXCLUDE (this isn't that person); dblclick zooms to judge
+    c.querySelector(".thumb").onclick=()=>{
+      const ex=!_fdExcl.has(h.path);
+      ex?_fdExcl.add(h.path):_fdExcl.delete(h.path);
+      c.classList.toggle("excl", ex); _fdSyncExcl();
+    };
+    c.querySelector(".thumb").ondblclick=(ev)=>{ ev.preventDefault();
+      $("#evLbImg").src=`/api/image?path=${enc(h.path)}`; $("#evLb").style.display="flex"; };
     g.appendChild(c);
   });
   _fd.offset = offset + r.members.length;
   _fd.total  = r.total;
   $("#fdmore").style.display = _fd.offset < _fd.total ? "" : "none";
   _fd.loading=false;
+  _fdSyncExcl();
 }
 $("#fback").onclick=()=>{ $("#facesDetail").style.display="none"; loadFaces(); };
 $("#fdmore").onclick=()=>loadMoreFaceMembers();
