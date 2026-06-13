@@ -74,7 +74,7 @@ _DEMO = {"hide": _load_demo_hide()}
 # Hide images the user flagged 🗑 for deletion (Evaluate/Cleanup flags) from every
 # result endpoint. **On by default** (flagging means "I don't want to see this"),
 # toggleable from the header on the personal instance, persisted across restarts.
-# The Cleanup candidates endpoint bypasses it — that's the review surface.
+# Applies everywhere, Cleanup included — toggle OFF to review/rescue flagged items.
 _HIDEFLAG_FILE = MUSER_HOME / "hide_flagged.json"
 
 
@@ -822,10 +822,10 @@ def create_app(model: str = DEFAULT_MODEL):
                     extra[path] = (70, "duplicate")
         except Exception:
             pass
-        # include_flagged=False: Cleanup IS the review surface for flags — an
-        # already-flagged candidate must stay visible (dimmed) so it can be rescued.
-        cands = [c for c in _cu.candidates(min_score, extra)
-                 if not _hidden(c["path"], include_flagged=False)]
+        # Respects the hide-flagged toggle like every other endpoint: toggle ON →
+        # flagged candidates vanish here too; toggle OFF → they show dimmed and
+        # can be rescued (save + flag-bulk null).
+        cands = [c for c in _cu.candidates(min_score, extra) if not _hidden(c["path"])]
         flagged = _ev.flagged()
         delset = set(flagged.get("delete", []))
         total = len(cands)
@@ -1477,15 +1477,14 @@ def create_app(model: str = DEFAULT_MODEL):
             ).start()
         return dead
 
-    def _hidden(path: str, include_flagged: bool = True) -> bool:
+    def _hidden(path: str) -> bool:
         """True iff `path` should be hidden from ALL result endpoints: file gone
-        from disk, user-flagged 🗑 for deletion (toggleable), NSFW above threshold,
-        or a member of a hidden cluster. Pure set/dict lookups (plus one stat for
-        the dead check) — O(1) per result. `include_flagged=False` lets the Cleanup
-        review surface keep showing what's already flagged."""
+        from disk, user-flagged 🗑 for deletion (toggleable, incl. Cleanup), NSFW
+        above threshold, or a member of a hidden cluster. Pure set/dict lookups
+        (plus one stat for the dead check) — O(1) per result."""
         if not os.path.exists(path):
             return True
-        if include_flagged and _HIDEFLAG["on"] and path in _delete_flagged():
+        if _HIDEFLAG["on"] and path in _delete_flagged():
             return True
         if not _DEMO["hide"]:
             return False  # demo mode off → only dead files are hidden
