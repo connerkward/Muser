@@ -236,8 +236,11 @@ def cluster(min_cluster_size: int = 4, min_samples: int = 2) -> dict:
     import hdbscan
     ids = list(emb.keys())
     X = np.stack([emb[i].astype(np.float32) for i in ids])
+    # core_dist_n_jobs: default -1 forks a joblib worker per core, each holding
+    # big KDTree structures — on a loaded machine that OOM-killed the 33k-face
+    # cluster pass twice (silently). 4 workers is nearly as fast and bounded.
     clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples,
-                                metric="euclidean")
+                                metric="euclidean", core_dist_n_jobs=4)
     labels = clusterer.fit_predict(X)
 
     # face-id -> label, and path -> {face_index -> label}

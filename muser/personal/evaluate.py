@@ -182,6 +182,74 @@ def flagged() -> dict:
     return {**out, "counts": {f: len(out[f]) for f in FLAGS}}
 
 
+# ---- export human-tagged images to the MAIN (aesthetic) library ----------------
+# Human "reference" = saved inspiration, not my life → it belongs in the main
+# corpus and NOT in personal: the file is MOVED (personal index entry goes dead
+# and is hidden/purged automatically). Human "in_between" = a personal photo
+# that's also aesthetically strong → it lives in BOTH: the file is COPIED.
+# A manifest records every src → {dst, mode} so re-runs are idempotent and a
+# move is reversible (move the file back, delete the manifest entry).
+EXPORT_ROOT = os.path.expanduser("~/ideas-syncthing/from-personal")
+EXPORT_MANIFEST = data_file("export_manifest.json")
+_EXPORT_MODE = {"reference": "move", "in_between": "copy"}
+
+
+def _load_manifest() -> dict:
+    try:
+        return json.loads(EXPORT_MANIFEST.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def export_status() -> dict:
+    """Counts of human reference/in_between labels not yet exported."""
+    labels = _load_labels()
+    manifest = _load_manifest()
+    pending = {b: [] for b in _EXPORT_MODE}
+    for p, e in labels.items():
+        b = e.get("label")
+        if b in _EXPORT_MODE and p not in manifest and os.path.exists(p):
+            pending[b].append(p)
+    return {"pending": {b: len(v) for b, v in pending.items()},
+            "pending_paths": pending, "exported": len(manifest), "dest": EXPORT_ROOT}
+
+
+def export_to_main() -> dict:
+    """MOVE human-'reference' / COPY human-'in_between' images into the main
+    library tree (EXPORT_ROOT/<bucket>/). Collision-safe, manifest-tracked.
+    The caller asks the main instance to index EXPORT_ROOT afterwards."""
+    import hashlib
+    import shutil
+    st = export_status()
+    manifest = _load_manifest()
+    done = {"reference": 0, "in_between": 0}
+    for bucket, paths in st["pending_paths"].items():
+        mode = _EXPORT_MODE[bucket]
+        dest_dir = os.path.join(EXPORT_ROOT, bucket.replace("_", "-"))
+        os.makedirs(dest_dir, exist_ok=True)
+        for src in paths:
+            base = os.path.basename(src)
+            dst = os.path.join(dest_dir, base)
+            if os.path.exists(dst):                   # name collision → hash suffix
+                stem, ext = os.path.splitext(base)
+                h = hashlib.blake2b(src.encode(), digest_size=4).hexdigest()
+                dst = os.path.join(dest_dir, f"{stem}-{h}{ext}")
+            try:
+                if mode == "move":
+                    shutil.move(src, dst)
+                else:
+                    shutil.copy2(src, dst)
+            except OSError:
+                continue
+            manifest[src] = {"dst": dst, "mode": mode}
+            done[bucket] += 1
+    tmp = EXPORT_MANIFEST.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(manifest))
+    os.replace(tmp, EXPORT_MANIFEST)
+    return {"moved_reference": done["reference"], "copied_in_between": done["in_between"],
+            "total_exported": len(manifest), "dest": EXPORT_ROOT}
+
+
 _DEL_CACHE = {"mtime": -1.0, "set": frozenset()}
 
 

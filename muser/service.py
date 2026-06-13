@@ -845,6 +845,33 @@ def create_app(model: str = DEFAULT_MODEL):
                   "flagged": c["path"] in delset} for c in page]
         return {"built": True, "total": total, "offset": offset, "items": items}
 
+    @app.get("/api/personal/export-status")
+    def personal_export_status():
+        """Pending human-labeled exports: reference (move) / in_between (copy)."""
+        from .personal import evaluate as _ev
+        st = _ev.export_status()
+        st.pop("pending_paths", None)   # counts only over the wire
+        return st
+
+    @app.post("/api/personal/export-to-main")
+    def personal_export_to_main():
+        """MOVE human-'reference' images out of personal into the main library
+        tree; COPY human-'in_between' (live in both). Then ask the MAIN muser
+        instance (port 7777) to index the export folder."""
+        from .personal import evaluate as _ev
+        res = _ev.export_to_main()
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                "http://127.0.0.1:7777/api/index",
+                data=json.dumps({"folder": _ev.EXPORT_ROOT}).encode(),
+                headers={"content-type": "application/json"})
+            urllib.request.urlopen(req, timeout=5)
+            res["main_index"] = "started"
+        except Exception as e:
+            res["main_index"] = f"index trigger failed: {e} — run `muser index {_ev.EXPORT_ROOT}` on the main instance"
+        return res
+
     @app.post("/api/personal/cleanup-train")
     def cleanup_train():
         """Train the P(delete) head on the user's 🗑/saved flags and re-score the

@@ -670,6 +670,9 @@
   /* Cleanup tab: save-from-deletion cards + reason chips. Everything shown is a
      presumed delete; a click SAVES it (green) and the bulk action flags the rest. */
   #cleanupView .card .thumb { cursor:pointer; }
+  /* Full image, not a square smart-crop: contain within the tile (letterboxed) so
+     the junk verdict is judged on the WHOLE frame. */
+  #cleanupView .card .thumb img { object-fit:contain; background:rgba(0,0,0,.06); }
   #cleanupView .card.saved .thumb { outline:3px solid #6ab04c; outline-offset:-3px; }
   #cleanupView .card.saved .thumb::after { content:"✓ saved"; position:absolute; right:6px; top:6px;
       background:#6ab04c; color:#fff; font-size:10px; font-weight:700; padding:2px 6px; border-radius:4px; z-index:5; }
@@ -1471,6 +1474,7 @@
     <span><span class="evb" id="evFlag" style="color:#e89b86">0</span> <span class="mut">flagged ↓/🗑</span></span>
     <span style="flex:1"></span>
     <button id="evTrain" style="display:none">Retrain on labels 🧠</button>
+    <button id="evExport" style="display:none" title="MOVE reference-labeled images to the main library; COPY in-between (live in both)">→ main library</button>
     <button id="evNew">New batch ↻</button>
   </div>
   <div class="mut" style="font-size:12px;margin-bottom:14px">Tap the bucket each image really belongs to — the model's guess is outlined. Your labels are ground truth; accuracy updates live. Flag junk with 🗑 (feeds the Cleanup tab).</div>
@@ -5342,7 +5346,25 @@ async function evRefreshResults(){
   $("#evBinR").textContent = r.labeled ? Math.round(r.binary_reference*100)+"%" : "–";
   $("#evTrain").style.display = r.labeled>=5 ? "" : "none";
   if(r.labeled>=3){ $("#evConfWrap").style.display=""; evRenderCM(r.confusion); }
+  evRefreshExport();
 }
+async function evRefreshExport(){
+  try{
+    const s=await (await fetch("/api/personal/export-status")).json();
+    const n=(s.pending.reference||0)+(s.pending.in_between||0);
+    const b=$("#evExport");
+    b.style.display = n ? "" : "none";
+    b.textContent = `→ main library (move ${s.pending.reference||0} ref · copy ${s.pending.in_between||0} in·b)`;
+  }catch(e){}
+}
+$("#evExport").onclick=async()=>{
+  const b=$("#evExport"); b.disabled=true;
+  try{
+    const r=await (await fetch("/api/personal/export-to-main",{method:"POST"})).json();
+    toast(`moved ${r.moved_reference} reference · copied ${r.copied_in_between} in-between → main library (${r.main_index})`);
+  }catch(e){ toast("export failed"); }
+  b.disabled=false; evRefreshExport();
+};
 function evRenderCM(cm){
   const order=["personal","in_between","reference"];
   const mx=Math.max(1,...order.flatMap(a=>order.map(c=>cm[a][c])));
@@ -5443,8 +5465,10 @@ function _cuCard(it){
   if(it.flagged) c.classList.add("flagged");           // already in the delete set
   if(_cuSaved.has(it.path)) c.classList.add("saved");
   const chips=(it.reasons||[]).map(r=>`<span class="chip">${esc(r)}</span>`).join("");
+  // fit=contain → the WHOLE frame is visible (judging blur/junk needs the full
+  // image, not a square center-crop that can hide the defect or the subject).
   c.innerHTML=`<div class="thumb"><span class="scoreb jscore" title="junk score — dblclick image to zoom">${it.score}</span>
-      <img loading="lazy" src="/api/thumb?path=${enc(it.path)}&size=${typeof THUMB!=='undefined'?THUMB:200}" title="${esc(it.name)} — click to save, dblclick to zoom"></div>
+      <img loading="lazy" src="/api/thumb?path=${enc(it.path)}&size=${typeof THUMB!=='undefined'?THUMB:200}&fit=contain" title="${esc(it.name)} — click to save, dblclick to zoom"></div>
     <div class="reasons">${chips}</div>`;
   // click = SAVE from deletion; dblclick = zoom (judge blur at full size)
   c.querySelector(".thumb").onclick=()=>_cuToggleSave(c, it.path);
