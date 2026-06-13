@@ -823,10 +823,13 @@ def create_app(model: str = DEFAULT_MODEL):
         except Exception:
             pass
         # Respects the hide-flagged toggle like every other endpoint: toggle ON →
-        # flagged candidates vanish here too; toggle OFF → they show dimmed and
-        # can be rescued (save + flag-bulk null).
-        cands = [c for c in _cu.candidates(min_score, extra) if not _hidden(c["path"])]
+        # flagged candidates vanish here too; toggle OFF → they show dimmed and can
+        # be rescued. SAVED images (flag='keep') are excluded unconditionally —
+        # they've been reviewed and cleared, so they never resurface here.
         flagged = _ev.flagged()
+        kept = set(flagged.get("keep", []))
+        cands = [c for c in _cu.candidates(min_score, extra)
+                 if c["path"] not in kept and not _hidden(c["path"])]
         delset = set(flagged.get("delete", []))
         total = len(cands)
         page = cands[offset:offset + limit]

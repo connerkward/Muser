@@ -64,8 +64,10 @@ def sample(n: int = 60, seed: int = 0) -> list[dict]:
 
 
 # Disposition flags — orthogonal to the personal/reference bucket. A "delete" image is
-# a delete-candidate (junk / blurry / unwanted); "depri" = keep but rank it down.
-FLAGS = ("depri", "delete")
+# a delete-candidate (junk / blurry / unwanted); "depri" = keep but rank it down;
+# "keep" = explicitly SAVED from deletion on the Cleanup page (reviewed, not junk) —
+# permanently excluded from the delete-candidate list so it never resurfaces there.
+FLAGS = ("depri", "delete", "keep")
 
 
 def _load_labels() -> dict:

@@ -5400,9 +5400,14 @@ function _cuCard(it){
   return c;
 }
 function _cuToggleSave(card, path){
-  if(_cuSaved.has(path)) _cuSaved.delete(path); else _cuSaved.add(path);
-  card.classList.toggle("saved", _cuSaved.has(path));
+  const saving = !_cuSaved.has(path);
+  if(saving) _cuSaved.add(path); else _cuSaved.delete(path);
+  card.classList.toggle("saved", saving);
   _cuSyncSel();
+  // Persist immediately as a 'keep' disposition: a saved image is reviewed-not-junk
+  // and never resurfaces on this page (excluded server-side), even after reload.
+  fetch("/api/personal/eval-flag",{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({path, flag: saving ? "keep" : null})}).catch(()=>{});
 }
 function _cuSyncSel(){
   const n=_cuSaved.size, shown=document.querySelectorAll("#cleanupGrid .card").length;
@@ -5413,19 +5418,15 @@ function _cuSyncSel(){
 }
 $("#cuClear").onclick=()=>{ _cuSaved.clear(); document.querySelectorAll("#cleanupGrid .card.saved").forEach(c=>c.classList.remove("saved")); _cuSyncSel(); };
 $("#cuMark").onclick=async()=>{
+  // Saved cards are already keep-flagged (persisted on click); this flags the rest.
   const cards=[...document.querySelectorAll("#cleanupGrid .card")];
   const doomed=cards.filter(c=>!_cuSaved.has(c.dataset.path)).map(c=>c.dataset.path);
-  const rescued=cards.filter(c=> _cuSaved.has(c.dataset.path) && c.classList.contains("flagged")).map(c=>c.dataset.path);
-  if(!doomed.length && !rescued.length) return;
-  if(!confirm(`Flag ${doomed.length} images for delete${rescued.length?` and un-flag ${rescued.length} saved`:""}? (No files are deleted — flags only.)`)) return;
-  if(doomed.length)
-    await fetch("/api/personal/flag-bulk",{method:"POST",headers:{"content-type":"application/json"},
-      body:JSON.stringify({paths:doomed, flag:"delete"})});
-  if(rescued.length)                                    // saving also rescinds an earlier flag
-    await fetch("/api/personal/flag-bulk",{method:"POST",headers:{"content-type":"application/json"},
-      body:JSON.stringify({paths:rescued, flag:null})});
-  cards.forEach(c=>{ c.classList.toggle("flagged", !_cuSaved.has(c.dataset.path)); });
-  toast(`flagged ${doomed.length} for delete${rescued.length?`, rescued ${rescued.length}`:""}`);
+  if(!doomed.length) return;
+  if(!confirm(`Flag ${doomed.length} images for delete? (No files are deleted — flags only.)`)) return;
+  await fetch("/api/personal/flag-bulk",{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({paths:doomed, flag:"delete"})});
+  toast(`flagged ${doomed.length} for delete`);
+  _cuLoad(true);                                        // flagged + saved both leave the page
 };
 $("#cleanupMore").onclick=()=>_cuLoad(false);
 
