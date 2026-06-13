@@ -1500,6 +1500,7 @@
     <button id="cuSaveAll" style="display:none">✓ Save all shown</button>
     <button id="cuMark" class="primary" style="display:none">🗑 Flag all shown except saved</button>
     <button id="cuClear" style="display:none">Clear saved</button>
+    <button id="cuUndo" style="display:none" title="Un-flag the images from the last 'Flag shown' click">↩︎ Undo last flag</button>
   </div>
   <div class="grid" id="cleanupGrid"></div>
   <!-- Bottom action bar (design-spatial §5): the task ends down here after reviewing
@@ -1511,6 +1512,7 @@
     <button id="cuSaveAllB" style="display:none">✓ Save all shown</button>
     <button id="cuMarkB" class="primary" style="display:none">🗑 Flag all shown except saved</button>
     <button id="cuClearB" style="display:none">Clear saved</button>
+    <button id="cuUndoB" style="display:none" title="Un-flag the images from the last 'Flag shown' click">↩︎ Undo last flag</button>
   </div>
 </div>
 
@@ -5500,17 +5502,37 @@ $("#cuClear").onclick=async()=>{
     await fetch("/api/personal/flag-bulk",{method:"POST",headers:{"content-type":"application/json"},
       body:JSON.stringify({paths, flag:null})});
 };
+let _cuLastFlagged=[];                                  // last 'Flag shown' batch, for one-level undo
+function _cuSyncUndo(){
+  const show=_cuLastFlagged.length?"":"none";
+  $("#cuUndo").style.display=show; $("#cuUndoB").style.display=show;
+  const label=`↩︎ Undo last flag (${_cuLastFlagged.length})`;
+  $("#cuUndo").textContent=label; $("#cuUndoB").textContent=label;
+}
 $("#cuMark").onclick=async()=>{
   // Saved cards are already keep-flagged (persisted on click); this flags the rest.
   const cards=[...document.querySelectorAll("#cleanupGrid .card")];
   const doomed=cards.filter(c=>!_cuSaved.has(c.dataset.path)).map(c=>c.dataset.path);
   if(!doomed.length) return;
   if(!confirm(`Flag ${doomed.length} images for delete? (No files are deleted — flags only.)`)) return;
-  await fetch("/api/personal/flag-bulk",{method:"POST",headers:{"content-type":"application/json"},
+  const r=await fetch("/api/personal/flag-bulk",{method:"POST",headers:{"content-type":"application/json"},
     body:JSON.stringify({paths:doomed, flag:"delete"})});
+  if(!r.ok){ toast("flagging failed — nothing changed"); return; }
+  _cuLastFlagged=doomed; _cuSyncUndo();
   toast(`flagged ${doomed.length} for delete`);
   _cuLoad(true);                                        // flagged + saved both leave the page
 };
+$("#cuUndo").onclick=async()=>{
+  const paths=_cuLastFlagged;
+  if(!paths.length) return;
+  const r=await fetch("/api/personal/flag-bulk",{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({paths, flag:null})});
+  if(!r.ok){ toast("undo failed — flags unchanged"); return; }
+  _cuLastFlagged=[]; _cuSyncUndo();
+  toast(`un-flagged ${paths.length} — back in the candidate list`);
+  _cuLoad(true);                                        // they reappear as pending candidates
+};
+$("#cuUndoB").onclick=()=>$("#cuUndo").click();
 $("#cleanupMore").onclick=()=>_cuLoad(false);
 
 // ---- Algorithm explainer (ⓘ): exact algorithms behind each tab ----

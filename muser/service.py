@@ -854,13 +854,12 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.post("/api/personal/flag-bulk")
     def personal_flag_bulk(req: dict):
-        """Set one disposition flag on many paths at once (Cleanup → mark delete)."""
+        """Set one disposition flag on many paths at once (Cleanup → mark delete).
+        Single load-modify-save under the write lock — the per-path loop raced
+        concurrent requests on the shared tmp file."""
         from .personal import evaluate as _ev
-        flag = req.get("flag")
-        paths = req.get("paths", [])
-        for p in paths:
-            _ev.set_flag(p, flag)
-        return {"ok": True, "n": len(paths)}
+        n = _ev.set_flags_bulk(req.get("paths", []), req.get("flag"))
+        return {"ok": True, "n": n}
 
     @app.post("/api/personal/train")
     def personal_train():

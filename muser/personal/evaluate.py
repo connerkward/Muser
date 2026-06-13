@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import threading
 
 from ..paths import data_file
 from . import personalness
@@ -70,6 +71,12 @@ def sample(n: int = 60, seed: int = 0) -> list[dict]:
 FLAGS = ("depri", "delete", "keep")
 
 
+# Serializes every read-modify-write of eval_labels.json within the service
+# process — concurrent label/flag requests otherwise race on the shared tmp file
+# (both write .json.tmp; the loser's os.replace hits FileNotFoundError).
+_IO_LOCK = threading.Lock()
+
+
 def _load_labels() -> dict:
     try:
         return json.loads(LABELS_FILE.read_text())
@@ -85,32 +92,44 @@ def _save(labels: dict) -> None:
 
 def label(path: str, verdict: str | None, model_bucket: str | None = None) -> None:
     """Persist (or clear, if verdict is None) one human bucket label; keeps any flag."""
-    labels = _load_labels()
-    e = labels.get(path, {})
-    if verdict is None:
-        e.pop("label", None); e.pop("model", None)
-    else:
-        e["label"] = verdict; e["model"] = model_bucket
-    if e:
-        labels[path] = e
-    else:
-        labels.pop(path, None)
-    _save(labels)
+    with _IO_LOCK:
+        labels = _load_labels()
+        e = labels.get(path, {})
+        if verdict is None:
+            e.pop("label", None); e.pop("model", None)
+        else:
+            e["label"] = verdict; e["model"] = model_bucket
+        if e:
+            labels[path] = e
+        else:
+            labels.pop(path, None)
+        _save(labels)
 
 
 def set_flag(path: str, flag: str | None) -> None:
     """Set/clear the disposition flag ('depri' | 'delete' | None); keeps any bucket label."""
-    labels = _load_labels()
-    e = labels.get(path, {})
-    if flag in FLAGS:
-        e["flag"] = flag
-    else:
-        e.pop("flag", None)
-    if e:
-        labels[path] = e
-    else:
-        labels.pop(path, None)
-    _save(labels)
+    set_flags_bulk([path], flag)
+
+
+def set_flags_bulk(paths, flag: str | None) -> int:
+    """Set/clear one disposition flag on many paths in ONE load-modify-save,
+    under the write lock. The per-path version did a full read→tmp→os.replace
+    cycle each call; two concurrent requests raced on the same tmp file and one
+    500'd with FileNotFoundError (and N paths cost N rewrites)."""
+    with _IO_LOCK:
+        labels = _load_labels()
+        for path in paths:
+            e = labels.get(path, {})
+            if flag in FLAGS:
+                e["flag"] = flag
+            else:
+                e.pop("flag", None)
+            if e:
+                labels[path] = e
+            else:
+                labels.pop(path, None)
+        _save(labels)
+    return len(paths)
 
 
 def flagged() -> dict:
