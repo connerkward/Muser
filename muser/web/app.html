@@ -1502,7 +1502,16 @@
     <button id="cuClear" style="display:none">Clear saved</button>
   </div>
   <div class="grid" id="cleanupGrid"></div>
-  <div class="row" style="margin-top:10px"><button id="cleanupMore" style="display:none">Load more</button></div>
+  <!-- Bottom action bar (design-spatial §5): the task ends down here after reviewing
+       the page — confirming must not require scrolling back to the top toolbar. -->
+  <div class="row" id="cleanupBottomBar" style="margin-top:14px;gap:12px;align-items:center;flex-wrap:wrap">
+    <button id="cleanupMore" style="display:none">Load more</button>
+    <span style="flex:1"></span>
+    <span class="mut" id="cuSelMsgB" style="display:none;font-size:12px"></span>
+    <button id="cuSaveAllB" style="display:none">✓ Save all shown</button>
+    <button id="cuMarkB" class="primary" style="display:none">🗑 Flag all shown except saved</button>
+    <button id="cuClearB" style="display:none">Clear saved</button>
+  </div>
 </div>
 
 <!-- shared lightbox for Evaluate/Cleanup zoom -->
@@ -5457,12 +5466,20 @@ function _cuToggleSave(card, path){
 }
 function _cuSyncSel(){
   const n=_cuSaved.size, shown=document.querySelectorAll("#cleanupGrid .card").length;
-  $("#cuSelMsg").style.display=n?"":"none"; $("#cuSelMsg").textContent=`${n} saved`;
-  $("#cuSaveAll").style.display=shown?"":"none";
-  $("#cuMark").style.display=shown?"":"none";
-  $("#cuMark").textContent=`🗑 Flag ${Math.max(0,shown-n).toLocaleString()} shown (keep ${n} saved)`;
-  $("#cuClear").style.display=n?"":"none";
+  // top toolbar + bottom action bar stay mirrored (design-spatial §5: the user
+  // finishes reviewing at the BOTTOM — confirming must not cost a scroll-back).
+  for(const sfx of ["","B"]){
+    $("#cuSelMsg"+sfx).style.display=n?"":"none"; $("#cuSelMsg"+sfx).textContent=`${n} saved`;
+    $("#cuSaveAll"+sfx).style.display=shown?"":"none";
+    $("#cuMark"+sfx).style.display=shown?"":"none";
+    $("#cuMark"+sfx).textContent=`🗑 Flag ${Math.max(0,shown-n).toLocaleString()} shown (keep ${n} saved)`;
+    $("#cuClear"+sfx).style.display=n?"":"none";
+  }
 }
+// bottom-bar buttons delegate to the top ones (single source of behavior)
+$("#cuSaveAllB").onclick=()=>$("#cuSaveAll").click();
+$("#cuMarkB").onclick=()=>$("#cuMark").click();
+$("#cuClearB").onclick=()=>$("#cuClear").click();
 $("#cuSaveAll").onclick=async()=>{
   // Select-all in save semantics: persist 'keep' on every shown card at once.
   const fresh=[...document.querySelectorAll("#cleanupGrid .card")].filter(c=>!_cuSaved.has(c.dataset.path));
