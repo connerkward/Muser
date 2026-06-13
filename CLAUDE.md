@@ -373,12 +373,53 @@ scores, facets, captions — never mixes with the aesthetic library). `personal/
 - `vlm_triage.py` — resolve an **uncertainty band** with gpt-4o-mini (reuses `caption.py` plumbing);
   `estimate(umin,umax)` shows count + ~$ **before** running (~$0.0002/img; full 46k ≈ $5-14).
 - `sheets.py` — labeled contact sheets per bucket to `~/Desktop` (independent verification).
-- CLI `muser personal {ingest,faces,classify,triage,sheets,serve}`. Served at
-  **http://personal.muser.local** (Caddy→7780, LaunchAgent `com.muser-personal.serve`); the web
-  **Triage** tab (gated on `/api/status personal:true`) shows bucket galleries + a VLM
-  uncertainty-band slider with live count/cost. Endpoints: `/api/personal/{summary,bucket,
-  vlm-estimate,vlm-run,vlm-status}`. New extras: `[faces]` (insightface+onnxruntime), `[personal]`
-  (pillow-heif for HEIC).
+- CLI `muser personal {ingest,faces,classify,train,cleanup,triage,sheets,serve}`. Served at
+  **http://personal.muser.local** (Caddy→7780, LaunchAgent `com.muser-personal.serve`). New extras:
+  `[faces]` (insightface+onnxruntime), `[personal]` (pillow-heif for HEIC).
+- `cleanup.py` — **delete-candidate** facet: opencv junk score `junk(x)=max(blur, exposure, tiny,
+  dup, 100·P(delete))` (blur=Laplacian variance, exposure=near-black/white fraction, tiny=<0.08MP);
+  plus a **learned deletion model** — logreg P(delete) on SigLIP embeddings trained on the user's
+  🗑/keep flags (`muser personal cleanup` builds the facet; `/api/personal/cleanup-train` fits the
+  model → `delete_model.npz` + `delete_pred.json`). ~98% precision @P≥0.7.
+- `people.py` — **curated people** over the raw face clusters: name / merge (path-anchored so names
+  survive a re-cluster); a named person force-buckets their photos **personal** (write-through to
+  personalness.json, reversible). `export_to_main()` MOVES human-`reference` images into the main
+  library (`~/ideas-syncthing/from-personal/`) and COPIES `in_between` (lives in both); a manifest
+  + `exported_ref_vectors.npz` keep moved images as reference training examples (resolved live from
+  the main DB, npz fallback). `evaluate.py` — bucket labels + dispositions (`delete`/`keep`/`depri`),
+  hardened per **human-labeled-data-rule** (fail-loud on corrupt read, write-lock, anti-shrink
+  guard, rolling `.bak`).
+
+### Personal web tabs (all gated to the personal instance; AI/Jobs/Color/Results hidden there)
+- **Triage** — bucket galleries (personal/in-between/reference) + VLM uncertainty-band slider
+  (cost shown first); "Mark all shown as <bucket>".
+- **Faces** — the people-clusters (`/api/faces`, `sort=similar` orders look-alikes adjacent for
+  merging, precomputed into `face_clusters.json`; `hide_done` drops fully-tagged); select / select-all
+  / Merge / 👤 Personal / 🗑 mark-for-deletion on the grid, and click-to-exclude → "label remaining
+  personal" inside a person.
+- **Evaluate** — label a diverse sample (ground truth), live accuracy + confusion matrix,
+  **Retrain on labels** (`/api/personal/train`: logreg P(personal)=σ(w·eₓ+b) on the SigLIP embedding
+  → re-buckets the corpus; bucket model ~86% CV — beat the 8-signal fusion's 59%), **→ main library**
+  export, and a **label-milestone learning-curve** timeline.
+- **Cleanup** — delete candidates worst-first (full-frame thumbs); click=save (persists `keep`,
+  never resurfaces), Save-all / Flag-rest / Undo-last; same metrics row + milestone timeline.
+- **Trash** — all 🗑-flagged files; click to restore; "Move all to system Trash" (`/usr/bin/trash`,
+  recoverable, never `rm`). Delete embeddings are snapshotted at **tag time** (`deleted_vectors.npz`)
+  so trashed images stay delete-positives in training.
+- **Cross-cutting:** a header **🗑 hide-flagged** toggle (server-side, persisted) hides delete-flagged
+  everywhere (incl. Cleanup); a per-thumbnail **classification frame** (personal/in-between/reference/
+  trash) on the mixed views (Search/Explore/Faces/Interesting/Review); a quick-mark P/In·b/R/🗑 bar on
+  every thumbnail; an **ⓘ algorithm explainer** with typeset annotated equations on every tab.
+- Endpoints: `/api/personal/{summary,bucket,vlm-estimate,vlm-run,vlm-status,eval-sample,eval-label,
+  eval-flag,eval-flagged,flag-bulk,set-bucket,set-bucket-bulk,train,learning-curve,classes,
+  cleanup-status,cleanup-scan,cleanup-train,delete-candidates,trash,trash-files,export-status,
+  export-to-main,hide-flagged}` + `/api/faces`, `/api/face-cluster`, `/api/person`, `/api/faces/{name,merge,unname}`.
+- **Training-data invariant:** moving (reference→main) or trashing (delete) a file never drops it from
+  model training — reference moves keep their embedding via the manifest+npz link to the main corpus;
+  deletes keep theirs via the tag-time snapshot + retained flag. Train ONLY on the user's own
+  Takeout labels (incl. exported refs) — never the general main corpus (distribution-bias trap).
+  **`faces.py` gotcha:** `_load_npz` must materialize `z["X"]`/`z["ids"]` ONCE (lazy NpzFile re-reads
+  the whole array per access → O(n) decompress → hang at 33k faces); HDBSCAN PCA-reduces 512→64 first.
 
 ## Status
 
