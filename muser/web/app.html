@@ -1473,6 +1473,7 @@
     <button id="cuScan" style="display:none">Scan library</button>
     <span style="flex:1"></span>
     <span class="mut" id="cuSelMsg" style="display:none;font-size:12px"></span>
+    <button id="cuSaveAll" style="display:none">✓ Save all shown</button>
     <button id="cuMark" class="primary" style="display:none">🗑 Flag all shown except saved</button>
     <button id="cuClear" style="display:none">Clear saved</button>
   </div>
@@ -5412,11 +5413,31 @@ function _cuToggleSave(card, path){
 function _cuSyncSel(){
   const n=_cuSaved.size, shown=document.querySelectorAll("#cleanupGrid .card").length;
   $("#cuSelMsg").style.display=n?"":"none"; $("#cuSelMsg").textContent=`${n} saved`;
+  $("#cuSaveAll").style.display=shown?"":"none";
   $("#cuMark").style.display=shown?"":"none";
   $("#cuMark").textContent=`🗑 Flag ${Math.max(0,shown-n).toLocaleString()} shown (keep ${n} saved)`;
   $("#cuClear").style.display=n?"":"none";
 }
-$("#cuClear").onclick=()=>{ _cuSaved.clear(); document.querySelectorAll("#cleanupGrid .card.saved").forEach(c=>c.classList.remove("saved")); _cuSyncSel(); };
+$("#cuSaveAll").onclick=async()=>{
+  // Select-all in save semantics: persist 'keep' on every shown card at once.
+  const fresh=[...document.querySelectorAll("#cleanupGrid .card")].filter(c=>!_cuSaved.has(c.dataset.path));
+  if(!fresh.length) return;
+  fresh.forEach(c=>{ _cuSaved.add(c.dataset.path); c.classList.add("saved"); });
+  _cuSyncSel();
+  await fetch("/api/personal/flag-bulk",{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({paths:fresh.map(c=>c.dataset.path), flag:"keep"})});
+  toast(`saved ${fresh.length} from deletion`);
+};
+$("#cuClear").onclick=async()=>{
+  // Un-persist the keep flags too — saves are no longer just client state.
+  const paths=[..._cuSaved];
+  _cuSaved.clear();
+  document.querySelectorAll("#cleanupGrid .card.saved").forEach(c=>c.classList.remove("saved"));
+  _cuSyncSel();
+  if(paths.length)
+    await fetch("/api/personal/flag-bulk",{method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({paths, flag:null})});
+};
 $("#cuMark").onclick=async()=>{
   // Saved cards are already keep-flagged (persisted on click); this flags the rest.
   const cards=[...document.querySelectorAll("#cleanupGrid .card")];
