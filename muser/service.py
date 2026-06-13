@@ -893,6 +893,29 @@ def create_app(model: str = DEFAULT_MODEL):
         _lc_cache[kind] = {"mt": mt, "val": val}
         return val
 
+    _bucket_map = {"mtime": None, "m": {}}
+
+    @app.post("/api/personal/classes")
+    def personal_classes(req: dict):
+        """For a batch of paths, return {path: {bucket, trash}} — drives the
+        per-image classification frame across the mixed views. The path→bucket
+        map is built once per personalness.json change (O(1) per path after)."""
+        from .personal import evaluate as _ev
+        from .personal import personalness as _pn
+        sc = _pn.sidecar()
+        try:
+            mt = sc.path.stat().st_mtime
+        except OSError:
+            mt = 0.0
+        if _bucket_map["mtime"] != mt:
+            _bucket_map["m"] = {k[0] if isinstance(k, tuple) else k: v.get("bucket")
+                                for k, v in sc.entries().items()}
+            _bucket_map["mtime"] = mt
+        bm = _bucket_map["m"]
+        trash = _ev.delete_set()
+        return {p: {"bucket": bm.get(p), "trash": p in trash}
+                for p in req.get("paths", [])}
+
     # ---- Trash bin: review delete-flagged files before final deletion ----
     @app.get("/api/personal/trash")
     def personal_trash(offset: int = 0, limit: int = 120):

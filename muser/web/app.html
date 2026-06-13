@@ -657,6 +657,17 @@
   .qabar button:hover { background:#fff; }
   .qabar button[data-b="__del"] { background:rgba(208,80,80,.92); color:#fff; }
   .qabar button.done { outline:2px solid #6ab04c; outline-offset:-2px; }
+  /* Per-image classification frame (Search/Explore/Faces/Interesting/Review).
+     Trash (red) overrides bucket. Colors match the Evaluate bucket chips. */
+  .thumb.fr-personal   { outline:3px solid #5b9bd5; outline-offset:-3px; }
+  .thumb.fr-in_between { outline:3px solid #caa468; outline-offset:-3px; }
+  .thumb.fr-reference  { outline:3px solid #9a9a9a; outline-offset:-3px; }
+  .thumb.fr-trash      { outline:3px solid #d05050; outline-offset:-3px; }
+  #frameLegend { position:fixed; left:14px; bottom:14px; z-index:40; display:none;
+                 gap:12px; align-items:center; background:var(--paper); border:1px solid var(--line);
+                 border-radius:8px; padding:6px 12px; font-size:11px; box-shadow:0 4px 16px rgba(0,0,0,.2); }
+  #frameLegend.on { display:flex; }
+  #frameLegend .sw { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:4px; vertical-align:middle; }
   /* Inline model-breakdown box on Evaluate + Cleanup */
   .modelbox { margin:0 0 16px; border:1px solid var(--line); border-radius:8px; padding:8px 14px; background:var(--paper); }
   .modelbox summary { cursor:pointer; font-weight:600; font-size:12.5px; }
@@ -1608,6 +1619,15 @@
 
 <!-- shared lightbox for Evaluate/Cleanup zoom -->
 <div id="evLb" style="position:fixed;inset:0;background:rgba(0,0,0,.92);display:none;align-items:center;justify-content:center;z-index:60;cursor:zoom-out"><img id="evLbImg" style="max-width:94vw;max-height:94vh;object-fit:contain"></div>
+
+<!-- Per-image classification frame legend (personal instance, mixed views only) -->
+<div id="frameLegend">
+  <span class="mut">frame:</span>
+  <span><span class="sw" style="background:#5b9bd5"></span>personal</span>
+  <span><span class="sw" style="background:#caa468"></span>in-between</span>
+  <span><span class="sw" style="background:#9a9a9a"></span>reference</span>
+  <span><span class="sw" style="background:#d05050"></span>trash</span>
+</div>
 
 <!-- Algorithm explainer drawer (ⓘ in header): exact algorithms behind the active tab -->
 <div id="algoPanel" style="display:none">
@@ -6557,6 +6577,11 @@ function _makeQabar(path){
       }
       bar.querySelectorAll("button").forEach(x=>x.classList.remove("done"));
       btn.classList.add("done");
+      // keep the classification frame in sync with the mark just made
+      if(typeof _frClasses!=="undefined"){
+        _frClasses[path] = (b==="__del") ? "trash" : b;
+        const t=bar.closest(".thumb"); if(t && typeof _frApply==="function") _frApply(t,_frClasses[path]);
+      }
     }catch(_){ toast("failed"); }
   });
   return bar;
@@ -6583,6 +6608,48 @@ async function syncHideFlagged(){
   };
 }
 
+// ---- Per-image classification frame (personal instance) ----
+// A colored outline on every thumbnail showing its class — only on the MIXED
+// views (Search/Explore/Faces/Interesting/Review); redundant on Triage (already
+// bucketed), Cleanup (all candidates, own states), Trash (all trash). Trash
+// overrides the bucket color. Fully delegated via a MutationObserver, like the
+// quick-mark bar — no per-render hooks. Class map batched + cached by path.
+const FRAME_SKIP=new Set(["triage","cleanup","trash","image","results","jobs"]);
+let _frEnabled=false, _frClasses={}, _frObs=null, _frTimer=null;
+function _frView(){ return Object.keys(VIEWS).find(k=>{const e=$("#"+VIEWS[k]);return e&&e.style.display!=="none";}); }
+function _frApply(t, cls){
+  t.classList.remove("fr-personal","fr-in_between","fr-reference","fr-trash");
+  if(cls) t.classList.add("fr-"+cls);
+}
+async function scanFrames(){
+  if(!_frEnabled) return;
+  const skip=FRAME_SKIP.has(_frView());
+  $("#frameLegend").classList.toggle("on", !skip);
+  const thumbs=[...document.querySelectorAll(".thumb")];
+  if(skip){ thumbs.forEach(t=>_frApply(t,null)); return; }
+  const pending=[];
+  thumbs.forEach(t=>{
+    const img=t.querySelector('img[src*="/api/thumb"]'); if(!img) return;
+    let p; try{ p=new URL(img.src,location.origin).searchParams.get("path"); }catch(_){ return; }
+    if(!p) return;
+    t._frp=p;
+    if(p in _frClasses) _frApply(t,_frClasses[p]); else pending.push(p);
+  });
+  if(!pending.length) return;
+  const uniq=[...new Set(pending)];
+  let m; try{ m=await (await fetch("/api/personal/classes",{method:"POST",
+    headers:{"content-type":"application/json"},body:JSON.stringify({paths:uniq})})).json(); }
+  catch(e){ return; }
+  for(const p of uniq){ const c=m[p]; _frClasses[p]= c ? (c.trash?"trash":(c.bucket||null)) : null; }
+  document.querySelectorAll(".thumb").forEach(t=>{ if(t._frp && t._frp in _frClasses) _frApply(t,_frClasses[t._frp]); });
+}
+function enableFrames(){
+  if(_frEnabled) return; _frEnabled=true;
+  _frObs=new MutationObserver(()=>{ clearTimeout(_frTimer); _frTimer=setTimeout(scanFrames,150); });
+  _frObs.observe(document.body,{childList:true,subtree:true});
+  scanFrames();
+}
+
 function syncPersonalNav(attempt=0){
   // Retries: at boot the service may still be warming (status fetch fails /
   // returns early) — without a retry the personal tabs never reveal.
@@ -6592,6 +6659,7 @@ function syncPersonalNav(attempt=0){
       document.querySelectorAll('[data-view="faces"], #navFaces').forEach(b=>b.style.display="");
     if(!s.personal) return;
     enableQuickMark();   // quick bucket/delete marking on every thumbnail
+    enableFrames();      // per-image classification frame on mixed views
     syncHideFlagged();   // header toggle: hide 🗑-flagged images everywhere
     document.querySelectorAll('[data-view="triage"], #navTriage').forEach(b=>b.style.display="");
     // Evaluate (label/dispose) + Cleanup (delete-candidate review) + Trash — personal only.
