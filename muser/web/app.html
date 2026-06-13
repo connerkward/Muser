@@ -676,6 +676,12 @@
   #cleanupView .card.flagged .thumb img { opacity:.4; filter:grayscale(.5); }
   #cleanupView .card.flagged .thumb::before { content:"🗑 flagged"; position:absolute; right:6px; top:6px;
       color:#e89b86; font-size:10px; font-weight:700; z-index:5; }
+  /* Card state is strictly tri-state (pending/saved/flagged) — never both badges. */
+  #cleanupView .card.saved.flagged .thumb::before { content:none; }
+  /* The global quick-mark hover bar contradicts this page's click-to-save semantics
+     (its tiny 🗑 sat next to an image whose click means SAVE). Everything here is
+     already a delete candidate — bucket marking lives on the other tabs. */
+  #cleanupView .qabar { display:none !important; }
   #cleanupView .card .reasons { display:flex; gap:4px; flex-wrap:wrap; padding:4px 0 0; }
   #cleanupView .card .chip { font-size:10px; color:#e89b86; border:1px solid #5a3030; border-radius:4px; padding:1px 5px; }
   #cleanupView .card .jscore { font-variant-numeric:tabular-nums; }
@@ -1480,7 +1486,7 @@
 <div class="wrap" id="cleanupView" style="display:none">
   <div class="row" style="margin-bottom:6px">
     <b>Cleanup</b>
-    <span class="mut">— likely <b>delete candidates</b> ranked by a local junk score (blur · over/under-exposure · tiny · near-duplicate). Everything shown is presumed junk: <b>click an image to SAVE it</b> (green), then flag the rest. No files are touched — flags land in the Evaluate set.</span>
+    <span class="mut">— likely <b>delete candidates</b> ranked by a local junk score (blur · over/under-exposure · tiny · near-duplicate · learned model). One rule: <b>click = save</b> (green ✓, never resurfaces), click again = unsave; a dimmed 🗑-flagged card click = rescue. "Flag the rest" marks everything unsaved. No files are touched — flags only.</span>
   </div>
   <div class="row" id="cleanupToolbar" style="margin-bottom:12px;gap:12px;align-items:center;flex-wrap:wrap">
     <label class="mut" style="font-size:12px">min junk score
@@ -5439,6 +5445,10 @@ function _cuToggleSave(card, path){
   const saving = !_cuSaved.has(path);
   if(saving) _cuSaved.add(path); else _cuSaved.delete(path);
   card.classList.toggle("saved", saving);
+  // Tri-state consistency: saving a previously-flagged card RESCUES it — the keep
+  // flag replaces delete server-side, so the flagged badge/dim must drop too.
+  // (Un-saving leaves it pending, not flagged — matches the stored flag=null.)
+  if(saving) card.classList.remove("flagged");
   _cuSyncSel();
   // Persist immediately as a 'keep' disposition: a saved image is reviewed-not-junk
   // and never resurfaces on this page (excluded server-side), even after reload.
