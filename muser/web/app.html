@@ -1514,6 +1514,13 @@
     <b>Cleanup</b>
     <span class="mut">— likely <b>delete candidates</b> ranked by a local junk score (blur · over/under-exposure · tiny · near-duplicate · learned model). One rule: <b>click = save</b> (green ✓, never resurfaces), click again = unsave; a dimmed 🗑-flagged card click = rescue. "Flag the rest" marks everything unsaved. No files are touched — flags only.</span>
   </div>
+  <div class="row" id="cuMet" style="display:flex;gap:18px;align-items:baseline;flex-wrap:wrap;margin-bottom:8px">
+    <span><span class="evb" id="evLabeledC">0</span> <span class="mut">labeled</span></span>
+    <span><span class="evb" id="evAccC" style="color:var(--good,#6ab04c)">–</span> <span class="mut">exact accuracy</span></span>
+    <span><span class="evb" id="evBinPC" style="color:#caa468">–</span> <span class="mut">personal vs ref</span></span>
+    <span><span class="evb" id="evBinRC" style="color:#caa468">–</span> <span class="mut">reference vs personal</span></span>
+    <span><span class="evb" id="evFlagC" style="color:#e89b86">0</span> <span class="mut">flagged ↓/🗑</span></span>
+  </div>
   <div class="row" id="cleanupToolbar" style="margin-bottom:12px;gap:12px;align-items:center;flex-wrap:wrap">
     <label class="mut" style="font-size:12px">min junk score
       <input type="range" id="cuThresh" min="30" max="90" value="55" style="width:140px;vertical-align:middle"></label>
@@ -4187,7 +4194,7 @@ function showView(v, opts){
   if(v==="jobs") startJobsPoll();
   if(v==="triage") loadTriage();
   if(v==="evaluate"){ loadEvaluate(); loadCurve("#evCurve"); }
-  if(v==="cleanup"){ loadCleanup(); loadCurve("#cuCurve"); }
+  if(v==="cleanup"){ loadCleanup(); loadCurve("#cuCurve"); evRefreshResults(); evRefreshFlags(); }
   if(v==="trash") loadTrash(true);
   if(v==="image" && opts.uid) loadImageDetail(opts.uid);
   if(typeof refreshAlgoPanel==="function") refreshAlgoPanel(v);
@@ -5381,14 +5388,21 @@ async function evSetFlag(d,it,flag){
 }
 async function evRefreshFlags(){
   try{ const f=await (await fetch("/api/personal/eval-flagged")).json();
-    $("#evFlag").textContent=(f.counts.depri||0)+(f.counts.delete||0); }catch(e){}
+    const n=(f.counts.depri||0)+(f.counts.delete||0);
+    $("#evFlag").textContent=n; const c=$("#evFlagC"); if(c) c.textContent=n; }catch(e){}
 }
 async function evRefreshResults(){
   let r; try{ r=await (await fetch("/api/personal/eval-results")).json(); }catch(e){ return; }
-  $("#evLabeled").textContent=r.labeled;
-  $("#evAcc").textContent = r.accuracy!=null ? Math.round(r.accuracy*100)+"%" : "–";
-  $("#evBinP").textContent = r.labeled ? Math.round(r.binary_personal*100)+"%" : "–";
-  $("#evBinR").textContent = r.labeled ? Math.round(r.binary_reference*100)+"%" : "–";
+  // paint the metrics on Evaluate AND the mirror row on Cleanup ("" / "C" suffix)
+  const acc = r.accuracy!=null ? Math.round(r.accuracy*100)+"%" : "–";
+  const bp = r.labeled ? Math.round(r.binary_personal*100)+"%" : "–";
+  const br = r.labeled ? Math.round(r.binary_reference*100)+"%" : "–";
+  for(const sfx of ["","C"]){
+    const el=id=>$( "#"+id+sfx );
+    if(!el("evLabeled")) continue;
+    el("evLabeled").textContent=r.labeled;
+    el("evAcc").textContent=acc; el("evBinP").textContent=bp; el("evBinR").textContent=br;
+  }
   $("#evTrain").style.display = r.labeled>=5 ? "" : "none";
   if(r.labeled>=3){ $("#evConfWrap").style.display=""; evRenderCM(r.confusion); }
   evRefreshExport();

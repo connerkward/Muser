@@ -347,19 +347,60 @@ def _load_supervised():
 
 
 def _exported_ref_examples() -> tuple[list[str], "np.ndarray | None"]:
-    """Embeddings of reference images the user exported OUT of the corpus
-    (snapshotted at move time — their index rows get purged, but the examples
-    must stay trainable or the reference class drains as the user curates).
-    Tolerates both 'ids' and 'paths' as the key name."""
+    """Embeddings of reference images the user exported OUT of the personal
+    corpus — they must stay trainable or the reference class drains as the user
+    curates. The corpora are LINKED, so nothing is really lost on a move:
+
+    1. PRIMARY — live lookup in the MAIN library's LanceDB: the export manifest
+       maps src → dst, and the moved file is indexed in the main corpus with the
+       same embedding model. Always fresh; survives anything that happens to the
+       personal index.
+    2. FALLBACK — exported_ref_vectors.npz, snapshotted at move time (covers the
+       window before the main instance has indexed the file, or a file later
+       deleted from the main library). Tolerates 'ids'/'paths' key names.
+
+    Returns (src_paths, X) keyed by the ORIGINAL personal path for dedup."""
+    # manifest: which personal paths were moved, and where they landed
+    moved: dict[str, str] = {}
+    mf = data_file("export_manifest.json")
+    if mf.exists():
+        try:
+            import json as _json
+            for src, v in _json.loads(mf.read_text()).items():
+                if isinstance(v, dict) and v.get("mode") == "move":
+                    moved[v["dst"]] = src                     # dst -> src
+        except Exception:
+            moved = {}
+    out: dict[str, np.ndarray] = {}
+    if moved:
+        try:
+            import lancedb
+            db = lancedb.connect(Path.home() / ".muser" / "db")   # MAIN corpus
+            t = db.open_table("img__siglip2_b").to_arrow()
+            tp = t.column("path").to_pylist()
+            tv = t.column("vector")
+            for i, p in enumerate(tp):
+                src = moved.get(p)
+                if src is not None:
+                    out[src] = np.asarray(tv[i].as_py(), np.float32)
+        except Exception:
+            pass
+    # fallback snapshot for anything the main index doesn't (yet) have
     f = data_file("exported_ref_vectors.npz")
-    if not f.exists():
+    if f.exists():
+        try:
+            z = np.load(f, allow_pickle=False)
+            key = "ids" if "ids" in z else "paths"
+            for k, p in enumerate(z[key]):
+                p = str(p)
+                if p not in out:
+                    out[p] = z["X"][k].astype(np.float32)
+        except Exception:
+            pass
+    if not out:
         return [], None
-    try:
-        z = np.load(f, allow_pickle=False)
-        key = "ids" if "ids" in z else "paths"
-        return [str(p) for p in z[key]], z["X"].astype(np.float32)
-    except Exception:
-        return [], None
+    paths = list(out.keys())
+    return paths, np.stack([out[p] for p in paths])
 
 
 def train(model: str = "siglip2-b", progress=None) -> dict:
