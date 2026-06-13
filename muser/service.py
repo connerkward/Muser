@@ -724,10 +724,24 @@ def create_app(model: str = DEFAULT_MODEL):
         from .personal import evaluate as _ev
         return _ev.results()
 
+    def _snapshot_delete_async(paths):
+        """Capture delete-flagged embeddings at TAG time (background, best-effort)
+        so a positive's embedding is preserved the moment the judgment is made —
+        before the file can be trashed/changed/re-indexed away."""
+        def _bg():
+            try:
+                from .personal import cleanup as _cu
+                _cu.snapshot_deleted(list(paths))
+            except Exception:
+                pass
+        threading.Thread(target=_bg, daemon=True, name="muser-snap-delete").start()
+
     @app.post("/api/personal/eval-flag")
     def personal_eval_flag(req: dict):
         from .personal import evaluate as _ev
         _ev.set_flag(req["path"], req.get("flag"))
+        if req.get("flag") == "delete":
+            _snapshot_delete_async([req["path"]])
         return {"ok": True}
 
     @app.get("/api/personal/eval-flagged")
@@ -933,7 +947,8 @@ def create_app(model: str = DEFAULT_MODEL):
     def personal_trash_files(req: dict):
         """FINAL deletion: move the given flagged files to the system Trash
         (recoverable via Finder "Put Back" — never rm). macOS only (/usr/bin/trash,
-        ships since Sequoia). Clears the flags of moved files."""
+        ships since Sequoia). KEEPS the delete flag — it's the durable training
+        label, and the embedding was already snapshotted at tag time."""
         import platform
         import subprocess
         from .personal import evaluate as _ev
@@ -945,8 +960,8 @@ def create_app(model: str = DEFAULT_MODEL):
         paths = [p for p in paths if p in flagged]
         if not paths:
             return {"trashed": 0}
-        # Snapshot their embeddings BEFORE the move so they stay permanent delete
-        # positives for the model (the file + its index row are about to vanish).
+        # Belt-and-suspenders: ensure embeddings are snapshotted before the files
+        # vanish (normally already captured at tag time).
         try:
             from .personal import cleanup as _cu
             _cu.snapshot_deleted(paths)
@@ -964,7 +979,9 @@ def create_app(model: str = DEFAULT_MODEL):
                     if subprocess.run(["/usr/bin/trash", p], capture_output=True,
                                       timeout=30).returncode == 0:
                         moved.append(p)
-        _ev.set_flags_bulk(moved, None)                  # gone → drop their flags
+        # Flag is KEPT (durable delete-positive label); the file being gone is
+        # what removes it from the Trash bin (filtered by os.path.exists) and the
+        # candidate grids. To truly forget a deletion, un-flag it (restore).
         return {"trashed": len(moved), "failed": len(paths) - len(moved)}
 
     @app.get("/api/personal/export-status")
@@ -1007,7 +1024,10 @@ def create_app(model: str = DEFAULT_MODEL):
         Single load-modify-save under the write lock — the per-path loop raced
         concurrent requests on the shared tmp file."""
         from .personal import evaluate as _ev
-        n = _ev.set_flags_bulk(req.get("paths", []), req.get("flag"))
+        paths = req.get("paths", [])
+        n = _ev.set_flags_bulk(paths, req.get("flag"))
+        if req.get("flag") == "delete":
+            _snapshot_delete_async(paths)
         return {"ok": True, "n": n}
 
     @app.post("/api/personal/train")

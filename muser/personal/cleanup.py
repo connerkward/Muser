@@ -215,25 +215,27 @@ def train_model(model: str = "siglip2-b", progress=None) -> dict:
 
     paths, Xp, _wh = _table_vectors(MuserIndex(), model)
     pidx = {p: i for i, p in enumerate(paths)}
+    # The delete FLAG is the source of truth for what's a positive. Its embedding
+    # comes from the live index, or — when the file is gone (trashed) — from the
+    # snapshot captured at tag time. So un-flagging an image removes it as a
+    # positive automatically (it leaves `pos`); a trashed image stays a positive
+    # (flag kept) and its embedding survives in the snapshot.
+    dcache_paths, dcache_X = deleted_examples()
+    cmap = {p: dcache_X[i] for i, p in enumerate(dcache_paths)} if dcache_X is not None else {}
     X, y = [], []
     seen = set()
+    via_snap = 0
     for p in pos:
         if p in pidx:
             X.append(Xp[pidx[p]]); y.append(1.0); seen.add(p)
+        elif p in cmap:
+            X.append(cmap[p]); y.append(1.0); seen.add(p); via_snap += 1
     for p in neg:
         if p in pidx:
             X.append(Xp[pidx[p]]); y.append(0.0); seen.add(p)
-    # already-trashed images: their files/index rows are gone, but the snapshot
-    # keeps them as permanent delete positives so the model doesn't forget them.
-    dp, dX = deleted_examples()
-    added_trashed = 0
-    if dX is not None:
-        for k, p in enumerate(dp):
-            if p not in seen and p not in neg:
-                X.append(dX[k]); y.append(1.0); added_trashed += 1
     X = np.stack(X); y = np.asarray(y, np.float32)
     log(f"{int(y.sum())} delete / {int((1 - y).sum())} not-delete"
-        f"{f' (incl. {added_trashed} already-trashed)' if added_trashed else ''}")
+        f"{f' ({via_snap} delete via tag-time snapshot)' if via_snap else ''}")
 
     from sklearn.linear_model import LogisticRegression
     from sklearn.model_selection import StratifiedKFold, cross_val_predict
