@@ -78,16 +78,56 @@ _IO_LOCK = threading.Lock()
 
 
 def _load_labels() -> dict:
-    try:
-        return json.loads(LABELS_FILE.read_text())
-    except (OSError, json.JSONDecodeError):
+    """Load labels. A MISSING file is a normal first run → {}. A CORRUPT file is
+    NOT — silently returning {} here is what destroyed ~1,800 labels on
+    2026-06-12 (a tmp-file write race promoted corrupt JSON; the next click then
+    'saved' a file containing only itself). Quarantine the corrupt file and fail
+    loudly instead, so no later save can clobber from an empty base."""
+    if not LABELS_FILE.exists():
         return {}
+    raw = LABELS_FILE.read_text()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        import time as _t
+        q = LABELS_FILE.with_suffix(f".corrupt-{int(_t.time())}.json")
+        q.write_text(raw)
+        raise RuntimeError(f"eval_labels.json is corrupt — quarantined to {q.name}; "
+                           "refusing to continue from an empty label set")
 
 
 def _save(labels: dict) -> None:
+    # Anti-clobber: a save that would shrink the on-disk set by >50 entries AND
+    # >50% is almost certainly a bug, not the user un-labeling — keep a copy.
+    try:
+        old = json.loads(LABELS_FILE.read_text())
+        if len(old) - len(labels) > 50 and len(labels) < len(old) / 2:
+            import time as _t
+            LABELS_FILE.with_suffix(f".pre-shrink-{int(_t.time())}.json").write_text(json.dumps(old))
+    except Exception:
+        pass
     tmp = LABELS_FILE.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(labels))
     os.replace(tmp, LABELS_FILE)
+    _maybe_backup()
+
+
+_BAK_STATE = {"last": 0.0}
+
+
+def _maybe_backup() -> None:
+    """Rolling backup of the labels file, at most every 5 minutes — cheap
+    insurance: label work is hours of human time in a single JSON."""
+    import time as _t
+    now = _t.time()
+    if now - _BAK_STATE["last"] < 300:
+        return
+    _BAK_STATE["last"] = now
+    try:
+        bak = LABELS_FILE.with_suffix(".bak.json")
+        bak.write_text(LABELS_FILE.read_text())
+    except Exception:
+        pass
 
 
 def label(path: str, verdict: str | None, model_bucket: str | None = None) -> None:
