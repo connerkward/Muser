@@ -1399,7 +1399,7 @@
   <div class="row" id="facesToolbar" style="margin-bottom:12px;gap:8px;align-items:center;flex-wrap:wrap">
     <span class="mut" id="facesMsg"></span>
     <label class="mut" style="font-size:12px;margin-left:6px">sort
-      <select id="facesSort"><option value="similar">look-alike (merge dupes)</option><option value="size">most photos</option></select>
+      <select id="facesSort"><option value="similar">look-alike (merge dupes)</option><option value="size">most photos</option><option value="deletable">most likely deletable</option></select>
     </label>
     <label class="mut" style="font-size:12px"><input type="checkbox" id="facesHideDone" checked style="vertical-align:middle"> hide fully-tagged</label>
     <span class="sp" style="flex:1"></span>
@@ -5309,7 +5309,7 @@ function _faceCard(c, ref, label, named){
   if(_faceSel.has(ref)) card.classList.add("sel");
   card.innerHTML=`<div class="mos">${mos}</div>
     <div class="lab">${named?'👤 ':''}${esc(label)}</div>
-    <div class="sub">${c.size.toLocaleString()} photos</div>
+    <div class="sub">${c.size.toLocaleString()} photos${c.del_pct!=null?` · <span style="color:#d05050">🗑 ${c.del_pct}% del</span>`:''}</div>
     <div class="frow">
       <button class="lens" data-act="open">View</button>
       ${named

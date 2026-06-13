@@ -3253,11 +3253,20 @@ def create_app(model: str = DEFAULT_MODEL):
                 continue
             clusters.append({"id": lab, "size": c.get("size", 0), "labeled": labeled, "reps": reps})
 
-        if sort == "similar":
-            # Read a PRECOMPUTED similar-order list from the sidecar (written by
-            # faces clustering). Never compute centroids in-request — loading the
-            # 33k-vector npz in the warm service process OOM-killed it. Falls back
-            # to size order if the sidecar has none yet.
+        if sort == "deletable":
+            # Rank by members' mean P(delete) from the learned deletion model so
+            # junk-heavy face groups (blurry/dark crowd shots) surface first for
+            # bulk deletion. Members the model didn't flag count as 0 → big
+            # recurring-person clusters (you, family) sink to the bottom.
+            from .personal import cleanup as _cu
+            preds = _cu.model_preds()
+            for c in clusters:
+                m = mbc.get(c["id"], [])
+                c["del_pct"] = round(sum(preds.get(p, 0) for p in m) / max(1, len(m)))
+            clusters.sort(key=lambda c: -c["del_pct"])
+        elif sort == "similar":
+            # PRECOMPUTED similar-order from the sidecar (never compute centroids
+            # in-request — the 33k-vector npz load OOM-killed the warm service).
             order = _faces.cluster_order()
             if order:
                 rank = {l: i for i, l in enumerate(order)}
