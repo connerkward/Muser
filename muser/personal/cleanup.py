@@ -125,6 +125,67 @@ def _model_files():
     return data_file("delete_model.npz"), data_file("delete_pred.json")
 
 
+def _deleted_npz():
+    from ..paths import data_file
+    return data_file("deleted_vectors.npz")
+
+
+def snapshot_deleted(paths, model: str = "siglip2-b") -> int:
+    """Persist the SigLIP embeddings of about-to-be-trashed images so they remain
+    POSITIVE training examples for the deletion model after the file (and its
+    index row) is gone — symmetric with the reference-export snapshot. Merge by
+    path; called from the Trash 'move to system Trash' path BEFORE the move."""
+    if not paths:
+        return 0
+    import numpy as np
+
+    from ..index import MuserIndex
+    try:
+        import lancedb
+        db = lancedb.connect(MuserIndex().db_path)
+        t = db.open_table("img__siglip2_b").to_arrow()
+        tp = t.column("path").to_pylist()
+        tv = t.column("vector")
+        want = set(paths)
+        new = {tp[i]: np.asarray(tv[i].as_py(), np.float16) for i in range(len(tp)) if tp[i] in want}
+    except Exception:
+        return 0
+    if not new:
+        return 0
+    f = _deleted_npz()
+    merged: dict = {}
+    if f.exists():
+        try:
+            z = np.load(f, allow_pickle=False)
+            merged = {p: z["X"][i] for i, p in enumerate(z["ids"])}
+        except Exception:
+            merged = {}
+    merged.update(new)
+    ids = list(merged.keys())
+    X = np.stack([merged[p] for p in ids]).astype(np.float16)
+    tmp = f.with_suffix(".npz.tmp")
+    with open(tmp, "wb") as fh:
+        np.savez(fh, ids=np.array(ids, dtype=object).astype("U"), X=X)
+    import os as _os
+    _os.replace(tmp, f)
+    return len(new)
+
+
+def deleted_examples():
+    """Snapshotted embeddings of already-trashed images (permanent delete
+    positives). Returns (paths, X) or ([], None)."""
+    f = _deleted_npz()
+    if not f.exists():
+        return [], None
+    try:
+        import numpy as np
+        z = np.load(f, allow_pickle=False)
+        key = "ids" if "ids" in z else "paths"
+        return [str(p) for p in z[key]], z["X"].astype(np.float32)
+    except Exception:
+        return [], None
+
+
 def train_model(model: str = "siglip2-b", progress=None) -> dict:
     """Fit a P(delete) head on the SigLIP embeddings from the user's flags:
     positives = 🗑 delete-flagged; negatives = saved ('keep') + bucket-labeled
@@ -155,14 +216,24 @@ def train_model(model: str = "siglip2-b", progress=None) -> dict:
     paths, Xp, _wh = _table_vectors(MuserIndex(), model)
     pidx = {p: i for i, p in enumerate(paths)}
     X, y = [], []
+    seen = set()
     for p in pos:
         if p in pidx:
-            X.append(Xp[pidx[p]]); y.append(1.0)
+            X.append(Xp[pidx[p]]); y.append(1.0); seen.add(p)
     for p in neg:
         if p in pidx:
-            X.append(Xp[pidx[p]]); y.append(0.0)
+            X.append(Xp[pidx[p]]); y.append(0.0); seen.add(p)
+    # already-trashed images: their files/index rows are gone, but the snapshot
+    # keeps them as permanent delete positives so the model doesn't forget them.
+    dp, dX = deleted_examples()
+    added_trashed = 0
+    if dX is not None:
+        for k, p in enumerate(dp):
+            if p not in seen and p not in neg:
+                X.append(dX[k]); y.append(1.0); added_trashed += 1
     X = np.stack(X); y = np.asarray(y, np.float32)
-    log(f"{int(y.sum())} delete / {int((1 - y).sum())} not-delete")
+    log(f"{int(y.sum())} delete / {int((1 - y).sum())} not-delete"
+        f"{f' (incl. {added_trashed} already-trashed)' if added_trashed else ''}")
 
     from sklearn.linear_model import LogisticRegression
     from sklearn.model_selection import StratifiedKFold, cross_val_predict

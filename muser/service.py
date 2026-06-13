@@ -945,6 +945,13 @@ def create_app(model: str = DEFAULT_MODEL):
         paths = [p for p in paths if p in flagged]
         if not paths:
             return {"trashed": 0}
+        # Snapshot their embeddings BEFORE the move so they stay permanent delete
+        # positives for the model (the file + its index row are about to vanish).
+        try:
+            from .personal import cleanup as _cu
+            _cu.snapshot_deleted(paths)
+        except Exception:
+            pass
         moved = []
         for i in range(0, len(paths), 200):              # arg-list-safe batches
             chunk = paths[i:i + 200]
