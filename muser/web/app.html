@@ -5353,6 +5353,9 @@ function _syncFaceSel(){
     const b=card.querySelector('[data-act="sel"]'); if(b){ b.className=on?'on':''; b.textContent=on?'✓ selected':'Select'; }
   });
   const n=_faceSel.size;
+  const cards=[...document.querySelectorAll('#facesGrid .card.cluster, #facesPeople .card.cluster')];
+  const allSel = cards.length && cards.every(c=>_faceSel.has(c.dataset.ref));
+  $("#facesSelAll").textContent = allSel ? "Deselect all" : "Select all";
   $("#facesSelMsg").style.display=n?"":"none"; $("#facesSelMsg").textContent=`${n} selected`;
   $("#facesPersonalBtn").style.display=n>=1?"":"none";
   $("#facesMergeBtn").style.display=n>=2?"":"none";
@@ -5362,8 +5365,10 @@ function _syncFaceSel(){
 $("#facesSort").onchange=()=>loadFaces();
 $("#facesHideDone").onchange=()=>loadFaces();
 $("#facesSelAll").onclick=()=>{
-  document.querySelectorAll('#facesGrid .card.cluster, #facesPeople .card.cluster')
-    .forEach(c=>_faceSel.add(c.dataset.ref));
+  const cards=[...document.querySelectorAll('#facesGrid .card.cluster, #facesPeople .card.cluster')];
+  const allSel = cards.length && cards.every(c=>_faceSel.has(c.dataset.ref));
+  if(allSel) cards.forEach(c=>_faceSel.delete(c.dataset.ref));   // toggle → deselect all
+  else cards.forEach(c=>_faceSel.add(c.dataset.ref));
   _syncFaceSel();
 };
 $("#facesDeleteBtn").onclick=async()=>{
@@ -5427,6 +5432,9 @@ function _fdSyncExcl(){
   const remaining=Math.max(0,(_fd.total||0)-_fdExcl.size);
   $("#fdLabelPersonal").textContent=`👤 Label remaining ${remaining.toLocaleString()} as personal`;
   $("#fdExclMsg").textContent=_fdExcl.size?`${_fdExcl.size} selected`:"";
+  const cards=[...document.querySelectorAll("#fdgrid .card")];
+  const allSel = cards.length && cards.every(c=>_fdExcl.has(c.dataset.path));
+  $("#fdSelAll").textContent = allSel ? "Deselect all" : "Select all";
 }
 async function openFacePerson(ref, label, size){
   $("#facesGrid").style.display="none"; $("#facesPeopleWrap").style.display="none";
@@ -5450,7 +5458,10 @@ $("#fdLabelPersonal").onclick=async()=>{
   $("#facesDetail").style.display="none"; loadFaces();
 };
 $("#fdSelAll").onclick=()=>{
-  document.querySelectorAll("#fdgrid .card").forEach(c=>{ _fdExcl.add(c.dataset.path); c.classList.add("excl"); });
+  const cards=[...document.querySelectorAll("#fdgrid .card")];
+  const allSel = cards.length && cards.every(c=>_fdExcl.has(c.dataset.path));
+  cards.forEach(c=>{ if(allSel){ _fdExcl.delete(c.dataset.path); c.classList.remove("excl"); }
+                     else { _fdExcl.add(c.dataset.path); c.classList.add("excl"); } });
   _fdSyncExcl();
 };
 $("#fdDeleteBtn").onclick=async()=>{
