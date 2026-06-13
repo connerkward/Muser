@@ -346,6 +346,22 @@ def _load_supervised():
         return None
 
 
+def _exported_ref_examples() -> tuple[list[str], "np.ndarray | None"]:
+    """Embeddings of reference images the user exported OUT of the corpus
+    (snapshotted at move time — their index rows get purged, but the examples
+    must stay trainable or the reference class drains as the user curates).
+    Tolerates both 'ids' and 'paths' as the key name."""
+    f = data_file("exported_ref_vectors.npz")
+    if not f.exists():
+        return [], None
+    try:
+        z = np.load(f, allow_pickle=False)
+        key = "ids" if "ids" in z else "paths"
+        return [str(p) for p in z[key]], z["X"].astype(np.float32)
+    except Exception:
+        return [], None
+
+
 def train(model: str = "siglip2-b", progress=None) -> dict:
     """Fit a personal-vs-reference head DIRECTLY on the SigLIP embeddings using the
     user's Evaluate labels, report cross-validated accuracy, then re-bucket the
@@ -375,19 +391,33 @@ def train(model: str = "siglip2-b", progress=None) -> dict:
     pidx = {p: i for i, p in enumerate(paths)}
 
     X, y = [], []
+    seen_paths = set()
     for p, lab in pairs:
         i = pidx.get(p)
         if i is None:
             continue
         X.append(Xp[i])
+        seen_paths.add(p)
         # binary head: an in_between IS a personal photo by definition -> fold in
         y.append(1.0 if lab in ("personal", "in_between") else 0.0)
+    # exported reference images: rows leave the index after the move, but their
+    # snapshotted embeddings stay in the training set as reference examples
+    xp_paths, xp_X = _exported_ref_examples()
+    added_exported = 0
+    if xp_X is not None:
+        for k, p in enumerate(xp_paths):
+            if p in seen_paths:
+                continue
+            X.append(xp_X[k])
+            y.append(0.0)
+            added_exported += 1
     if len(y) < 10 or len(set(y)) < 2:
         return {"trained": False,
                 "message": "need labels on both sides (personal AND reference)"}
     X = np.stack(X)
     y = np.asarray(y, np.float32)
-    log(f"{len(y)} labeled ({int(y.sum())} personal-ish / {int((1 - y).sum())} reference)")
+    log(f"{len(y)} labeled ({int(y.sum())} personal-ish / {int((1 - y).sum())} reference"
+        f"{f', incl. {added_exported} exported refs' if added_exported else ''})")
 
     from sklearn.linear_model import LogisticRegression
     from sklearn.model_selection import StratifiedKFold, cross_val_score
@@ -412,6 +442,115 @@ def train(model: str = "siglip2-b", progress=None) -> dict:
                         f"in_between={counts.get('in_between', 0)} "
                         f"reference={counts.get('reference', 0)}" if cv_acc is not None
                         else f"trained on {len(y)} labels")}
+
+
+LC_MILESTONES = (50, 100, 200, 300, 500, 750, 1000, 1500, 2000, 3000, 5000)
+
+
+def learning_curve(kind: str = "bucket", model: str = "siglip2-b") -> dict:
+    """Measured + projected accuracy at label-count milestones, for the Evaluate
+    (kind='bucket': personal-vs-reference head) and Cleanup (kind='delete':
+    P(delete) head) timelines.
+
+    Measured: for each milestone ≤ current label count, train the embedding
+    logreg on a stratified subsample of that size and 4-fold cross-validate
+    (2 seeds averaged). Projected: fit a saturating power law
+    acc(n) = a − b·n^(−c) to the measured points and extrapolate — an honest
+    "how much will N more labels buy me" estimate, not a promise."""
+    labels = _load_eval_labels()
+    if kind == "delete":
+        pos = {p for p, e in labels.items() if e.get("flag") == "delete"}
+        neg = {p for p, e in labels.items()
+               if e.get("flag") == "keep"
+               or (e.get("label") in ("personal", "in_between", "reference")
+                   and e.get("flag") != "delete")}
+        neg -= pos
+        pairs = [(p, 1.0) for p in pos] + [(p, 0.0) for p in neg]
+    else:
+        pairs = [(p, 1.0 if e["label"] in ("personal", "in_between") else 0.0)
+                 for p, e in labels.items()
+                 if e.get("label") in ("personal", "in_between", "reference")]
+    if len(pairs) < 30:
+        return {"kind": kind, "n_now": len(pairs), "points": [],
+                "message": f"need ≥30 labels for a curve; have {len(pairs)}"}
+
+    paths, Xp, _wh = _table_vectors(MuserIndex(), model)
+    pidx = {p: i for i, p in enumerate(paths)}
+    X, y = [], []
+    seen = set()
+    for p, v in pairs:
+        i = pidx.get(p)
+        if i is not None:
+            X.append(Xp[i]); y.append(v); seen.add(p)
+    if kind == "bucket":     # exported reference examples survive the move (see train)
+        xp_paths, xp_X = _exported_ref_examples()
+        if xp_X is not None:
+            for k, p in enumerate(xp_paths):
+                if p not in seen:
+                    X.append(xp_X[k]); y.append(0.0)
+    X = np.stack(X); y = np.asarray(y, np.float32)
+    n_now = len(y)
+
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import StratifiedKFold, cross_val_score
+    rng = np.random.default_rng(0)
+
+    def cv_at(m: int) -> float | None:
+        accs = []
+        for seed in (0, 1):
+            idx = np.arange(len(y))
+            # stratified subsample of size m
+            sel: list[int] = []
+            for cls in (0.0, 1.0):
+                cls_idx = idx[y == cls]
+                take = max(2, int(round(m * float((y == cls).mean()))))
+                if take > len(cls_idx):
+                    take = len(cls_idx)
+                r = np.random.default_rng(seed)
+                sel.extend(r.choice(cls_idx, size=take, replace=False).tolist())
+            Xs, ys = X[sel], y[sel]
+            if len(set(ys.tolist())) < 2:
+                return None
+            folds = min(4, int(min(ys.sum(), (1 - ys).sum())))
+            if folds < 2:
+                return None
+            clf = LogisticRegression(max_iter=2000, C=1.0, class_weight="balanced")
+            cv = StratifiedKFold(folds, shuffle=True, random_state=seed)
+            accs.append(float(cross_val_score(clf, Xs, ys, cv=cv).mean()))
+        return float(np.mean(accs)) if accs else None
+
+    points = []
+    measured_n, measured_acc = [], []
+    for m in LC_MILESTONES:
+        if m <= n_now:
+            acc = cv_at(m)
+            if acc is not None:
+                points.append({"n": m, "acc": round(acc, 4), "measured": True})
+                measured_n.append(m); measured_acc.append(acc)
+    # current full-set point
+    acc_now = cv_at(n_now)
+    if acc_now is not None:
+        points.append({"n": n_now, "acc": round(acc_now, 4), "measured": True, "now": True})
+        measured_n.append(n_now); measured_acc.append(acc_now)
+
+    # saturating fit acc(n) = a - b * n^(-c); fall back to last value if it fails
+    proj_note = None
+    if len(measured_n) >= 3:
+        try:
+            from scipy.optimize import curve_fit
+            f = lambda n, a, b, c: a - b * np.power(n, -c)
+            (a, b, c), _ = curve_fit(
+                f, np.array(measured_n, float), np.array(measured_acc, float),
+                p0=(min(0.99, max(measured_acc) + 0.05), 1.0, 0.5),
+                bounds=([max(measured_acc), 0.0, 0.05], [1.0, 10.0, 2.0]), maxfev=5000)
+            for m in LC_MILESTONES:
+                if m > n_now:
+                    points.append({"n": m, "acc": round(float(min(a, f(m, a, b, c))), 4),
+                                   "measured": False})
+            proj_note = f"saturates ≈{a:.0%}"
+        except Exception:
+            proj_note = "projection fit failed — showing measured only"
+    return {"kind": kind, "n_now": n_now, "points": points, "note": proj_note}
 
 
 def reclassify_supervised(model: str = "siglip2-b", progress=None, _preloaded=None) -> dict:

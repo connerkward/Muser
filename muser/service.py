@@ -774,6 +774,34 @@ def create_app(model: str = DEFAULT_MODEL):
             pass
         return {"on": _HIDEFLAG["on"], "count": len(_delete_flagged())}
 
+    @app.post("/api/personal/set-bucket-bulk")
+    def personal_set_bucket_bulk(req: dict):
+        """Manually assign one bucket to MANY paths (Triage mark-all-shown).
+        One personalness save + one labels save — never N per-path rewrites."""
+        from .personal import evaluate as _ev
+        from .personal import personalness as _pn
+        bucket = req.get("bucket")
+        paths = req.get("paths", [])
+        if bucket not in ("personal", "in_between", "reference") or not paths:
+            return {"ok": False, "error": "bad bucket/paths"}
+        entries = _pn.all_entries()
+        changed = 0
+        for path in paths:
+            e = entries.get(path)
+            if e is None:
+                continue
+            if "obucket" not in e:
+                e["obucket"] = e.get("bucket")
+            e["bucket"] = bucket
+            e["forced"] = "manual"
+            changed += 1
+        if changed:
+            _pn.sidecar().save(entries)
+            _pn.sidecar()._primed = False
+            _pn.sidecar().prime()
+        _ev.label_bulk(paths, bucket)        # ground truth for accuracy/retraining
+        return {"ok": True, "n": len(paths), "changed": changed}
+
     # ---- Cleanup: algorithmic delete-candidate review ----
     @app.get("/api/personal/cleanup-status")
     def cleanup_status():
@@ -844,6 +872,70 @@ def create_app(model: str = DEFAULT_MODEL):
                   "score": c["score"], "reasons": c["reasons"],
                   "flagged": c["path"] in delset} for c in page]
         return {"built": True, "total": total, "offset": offset, "items": items}
+
+    _lc_cache: dict = {}
+
+    @app.get("/api/personal/learning-curve")
+    def personal_learning_curve(kind: str = "bucket"):
+        """Label-milestone timeline: measured CV accuracy at past milestones +
+        projected accuracy at future ones. Cached per (kind, labels mtime) —
+        the first compute loads the embedding table (~20 s)."""
+        from .personal import evaluate as _ev
+        from .personal import personalness as _pn
+        try:
+            mt = _ev.LABELS_FILE.stat().st_mtime
+        except OSError:
+            mt = 0.0
+        ent = _lc_cache.get(kind)
+        if ent and ent["mt"] == mt:
+            return ent["val"]
+        val = _pn.learning_curve(kind=kind, model=state.model_name)
+        _lc_cache[kind] = {"mt": mt, "val": val}
+        return val
+
+    # ---- Trash bin: review delete-flagged files before final deletion ----
+    @app.get("/api/personal/trash")
+    def personal_trash(offset: int = 0, limit: int = 120):
+        """All 🗑-flagged files (the trash bin), ignoring the hide toggle — this
+        IS the review surface for the final decision. Live files only."""
+        from .personal import evaluate as _ev
+        paths = [p for p in sorted(_ev.delete_set()) if os.path.exists(p)]
+        total = len(paths)
+        page = paths[offset:offset + limit]
+        return {"total": total, "offset": offset,
+                "items": [{"path": p, "name": os.path.basename(p), "uid": uid_for(p)}
+                          for p in page]}
+
+    @app.post("/api/personal/trash-files")
+    def personal_trash_files(req: dict):
+        """FINAL deletion: move the given flagged files to the system Trash
+        (recoverable via Finder "Put Back" — never rm). macOS only (/usr/bin/trash,
+        ships since Sequoia). Clears the flags of moved files."""
+        import platform
+        import subprocess
+        from .personal import evaluate as _ev
+        if platform.system() != "Darwin" or not os.path.exists("/usr/bin/trash"):
+            raise HTTPException(501, "system Trash unavailable on this platform")
+        paths = [p for p in req.get("paths", []) if os.path.exists(p)]
+        # only ever trash files the user actually flagged — never arbitrary paths
+        flagged = _ev.delete_set()
+        paths = [p for p in paths if p in flagged]
+        if not paths:
+            return {"trashed": 0}
+        moved = []
+        for i in range(0, len(paths), 200):              # arg-list-safe batches
+            chunk = paths[i:i + 200]
+            r = subprocess.run(["/usr/bin/trash", *chunk],
+                               capture_output=True, text=True, timeout=120)
+            if r.returncode == 0:
+                moved.extend(chunk)
+            else:                                        # retry singly, skip failures
+                for p in chunk:
+                    if subprocess.run(["/usr/bin/trash", p], capture_output=True,
+                                      timeout=30).returncode == 0:
+                        moved.append(p)
+        _ev.set_flags_bulk(moved, None)                  # gone → drop their flags
+        return {"trashed": len(moved), "failed": len(paths) - len(moved)}
 
     @app.get("/api/personal/export-status")
     def personal_export_status():

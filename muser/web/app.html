@@ -652,6 +652,23 @@
   .qabar button:hover { background:#fff; }
   .qabar button[data-b="__del"] { background:rgba(208,80,80,.92); color:#fff; }
   .qabar button.done { outline:2px solid #6ab04c; outline-offset:-2px; }
+  /* Label-milestone learning-curve timeline (Evaluate + Cleanup) */
+  .lcwrap { margin:0 0 16px; }
+  .lc { border:1px solid var(--line); border-radius:8px; padding:10px 14px 12px; background:var(--paper); }
+  .lc .lchead { display:flex; gap:10px; align-items:baseline; font-size:12px; margin-bottom:8px; }
+  .lc .lchead b { font-size:12.5px; }
+  .lc .lcnote { color:var(--mut); }
+  .lc .lcline { position:relative; height:46px; }
+  .lc .lcaxis { position:absolute; left:0; right:0; top:31px; height:2px; background:var(--line); }
+  .lc .lcm { position:absolute; top:0; transform:translateX(-50%); text-align:center; width:56px; }
+  .lc .lcm .pct { font-size:11.5px; font-variant-numeric:tabular-nums; font-weight:700; }
+  .lc .lcm .tick { width:2px; height:8px; background:var(--mut); margin:2px auto 0; }
+  .lc .lcm .nn { font-size:10px; color:var(--mut); margin-top:2px; font-variant-numeric:tabular-nums; }
+  .lc .lcm.proj .pct { color:var(--mut); font-weight:400; font-style:italic; }
+  .lc .lcm.proj .tick { background:var(--line); }
+  .lc .lcm.now .pct { color:var(--pos,#2f7d52); }
+  .lc .lcm.now .tick { background:var(--pos,#2f7d52); height:12px; }
+  .lc .lcm.now .nn::after { content:" ← you"; color:var(--pos,#2f7d52); font-weight:700; }
   /* Algorithm explainer drawer */
   #algoPanel { position:fixed; top:54px; right:14px; width:min(480px, calc(100vw - 28px));
                max-height:calc(100vh - 80px); overflow-y:auto; z-index:55;
@@ -1126,6 +1143,7 @@
     <button class="nav" data-view="triage" style="display:none">Triage</button>
     <button class="nav" data-view="evaluate" style="display:none">Evaluate</button>
     <button class="nav" data-view="cleanup" style="display:none">Cleanup</button>
+    <button class="nav" data-view="trash" style="display:none">Trash</button>
   </nav>
   <input id="qMini" placeholder="Search…" autocomplete="off" />
   <input id="negMini" placeholder="Exclude…" autocomplete="off" />
@@ -1150,6 +1168,8 @@
   <button class="nav" id="navEvaluate" style="display:none">Evaluate</button>
   <!-- Cleanup = algorithmic delete-candidate review; personal instance only -->
   <button class="nav" id="navCleanup" style="display:none">Cleanup</button>
+  <!-- Trash = review 🗑-flagged files before FINAL deletion (system Trash); personal only -->
+  <button class="nav" id="navTrash" style="display:none">Trash</button>
   <!-- Toggle: hide 🗑-flagged images everywhere (server-side, persisted); personal only -->
   <button class="nav" id="hideFlaggedBtn" style="display:none" title="Toggle hiding images flagged for deletion across all tabs">🗑 hidden</button>
   <!-- Algorithm explainer: expands a panel describing the active tab's exact algorithm -->
@@ -1441,6 +1461,7 @@
     <button class="nav on" data-bucket="personal">Personal <span class="n" data-c="personal">0</span></button>
     <button class="nav" data-bucket="in_between">In-between <span class="n" data-c="in_between">0</span></button>
     <button class="nav" data-bucket="reference">Reference <span class="n" data-c="reference">0</span></button>
+    <button id="triageMarkAll" title="Confirm the current bucket as ground truth for every loaded image">✓ Mark all shown as personal</button>
     <span style="flex:1"></span>
     <label class="mut" style="font-size:12px">sort
       <select id="triageSort"><option value="p">most→least personal</option><option value="unc">most uncertain</option></select>
@@ -1478,6 +1499,7 @@
     <button id="evNew">New batch ↻</button>
   </div>
   <div class="mut" style="font-size:12px;margin-bottom:14px">Tap the bucket each image really belongs to — the model's guess is outlined. Your labels are ground truth; accuracy updates live. Flag junk with 🗑 (feeds the Cleanup tab).</div>
+  <div class="lcwrap" id="evCurve" data-kind="bucket"></div>
   <div class="evgrid" id="evGrid"></div>
   <div class="conf" id="evConfWrap" style="display:none">
     <h3 style="font-size:12px;color:#caa468;text-transform:uppercase;margin:18px 0 12px">Your labels vs the model</h3>
@@ -1506,6 +1528,7 @@
     <button id="cuClear" style="display:none">Clear saved</button>
     <button id="cuUndo" style="display:none" title="Un-flag the images from the last 'Flag shown' click">↩︎ Undo last flag</button>
   </div>
+  <div class="lcwrap" id="cuCurve" data-kind="delete"></div>
   <div class="grid" id="cleanupGrid"></div>
   <!-- Bottom action bar (design-spatial §5): the task ends down here after reviewing
        the page — confirming must not require scrolling back to the top toolbar. -->
@@ -1517,6 +1540,27 @@
     <button id="cuMarkB" class="primary" style="display:none">🗑 Flag all shown except saved</button>
     <button id="cuClearB" style="display:none">Clear saved</button>
     <button id="cuUndoB" style="display:none" title="Un-flag the images from the last 'Flag shown' click">↩︎ Undo last flag</button>
+  </div>
+</div>
+
+<!-- Trash bin — review 🗑-flagged files before FINAL deletion; personal only -->
+<div class="wrap" id="trashView" style="display:none">
+  <div class="row" style="margin-bottom:6px">
+    <b>Trash bin</b>
+    <span class="mut">— everything flagged 🗑 for deletion, in one place for a final review. <b>Click an image to RESTORE it</b> (un-flag). "Move to system Trash" is the only action that touches files — and it's recoverable (Finder → Trash → Put Back).</span>
+  </div>
+  <div class="row" id="trashBarT" style="margin-bottom:12px;gap:12px;align-items:center;flex-wrap:wrap">
+    <span class="mut" id="trashMsg" style="font-size:12px"></span>
+    <span style="flex:1"></span>
+    <button id="trRestoreAll">↩︎ Restore all shown</button>
+    <button id="trEmpty" class="primary">🗑 Move all to system Trash…</button>
+  </div>
+  <div class="grid" id="trashGrid"></div>
+  <div class="row" id="trashBarB" style="margin-top:14px;gap:12px;align-items:center;flex-wrap:wrap">
+    <button id="trashMore" style="display:none">Load more</button>
+    <span style="flex:1"></span>
+    <button id="trRestoreAllB">↩︎ Restore all shown</button>
+    <button id="trEmptyB" class="primary">🗑 Move all to system Trash…</button>
   </div>
 </div>
 
@@ -4109,9 +4153,9 @@ function openDetail(uid){ showView("image", {uid}); }
 // ---- view switching (Search / Explore / Interesting / Review / AI / Image) ----
 // `image` is a *detail* view (no nav button) — it's only reached from hash
 // routing (#/image/<uid>) or programmatically via openDetail(uid).
-const VIEWS={search:"searchView",explore:"exploreView",faces:"facesView",interesting:"interestingView",review:"reviewView",color:"colorView",ai:"aiView",results:"resultsView",jobs:"jobsView",triage:"triageView",evaluate:"evaluateView",cleanup:"cleanupView",image:"imageView"};
-const NAVS={search:"navSearch",explore:"navExplore",faces:"navFaces",interesting:"navInteresting",review:"navReview",color:"navColor",ai:"navAI",results:"navResults",jobs:"navJobs",triage:"navTriage",evaluate:"navEvaluate",cleanup:"navCleanup"};
-const VIEW_TITLES={search:"Search",explore:"Explore",faces:"Faces",interesting:"Interesting",review:"Review",color:"Color",ai:"AI",results:"Results",jobs:"Jobs",triage:"Triage",evaluate:"Evaluate",cleanup:"Cleanup",image:"Image"};
+const VIEWS={search:"searchView",explore:"exploreView",faces:"facesView",interesting:"interestingView",review:"reviewView",color:"colorView",ai:"aiView",results:"resultsView",jobs:"jobsView",triage:"triageView",evaluate:"evaluateView",cleanup:"cleanupView",trash:"trashView",image:"imageView"};
+const NAVS={search:"navSearch",explore:"navExplore",faces:"navFaces",interesting:"navInteresting",review:"navReview",color:"navColor",ai:"navAI",results:"navResults",jobs:"navJobs",triage:"navTriage",evaluate:"navEvaluate",cleanup:"navCleanup",trash:"navTrash"};
+const VIEW_TITLES={search:"Search",explore:"Explore",faces:"Faces",interesting:"Interesting",review:"Review",color:"Color",ai:"AI",results:"Results",jobs:"Jobs",triage:"Triage",evaluate:"Evaluate",cleanup:"Cleanup",trash:"Trash",image:"Image"};
 // Internal flag: when popstate or initial-route call showView, suppress the
 // pushState so back/forward don't double-stack history entries.
 let _suppressHistory=false;
@@ -4142,8 +4186,9 @@ function showView(v, opts){
   if(v==="results") openResults(opts.runId);
   if(v==="jobs") startJobsPoll();
   if(v==="triage") loadTriage();
-  if(v==="evaluate") loadEvaluate();
-  if(v==="cleanup") loadCleanup();
+  if(v==="evaluate"){ loadEvaluate(); loadCurve("#evCurve"); }
+  if(v==="cleanup"){ loadCleanup(); loadCurve("#cuCurve"); }
+  if(v==="trash") loadTrash(true);
   if(v==="image" && opts.uid) loadImageDetail(opts.uid);
   if(typeof refreshAlgoPanel==="function") refreshAlgoPanel(v);
   // Returning to Search with no query + no filter and an empty grid → showcase.
@@ -5559,6 +5604,99 @@ $("#cuUndo").onclick=async()=>{
 $("#cuUndoB").onclick=()=>$("#cuUndo").click();
 $("#cleanupMore").onclick=()=>_cuLoad(false);
 
+// ---- Label-milestone learning curve (Evaluate + Cleanup) ----
+// Measured CV accuracy at past label-count milestones + projected accuracy at
+// future ones (server fits a saturating power law). First compute ~20s (loads
+// the embedding table); cached server-side until labels change.
+const _lcLoaded={};
+async function loadCurve(elId){
+  const el=$(elId); if(!el) return;
+  const kind=el.dataset.kind;
+  if(_lcLoaded[kind]===el.innerHTML && el.innerHTML) return;
+  el.innerHTML=`<div class="lc"><div class="lchead"><b>Label milestones</b><span class="lcnote">computing learning curve… (~20 s first time)</span></div></div>`;
+  let r; try{ r=await (await fetch(`/api/personal/learning-curve?kind=${kind}`)).json(); }
+  catch(e){ el.innerHTML=""; return; }
+  if(!r.points || !r.points.length){
+    el.innerHTML=`<div class="lc"><div class="lchead"><b>Label milestones</b><span class="lcnote">${esc(r.message||"not enough labels yet")}</span></div></div>`;
+    return;
+  }
+  const pts=r.points.sort((a,b)=>a.n-b.n);
+  const lo=Math.log(pts[0].n), hi=Math.log(pts[pts.length-1].n);
+  const x=n=>{ const f=(Math.log(n)-lo)/Math.max(1e-9,hi-lo); return 4+f*92; };  // % across, log scale
+  const marks=pts.map(p=>`
+    <div class="lcm ${p.measured?"":"proj"} ${p.now?"now":""}" style="left:${x(p.n).toFixed(1)}%">
+      <div class="pct">${Math.round(p.acc*100)}%</div><div class="tick"></div>
+      <div class="nn">${p.n.toLocaleString()}</div>
+    </div>`).join("");
+  const what = kind==="delete" ? "deletion model (P≥0.7 split)" : "personal-vs-reference head";
+  el.innerHTML=`<div class="lc">
+    <div class="lchead"><b>Label milestones</b>
+      <span class="lcnote">${what} · solid = measured (cross-validated) · italic = projected${r.note?` · ${esc(r.note)}`:""}</span></div>
+    <div class="lcline"><div class="lcaxis"></div>${marks}</div></div>`;
+  _lcLoaded[kind]=el.innerHTML;
+}
+
+// ---- Trash bin tab — final review of 🗑-flagged files ----
+const _tr={offset:0, total:0, loading:false};
+async function loadTrash(clean){
+  if(_tr.loading) return; _tr.loading=true;
+  const g=$("#trashGrid");
+  if(clean){ g.innerHTML=""; _tr.offset=0; }
+  try{
+    const r=await (await fetch(`/api/personal/trash?offset=${_tr.offset}&limit=120`)).json();
+    _tr.total=r.total;
+    $("#trashMsg").textContent=`${r.total.toLocaleString()} files flagged for deletion`;
+    r.items.forEach(it=>{
+      const c=document.createElement("div"); c.className="card"; c.dataset.path=it.path;
+      c.innerHTML=`<div class="thumb" title="${esc(it.name)} — click to RESTORE, dblclick to zoom">
+          <img loading="lazy" src="/api/thumb?path=${enc(it.path)}&size=${typeof THUMB!=='undefined'?THUMB:200}&fit=contain"></div>
+        <div class="meta"><div class="name" title="${it.path}">${esc(it.name)}</div></div>`;
+      c.querySelector(".thumb").onclick=async()=>{
+        const r2=await fetch("/api/personal/eval-flag",{method:"POST",headers:{"content-type":"application/json"},
+          body:JSON.stringify({path:it.path, flag:null})});
+        if(r2.ok){ c.remove(); _tr.total--; $("#trashMsg").textContent=`${_tr.total.toLocaleString()} files flagged for deletion`; toast("restored"); }
+      };
+      c.querySelector(".thumb").ondblclick=(ev)=>{ ev.preventDefault();
+        $("#evLbImg").src=`/api/image?path=${enc(it.path)}`; $("#evLb").style.display="flex"; };
+      g.appendChild(c);
+    });
+    _tr.offset+=r.items.length;
+    $("#trashMore").style.display = _tr.offset<_tr.total ? "" : "none";
+  } finally { _tr.loading=false; }
+}
+async function _trRestoreAll(){
+  const paths=[...document.querySelectorAll("#trashGrid .card")].map(c=>c.dataset.path);
+  if(!paths.length) return;
+  const r=await fetch("/api/personal/flag-bulk",{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({paths, flag:null})});
+  if(!r.ok){ toast("restore failed"); return; }
+  toast(`restored ${paths.length}`);
+  loadTrash(true);
+}
+async function _trEmpty(){
+  const n=_tr.total;
+  if(!n) return;
+  if(!confirm(`Move ALL ${n.toLocaleString()} flagged files to the system Trash?\n\nRecoverable via Finder → Trash → "Put Back". Nothing is permanently deleted until you empty the system Trash yourself.`)) return;
+  if(!confirm(`Really move ${n.toLocaleString()} files? (second confirmation)`)) return;
+  // fetch ALL flagged paths (not just the shown page)
+  const all=[]; let off=0;
+  while(true){
+    const r=await (await fetch(`/api/personal/trash?offset=${off}&limit=2000`)).json();
+    all.push(...r.items.map(i=>i.path));
+    off+=r.items.length;
+    if(off>=r.total || !r.items.length) break;
+  }
+  toast(`moving ${all.length} files to system Trash…`);
+  const r=await fetch("/api/personal/trash-files",{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({paths:all})});
+  if(!r.ok){ toast("trash move failed — files untouched"); return; }
+  const res=await r.json();
+  toast(`moved ${res.trashed} to system Trash${res.failed?` · ${res.failed} failed`:""}`);
+  loadTrash(true);
+}
+$("#trRestoreAll").onclick=_trRestoreAll; $("#trRestoreAllB").onclick=_trRestoreAll;
+$("#trEmpty").onclick=_trEmpty; $("#trEmptyB").onclick=_trEmpty;
+
 // ---- Algorithm explainer (ⓘ): exact algorithms behind each tab ----
 const ALGO = {
 search:{t:"Search — semantic embedding retrieval",h:`
@@ -6350,15 +6488,16 @@ function syncPersonalNav(attempt=0){
     enableQuickMark();   // quick bucket/delete marking on every thumbnail
     syncHideFlagged();   // header toggle: hide 🗑-flagged images everywhere
     document.querySelectorAll('[data-view="triage"], #navTriage').forEach(b=>b.style.display="");
-    // Evaluate (label/dispose) + Cleanup (delete-candidate review) — personal only.
-    document.querySelectorAll('[data-view="evaluate"], #navEvaluate, [data-view="cleanup"], #navCleanup')
+    // Evaluate (label/dispose) + Cleanup (delete-candidate review) + Trash — personal only.
+    document.querySelectorAll('[data-view="evaluate"], #navEvaluate, [data-view="cleanup"], #navCleanup, [data-view="trash"], #navTrash')
       .forEach(b=>b.style.display="");
-    // AI (C2PA AI-origin) + Jobs tabs are noise for a personal camera roll — hide
-    // them on the personal instance; the Faces tab takes the AI slot.
-    document.querySelectorAll('[data-view="ai"], #navAI, [data-view="jobs"], #navJobs')
+    // AI (C2PA), Jobs, Color, and Results tabs are noise for a personal camera
+    // roll — hide them on the personal instance.
+    document.querySelectorAll('[data-view="ai"], #navAI, [data-view="jobs"], #navJobs, '
+      + '[data-view="color"], #navColor, [data-view="results"], #navResults')
       .forEach(b=>b.style.display="none");
     const cur=location.hash.replace(/^#\/?/,"");
-    if(cur==="ai"||cur==="jobs") showView("faces");   // redirect off a hidden tab
+    if(["ai","jobs","color","results"].includes(cur)) showView("faces"); // off a hidden tab
   }).catch(()=>{ if(attempt<8) setTimeout(()=>syncPersonalNav(attempt+1), 2500); });
 }
 const _triage={bucket:"personal", sort:"p", offset:0, total:0, loading:false};
@@ -6427,10 +6566,25 @@ function pollVlm(){
 }
 // wire triage controls (idempotent — runs once at parse)
 (function wireTriage(){
+  const BN_T={personal:"personal",in_between:"in-between",reference:"reference"};
+  const syncMarkAll=()=>{ const b=$("#triageMarkAll"); if(b) b.textContent=`✓ Mark all shown as ${BN_T[_triage.bucket]}`; };
   document.querySelectorAll('#triageBuckets [data-bucket]').forEach(b=>b.onclick=()=>{
     document.querySelectorAll('#triageBuckets [data-bucket]').forEach(x=>x.className="nav");
-    b.className="nav on"; _triage.bucket=b.dataset.bucket; loadTriageBucket(true);
+    b.className="nav on"; _triage.bucket=b.dataset.bucket; syncMarkAll(); loadTriageBucket(true);
   });
+  const ma=$("#triageMarkAll");
+  if(ma) ma.onclick=async()=>{
+    // confirm the CURRENT subtab's bucket as ground truth for every loaded card
+    const paths=[...document.querySelectorAll("#triageGrid .card img")]
+      .map(img=>{ try{ return new URL(img.src, location.origin).searchParams.get("path"); }catch(_){ return null; } })
+      .filter(Boolean);
+    if(!paths.length) return;
+    if(!confirm(`Label ${paths.length} shown images as "${BN_T[_triage.bucket]}"? (Recorded as ground truth + bucket override.)`)) return;
+    const r=await fetch("/api/personal/set-bucket-bulk",{method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({paths, bucket:_triage.bucket})});
+    if(!r.ok){ toast("bulk label failed"); return; }
+    toast(`labeled ${paths.length} as ${BN_T[_triage.bucket]}`);
+  };
   const sort=$("#triageSort"); if(sort) sort.onchange=()=>{ _triage.sort=sort.value; loadTriageBucket(true); };
   const more=$("#triageMore"); if(more) more.onclick=()=>loadTriageBucket(false);
   ["uMin","uMax"].forEach(id=>{ const el=$("#"+id); if(el) el.oninput=()=>{

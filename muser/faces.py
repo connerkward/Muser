@@ -236,9 +236,17 @@ def cluster(min_cluster_size: int = 4, min_samples: int = 2) -> dict:
     import hdbscan
     ids = list(emb.keys())
     X = np.stack([emb[i].astype(np.float32) for i in ids])
-    # core_dist_n_jobs: default -1 forks a joblib worker per core, each holding
-    # big KDTree structures — on a loaded machine that OOM-killed the 33k-face
-    # cluster pass twice (silently). 4 workers is nearly as fast and bounded.
+    # KDTree-based HDBSCAN degenerates at 512-d (boruvka's spatial pruning stops
+    # working → memory blows up; the 33k-face pass got OOM-SIGKILLed repeatedly,
+    # with empty logs because SIGKILL leaves no traceback). PCA to 64-d first:
+    # ArcFace identity structure survives easily, and KDTree is effective again.
+    # core_dist_n_jobs bounded for the same reason (default forks per-core workers).
+    if X.shape[0] > 10000 and X.shape[1] > 64:
+        Xc = X - X.mean(axis=0, keepdims=True)
+        # eigendecomposition of the 512x512 covariance — cheap and deterministic
+        cov = (Xc.T @ Xc) / max(1, len(Xc) - 1)
+        evals, evecs = np.linalg.eigh(cov)
+        X = Xc @ evecs[:, -64:]
     clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples,
                                 metric="euclidean", core_dist_n_jobs=4)
     labels = clusterer.fit_predict(X)

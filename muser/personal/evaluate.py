@@ -25,9 +25,14 @@ def _album(path: str) -> str:
 
 
 def sample(n: int = 60, seed: int = 0) -> list[dict]:
-    """A diverse sample: balanced across predicted buckets, capped per album."""
+    """A diverse sample: balanced across predicted buckets, capped per album.
+    Already-labeled / already-flagged images are excluded — the point of a fresh
+    batch is NEW ground truth, and the client-side dedupe only lived per-session
+    (reloads kept re-serving tagged images)."""
+    labels = _load_labels()
+    done = {p for p, e in labels.items() if e.get("label") or e.get("flag")}
     entries = personalness.all_entries()
-    items = list(entries.items())
+    items = [(p, e) for p, e in entries.items() if p not in done]
     rng = random.Random(seed)
     rng.shuffle(items)
     target = max(1, n // 3)
@@ -56,7 +61,6 @@ def sample(n: int = 60, seed: int = 0) -> list[dict]:
             if len(chosen) >= n:
                 break
     rng.shuffle(chosen)
-    labels = _load_labels()
     return [{"path": p, "bucket": e.get("bucket"), "p": e.get("p"), "unc": e.get("unc"),
              "sig": e.get("sig"), "album": _album(p),
              "label": labels.get(p, {}).get("label"),
@@ -146,6 +150,22 @@ def label(path: str, verdict: str | None, model_bucket: str | None = None) -> No
         _save(labels)
 
 
+def label_bulk(paths, verdict: str, model_bucket: str | None = None) -> int:
+    """Persist one bucket label on many paths in ONE load-modify-save (lock-held).
+    Used by Triage's mark-all-shown — per-path label() would rewrite the file N
+    times (see human-labeled-data rule)."""
+    with _IO_LOCK:
+        labels = _load_labels()
+        for path in paths:
+            e = labels.get(path, {})
+            e["label"] = verdict
+            if model_bucket is not None:
+                e["model"] = model_bucket
+            labels[path] = e
+        _save(labels)
+    return len(paths)
+
+
 def set_flag(path: str, flag: str | None) -> None:
     """Set/clear the disposition flag ('depri' | 'delete' | None); keeps any bucket label."""
     set_flags_bulk([path], flag)
@@ -214,6 +234,51 @@ def export_status() -> dict:
             "pending_paths": pending, "exported": len(manifest), "dest": EXPORT_ROOT}
 
 
+REF_VECTORS_NPZ = data_file("exported_ref_vectors.npz")
+
+
+def _snapshot_ref_vectors(paths) -> int:
+    """Persist the SigLIP embeddings of about-to-be-MOVED reference images.
+    Moving a file eventually purges its row from the personal index — which
+    would silently drop the example from the personal-vs-reference training set,
+    draining the reference class as the user curates. The npz keeps every
+    exported reference example trainable forever (path → 1152-d fp16)."""
+    if not paths:
+        return 0
+    import numpy as np
+
+    from ..index import MuserIndex
+    try:
+        import lancedb
+        db = lancedb.connect(MuserIndex().db_path)
+        t = db.open_table("img__siglip2_b").to_arrow()
+        tp = t.column("path").to_pylist()
+        want = set(paths)
+        idx = [i for i, p in enumerate(tp) if p in want]
+        if not idx:
+            return 0
+        tv = t.column("vector")
+        new = {tp[i]: np.asarray(tv[i].as_py(), np.float16) for i in idx}
+    except Exception:
+        return 0
+    # merge with any existing snapshot (union by path, new wins)
+    merged = {}
+    if REF_VECTORS_NPZ.exists():
+        try:
+            z = np.load(REF_VECTORS_NPZ, allow_pickle=False)
+            merged = {p: z["X"][i] for i, p in enumerate(z["ids"])}
+        except Exception:
+            merged = {}
+    merged.update(new)
+    ids = list(merged.keys())
+    X = np.stack([merged[p] for p in ids]).astype(np.float16)
+    tmp = REF_VECTORS_NPZ.with_suffix(".npz.tmp")
+    with open(tmp, "wb") as f:
+        np.savez(f, ids=np.array(ids, dtype=object).astype("U"), X=X)
+    os.replace(tmp, REF_VECTORS_NPZ)
+    return len(new)
+
+
 def export_to_main() -> dict:
     """MOVE human-'reference' / COPY human-'in_between' images into the main
     library tree (EXPORT_ROOT/<bucket>/). Collision-safe, manifest-tracked.
@@ -221,6 +286,9 @@ def export_to_main() -> dict:
     import hashlib
     import shutil
     st = export_status()
+    # Snapshot embeddings of reference images BEFORE moving them — keeps the
+    # exported examples in the training set after the index purges their rows.
+    _snapshot_ref_vectors(st["pending_paths"].get("reference", []))
     manifest = _load_manifest()
     done = {"reference": 0, "in_between": 0}
     for bucket, paths in st["pending_paths"].items():
