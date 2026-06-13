@@ -631,7 +631,7 @@
                       overflow:hidden; transition:border .15s; }
   #evaluateView .ev.agree { border-color:var(--good,#6ab04c); }
   #evaluateView .ev.dis { border-color:#d08770; }
-  #evaluateView .ev img { width:100%; height:190px; object-fit:cover; display:block; background:#0c0c0c; cursor:zoom-in; }
+  #evaluateView .ev img { width:100%; height:190px; object-fit:contain; display:block; background:rgba(0,0,0,.06); cursor:zoom-in; }
   #evaluateView .ev .body { padding:9px 10px; }
   #evaluateView .ev .pred { font-size:11px; color:var(--mut); margin-bottom:7px; }
   #evaluateView .ev .bk { font-weight:600; } #evaluateView .bk.personal { color:#5b9bd5; }
@@ -1599,7 +1599,7 @@
     <div class="eqkey"><b>blur</b> = 100·clamp(1 − Var(∇²I)/140) — variance of the Laplacian, low ⇒ out of focus · <b>exposure/tiny</b> — pixel checks below · <b>dup</b> = 70 if a near-duplicate · <b>σ(w·e<sub>x</sub>+b)</b> — the learned P(delete) on the SigLIP embedding · the WORST single signal wins.</div>
     <p><b>Three sources, ranked by a 0–100 junk score (worst defect wins):</b></p>
     <ul>
-      <li><b>Pixel heuristics</b> (no ML): blur = variance of the Laplacian &lt;140; exposure = ≥70% near-black or ≥60% near-white; tiny = &lt;0.08 MP.</li>
+      <li><b>Pixel heuristics</b> (no ML): blur = variance of the Laplacian &lt;140 (84% delete-precision on your flags); blown-out ≥60% near-white (82%+); near-total black (lens-cap). <b>Mid-dark deferred to the model</b> — "mostly black" measured only 56% precision (below the 76% base rate), so it no longer flags on its own. tiny = &lt;0.08 MP.</li>
       <li><b>Near-duplicate</b>: a non-representative member of a dupe group joins at 70.</li>
       <li><b>Learned deletion model</b>: logistic regression on the 768-d <b>SigLIP</b> embedding — P(delete) — trained on YOUR 🗑 flags (positives) vs saved + bucket-labeled-not-flagged (negatives). Surfaces as <code>model NN%</code>; <b>Retrain deletion model</b> refits it.</li>
     </ul>
@@ -5531,7 +5531,7 @@ function evCard(it){
   const d=document.createElement("div"); d.className="ev"; d.dataset.path=it.path; d.dataset.model=it.bucket;
   const sig=it.sig||{}; const tags=[]; if(sig.people)tags.push("ppl"); if(sig.cam)tags.push("cam"); if((sig.F||0)>0)tags.push("face"); if(sig.doc)tags.push("doc");
   d.innerHTML=`
-    <img loading="lazy" src="/api/thumb?path=${enc(it.path)}&size=300" title="${esc(it.album||"")}">
+    <img loading="lazy" src="/api/thumb?path=${enc(it.path)}&size=300&fit=contain" title="${esc(it.album||"")}">
     <div class="body">
       <div class="pred">model: <span class="bk ${it.bucket}">${EV_BN[it.bucket]}</span> · P${Math.round((it.p||0)*100)} u${Math.round((it.unc||0)*100)}${tags.length?" · "+tags.join(" "):""}</div>
       <div class="btns">
@@ -5950,7 +5950,7 @@ evaluate:{t:"Evaluate — ground truth + retraining",h:`
 cleanup:{t:"Cleanup — delete-candidate detection",h:`
 <details open><summary>Pixel heuristics (no model)</summary><ul>
 <li><b>blur</b>: variance of the Laplacian &lt;140 (out-of-focus / motion blur)</li>
-<li><b>exposure</b>: ≥70% near-black or ≥60% near-white pixels</li>
+<li><b>exposure</b>: ≥60% near-white (blown out) or near-total black (lens-cap); mid-dark deferred to the model — "mostly black" was anti-predictive (56% vs 76% base)</li>
 <li><b>tiny</b>: original &lt;0.08 MP</li></ul>
 <p>Junk score = the WORST single defect (one bad axis ⇒ candidate).</p></details>
 <details><summary>Near-duplicates</summary><p>Non-representative members of a dupe group (from <code>scores.json</code>) join at score 70.</p></details>

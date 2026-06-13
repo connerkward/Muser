@@ -84,12 +84,17 @@ def cache_exists() -> bool:
 
 
 # --- scoring thresholds (module-level for one-line tuning) ---
-BLUR_HARD = 60.0      # var below this ⇒ clearly blurry
-BLUR_SOFT = 140.0     # var below this ⇒ soft (mild signal)
-DARK_HARD = 0.70      # ≥70% near-black pixels ⇒ mostly black
-DARK_SOFT = 0.50
-BRIGHT_HARD = 0.60    # ≥60% near-white ⇒ blown out
-MP_TINY = 0.08        # < 0.08 MP (~300×260) ⇒ tiny
+# 'mostly black' DEBIASED (measured against the user's flags): dark≥0.70 had only
+# 56% delete-precision — BELOW the 76% base rate, i.e. anti-predictive; lots of
+# dark frames are legit night/moody shots. It only beats base at ≥0.97 (78%) and
+# is only strong at ≥0.995 (95% — true lens-cap/pocket black). So exposure-dark
+# is left to the learned model except near-total black. Blown-out stays (82–94%).
+BLUR_HARD = 60.0       # var below this ⇒ clearly blurry (84% precision)
+BLUR_SOFT = 140.0      # var below this ⇒ soft (mild signal)
+DARK_BLACK = 0.995     # near-total black ⇒ lens-cap / pocket shot (95% precision)
+DARK_VERY = 0.97       # very dark ⇒ weak signal (78%, ~base rate)
+BRIGHT_HARD = 0.60     # ≥60% near-white ⇒ blown out (82%+)
+MP_TINY = 0.08         # < 0.08 MP (~300×260) ⇒ tiny
 MP_SMALL = 0.20
 
 
@@ -106,10 +111,12 @@ def delete_score(e: dict) -> tuple[int, list[str]]:
         frac = (BLUR_SOFT - blur) / BLUR_SOFT          # 0..1
         score = max(score, 0.40 + 0.55 * min(1.0, frac))
         reasons.append("blurry" if blur < BLUR_HARD else "soft focus")
-    if dark >= DARK_HARD:
-        score = max(score, 0.88); reasons.append("mostly black")
-    elif dark >= DARK_SOFT:
-        score = max(score, 0.60); reasons.append("dark")
+    if dark >= DARK_BLACK:
+        score = max(score, 0.85); reasons.append("black frame")
+    elif dark >= DARK_VERY:
+        score = max(score, 0.55); reasons.append("very dark")
+    # (dark 0.70–0.97 deliberately scores nothing — below base rate; the learned
+    #  model decides those from real flags instead of this biased heuristic.)
     if bright >= BRIGHT_HARD:
         score = max(score, 0.82); reasons.append("blown out")
     if mp < MP_TINY:
