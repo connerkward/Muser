@@ -54,3 +54,14 @@ Live ideas to revisit, not yet scheduled. Promote to issues / commits when picke
 - **Negative-prompt α slider** — ✅ shipped 2026-06-03.
 - **Cart persistence** — ✅ shipped 2026-06-03 (localStorage instead of sessionStorage).
 - **Unique IDs per image** — ✅ in flight (uid = blake2b(path) first 12 hex chars).
+
+## Personal Google-Photos triage sub-tool
+
+Full session writeup: `reports/2026-06-13-personal-triage.md`. Sub-tool shipped
+2026-06-13 (Faces/Evaluate/Cleanup/Trash tabs, label-trained personal-vs-reference
+~88% CV + deletion ~98% prec models, classification frames). Open follow-ups:
+
+- **Tests for the new personal endpoints/models** — none exist; the rest of the repo has CI. `/api/personal/{train,set-bucket,flag-bulk,delete-candidates,trash-files,classes,learning-curve}`, the two model trainers, the label-store hardening (concurrency hammer per human-labeled-data-rule).
+- **In-process faces re-cluster safety** — `_load_npz` fix means `cluster()` works again, but clustering 33k faces inside the warm service (post-index auto-trigger) is still heavy; consider offloading to a subprocess. Only matters when new photos are added.
+- **Finish the score metrics** — `scores.json` is aesthetic-only (NSFW + aesthetic_v2 + pickscore); novelty / aesthetic_v25 / hps_v21 were deliberately not computed (slow). Resume `muser personal` scoring if Interesting needs the full blend (caches are incremental).
+- **Bucket model plateaued ~88%** — more bucket-labeling has diminishing returns; richer features (faces signal as a learned feature, metadata) only if the plateau matters.
