@@ -217,6 +217,13 @@
   .card .thumb { position:relative; aspect-ratio:1; background:var(--paper);
                  cursor:zoom-in; overflow:hidden; }
   .card .thumb img { width:100%; height:100%; object-fit:cover; }
+  /* Pinterest-style fade-in (search/showcase grid only): the grey box gently
+     pulses until each image has decoded, then the thumb fades in — so the grid
+     never flashes white / pops as results stream or swap in. Scoped to #results
+     so the analytic tabs (their own containers) are unaffected. */
+  #results .card .thumb:has(img:not(.ld)) { animation:skel-pulse 1.4s ease-in-out infinite; }
+  #results .card .thumb img { opacity:0; transition:opacity .4s ease; }
+  #results .card .thumb img.ld { opacity:1; }
   .dupe { position:absolute; top:8px; right:8px; background:rgba(0,0,0,.72); color:#fff;
           font-size:10px; padding:2px 7px; border:0; cursor:pointer; }
   .scoreb { position:absolute; top:8px; left:8px; background:rgba(0,0,0,.72); color:#fff;
@@ -2764,6 +2771,27 @@ function showSkeletons(n = 12){
     g.appendChild(d);
   }
 }
+
+// Pinterest-style thumb fade-in for the #results grid. One observer wires every
+// image added by any path (search, showcase, load-more, masonry) so it fades up
+// from its grey skeleton box instead of popping in — killing the search flicker.
+// Cached/complete images are marked instantly so they never stay hidden.
+function _wireThumbFade(img){
+  if(img.dataset.fade) return; img.dataset.fade = "1";
+  if(img.complete && img.naturalWidth){ img.classList.add("ld"); return; }
+  img.addEventListener("load",  ()=>img.classList.add("ld"), {once:true});
+  img.addEventListener("error", ()=>img.classList.add("ld"), {once:true});  // broken img: don't pulse forever
+}
+(function initThumbFade(){
+  const g = document.getElementById("results");
+  if(!g){ document.addEventListener("DOMContentLoaded", initThumbFade, {once:true}); return; }
+  g.querySelectorAll(".thumb img").forEach(_wireThumbFade);
+  new MutationObserver(ms=>{ for(const m of ms) for(const n of m.addedNodes){
+    if(n.nodeType !== 1) continue;
+    if(n.tagName === "IMG") _wireThumbFade(n);
+    else if(n.querySelectorAll) n.querySelectorAll(".thumb img").forEach(_wireThumbFade);
+  }}).observe(g, {childList:true, subtree:true});
+})();
 
 async function search(){
   if (_busy) return;  // overlay covers UI while the model is loading
