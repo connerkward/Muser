@@ -65,3 +65,11 @@ Full session writeup: `reports/2026-06-13-personal-triage.md`. Sub-tool shipped
 - **In-process faces re-cluster safety** — `_load_npz` fix means `cluster()` works again, but clustering 33k faces inside the warm service (post-index auto-trigger) is still heavy; consider offloading to a subprocess. Only matters when new photos are added.
 - **Finish the score metrics** — `scores.json` is aesthetic-only (NSFW + aesthetic_v2 + pickscore); novelty / aesthetic_v25 / hps_v21 were deliberately not computed (slow). Resume `muser personal` scoring if Interesting needs the full blend (caches are incremental).
 - **Bucket model plateaued ~88%** — more bucket-labeling has diminishing returns; richer features (faces signal as a learned feature, metadata) only if the plateau matters.
+
+## Distribution / packaging
+
+- **MCP server runtime distribution** (distribution solved 2026-06-17; runtime deferred) — the plugin's `mcpServers` runs `bun mcp-ts/src/mcp.ts`, but a Claude Code plugin install provides NO runtime: `bun` isn't assumed (Anthropic assumes Node/`npx`, or a binary committed under `${CLAUDE_PLUGIN_ROOT}`), and the server also needs the Python `muser serve` + model. So `/plugin install muser@connerkward` installs + indexes, but doesn't work on first call without manual setup. Fix options:
+  - Repackage the MCP to `npx -y <pkg>` (publish to npm — Node is the runtime Anthropic actually assumes); removes the bun + clone-build dependency. OR
+  - `bun build --compile` → commit per-platform standalone binaries under `bin/`, referenced via `${CLAUDE_PLUGIN_ROOT}` (plugin install bundles committed files but does NOT auto-download GitHub Releases) — fully runtime-free.
+  - Either way the on-device Python `muser serve` + first-run model download remains (inherent to local search); SKILL.md must keep documenting it.
+  - Same fix applies to `connerkward/mcp-apple-notes` (also a `bun` MCP plugin).
