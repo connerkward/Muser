@@ -1,0 +1,13 @@
+{
+  "name": "muser",
+  "description": "Local-first semantic image search — index folders of images and find them by natural-language description. On-device SigLIP/CLIP embeddings + LanceDB, fully offline, no API keys. CLI + MCP server with an interactive results gallery.",
+  "version": "0.2.0",
+  "author": { "name": "Conner K Ward", "url": "https://github.com/connerkward" },
+  "homepage": "https://github.com/connerkward/Muser",
+  "repository": "https://github.com/connerkward/Muser",
+  "license": "MIT",
+  "keywords": ["semantic-search","image-search","clip","siglip","lancedb","mcp","claude-skill","on-device","offline","vector-search"],
+  "mcpServers": {
+    "muser": { "command": "bun", "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-ts/src/mcp.ts", "--stdio"] }
+  }
+}
