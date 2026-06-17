@@ -73,3 +73,7 @@ Full session writeup: `reports/2026-06-13-personal-triage.md`. Sub-tool shipped
   - `bun build --compile` → commit per-platform standalone binaries under `bin/`, referenced via `${CLAUDE_PLUGIN_ROOT}` (plugin install bundles committed files but does NOT auto-download GitHub Releases) — fully runtime-free.
   - Either way the on-device Python `muser serve` + first-run model download remains (inherent to local search); SKILL.md must keep documenting it.
   - Same fix applies to `connerkward/mcp-apple-notes` (also a `bun` MCP plugin).
+
+## Announce
+
+- **Crosspost the muser publish** (deferred 2026-06-17) — muser shipped as a triple-duty Claude Code plugin (CLI + MCP server + bundled skill) in the `connerkward/ckw-skills` marketplace, topic-indexed for skill/MCP scrapers. Announce via the `crosspost` skill (human-gated, preview-first): lead with `docs/demo.gif`, the one-line install (`/plugin marketplace add connerkward/ckw-skills` → `/plugin install muser@connerkward`), and the on-device/offline/$0 angle; tag @claudeai. (The MCP-runtime-distribution item under "Distribution / packaging" is the prerequisite for a clean install before a big push.)
