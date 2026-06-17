@@ -1,0 +1,79 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Publish Muser to the official MCP Registry as a .mcpb bundle.
+#
+# Cut a release by pushing a version tag:
+#     git tag v0.1.0
+#     git push origin v0.1.0
+#
+# On a `v*` tag this workflow:
+#   1. Builds the MCPB bundle  -> muser.mcpb  (a `uv`-type Python bundle: ships
+#      pyproject.toml + the muser package; the host installs deps via uv on first run).
+#   2. Computes its sha256 and injects it as packages[0].fileSha256 into a
+#      working copy of server.json (NOT committed — only used for the publish).
+#   3. Creates/updates the GitHub Release for the tag and attaches the .mcpb
+#      (server.json's packages[0].identifier points at this release asset URL).
+#   4. Publishes server.json to registry.modelcontextprotocol.io via the
+#      mcp-publisher CLI using GitHub OIDC (no stored secret needed).
+#
+# IMPORTANT: a `.mcpbignore` MUST exclude heavy/non-runtime files (model weights
+# like sam2.1_b.pt, the TS mcp-ts/ ext-app, node_modules, .venv, eval/, reports/,
+# docs/screenshots) so the bundle stays small — only the `muser/` package +
+# pyproject.toml + README + LICENSE are needed at runtime.
+# ──────────────────────────────────────────────────────────────────────────────
+name: Publish to MCP Registry
+
+on:
+  push:
+    tags: ["v*"] # Triggers on version tags like v0.1.0
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Required for MCP Registry OIDC authentication (no secret)
+      contents: write # Required to create the GitHub Release and upload the .mcpb asset
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Node (for the MCPB packer CLI)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install MCPB packer
+        run: npm install -g @anthropic-ai/mcpb # bin `mcpb` (v2.1.2); @modelcontextprotocol/mcpb does NOT exist
+
+      - name: Validate manifest
+        run: mcpb validate manifest.json
+
+      - name: Pack MCPB bundle
+        run: mcpb pack . muser.mcpb # mcpb pack <directory> [output]; .mcpbignore excludes heavy/non-runtime files
+
+      - name: Compute sha256 and inject fileSha256 into server.json
+        run: |
+          SHA=$(sha256sum muser.mcpb | awk '{print $1}')
+          echo "muser.mcpb sha256=$SHA"
+          jq --arg sha "$SHA" '.packages[0].fileSha256 = $sha' server.json > server.tmp.json
+          mv server.tmp.json server.json
+          echo "----- server.json packages[0] -----"
+          jq '.packages[0]' server.json
+
+      - name: Create/Update GitHub Release and upload .mcpb
+        uses: softprops/action-gh-release@v2
+        with:
+          files: muser.mcpb
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install mcp-publisher CLI
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Authenticate to MCP Registry (GitHub OIDC)
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server to MCP Registry
+        run: ./mcp-publisher publish

@@ -1,0 +1,73 @@
+{
+  "manifest_version": "0.3",
+  "name": "muser",
+  "version": "0.1.0",
+  "description": "Local-first semantic image search — index folders of images and find them by natural-language description (SigLIP/CLIP embeddings + LanceDB), fully offline with no API keys. Plus color search, AI-origin signals, and a cloud generate add-on.",
+  "author": {
+    "name": "Conner K Ward",
+    "url": "https://github.com/connerkward"
+  },
+  "homepage": "https://github.com/connerkward/Muser",
+  "documentation": "https://github.com/connerkward/Muser#readme",
+  "license": "MIT",
+  "keywords": [
+    "image-search",
+    "semantic-search",
+    "clip",
+    "siglip",
+    "lancedb",
+    "mcp",
+    "model-context-protocol",
+    "local-first",
+    "embeddings",
+    "vector-search"
+  ],
+  "server": {
+    "type": "uv",
+    "entry_point": "muser/mcp.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "${__dirname}",
+        "muser-mcp"
+      ],
+      "env": {
+        "MUSER_SERVICE_URL": "${user_config.MUSER_SERVICE_URL}",
+        "OPENAI_API_KEY": "${user_config.OPENAI_API_KEY}",
+        "FAL_KEY": "${user_config.FAL_KEY}"
+      }
+    }
+  },
+  "user_config": {
+    "MUSER_SERVICE_URL": {
+      "type": "string",
+      "title": "Muser Service URL",
+      "description": "Override the embedded muser service URL (default http://127.0.0.1:7777). The MCP server is a thin HTTP client of `muser serve` and auto-spawns it if it isn't already listening.",
+      "sensitive": false,
+      "required": false
+    },
+    "OPENAI_API_KEY": {
+      "type": "string",
+      "title": "OpenAI API Key",
+      "description": "Optional. Only used by the captioning / generate add-ons. Core search/index/color run on-device with no key.",
+      "sensitive": true,
+      "required": false
+    },
+    "FAL_KEY": {
+      "type": "string",
+      "title": "fal.ai API Key",
+      "description": "Optional. Only used by the cloud generate pipeline (image/3D/LoRA). Core search is fully local and never needs it.",
+      "sensitive": true,
+      "required": false
+    }
+  },
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ]
+  }
+}

@@ -1,0 +1,46 @@
+# Files excluded from the .mcpb bundle (only the runtime Python server is needed).
+# Heavy weights / caches / non-runtime trees stay out so the bundle is small.
+
+# Large model weights (downloaded on demand at runtime, not shipped)
+*.pt
+sam2.1_b.pt
+
+# TypeScript ext-app (NOT the canonical MCP server; the Python `muser-mcp` is)
+mcp-ts/
+ext-apps
+node_modules/
+mcp-ts/node_modules/
+dist/
+*.lock
+bun.lock
+package.json
+vite.config.ts
+
+# Python envs / caches
+.venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+uv.lock
+
+# Non-runtime project trees
+eval/
+tests/
+reports/
+docs/
+scripts/
+skills/
+.changeset/
+.claude/
+.claude-plugin/
+.github/
+.playwright-mcp/
+.scratch/
+
+# Images / scratch artifacts at repo root
+*.png
+*.jpg
+.DS_Store
+CLAUDE.md
+TODO.md
+REQUIREMENTS.md

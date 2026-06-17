@@ -1,0 +1,42 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.connerkward/muser",
+  "description": "Local-first semantic image search (SigLIP/CLIP + LanceDB), fully offline, no API keys.",
+  "title": "Muser",
+  "websiteUrl": "https://github.com/connerkward/Muser",
+  "repository": {
+    "url": "https://github.com/connerkward/Muser",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/connerkward/Muser/releases/download/v0.1.0/muser.mcpb",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "MUSER_SERVICE_URL",
+          "description": "Override the embedded muser service URL (default http://127.0.0.1:7777). The MCP server is a thin HTTP client of `muser serve` and auto-spawns it if it isn't already listening.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "OPENAI_API_KEY",
+          "description": "Optional. Only used by the captioning / generate add-ons (GPT-4o-mini captions, gpt-image edits). Core search/index/color run on-device with no key.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "FAL_KEY",
+          "description": "Optional. Only used by the cloud generate pipeline (fal.ai image/3D/LoRA). Core search is fully local and never needs it.",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}
