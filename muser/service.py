@@ -1824,7 +1824,10 @@ def create_app(model: str = DEFAULT_MODEL):
                min_short_side: int | None = None, max_short_side: int | None = None,
                min_long_side: int | None = None, max_long_side: int | None = None,
                min_aspect: float | None = None, max_aspect: float | None = None,
-               min_filesize: int | None = None, max_filesize: int | None = None):
+               min_filesize: int | None = None, max_filesize: int | None = None,
+               tsize: int = 540):
+        # tsize: the client's thumbnail pixel size (round(280*DPR)); used to pre-warm the
+        #   thumb cache at the exact size the grid will request, so cards load together.
         # ai_min: keep only results with GRIP AI-likelihood % >= ai_min (0 = off).
         # sort: "ai"/"ai_asc" reorders by AI-likelihood (default = relevance).
         # method: "embed" (cosine, default), "phash" (perceptual-hash Hamming,
@@ -1875,6 +1878,7 @@ def create_app(model: str = DEFAULT_MODEL):
                 qv = _blend_vector(emb, pos, negs, neg_strength)
             results = _run_search(qv, k, dedup, method, folder, meta=meta, ai_min=ai_min, ai_max=ai_max, sort=sort)
         refinements = _refinements([r["path"] for r in results], q)
+        _warm_thumbs([r["path"] for r in results], size=tsize)  # parallel pre-warm
         return {"query": q, "model": state.model_name, "results": results,
                 "refinements": refinements, "concepts": concepts, "match": match}
 
@@ -2688,6 +2692,60 @@ def create_app(model: str = DEFAULT_MODEL):
     THUMB_CACHE.mkdir(parents=True, exist_ok=True)
     THUMB_KEY_VERSION = "v2-smartcrop"
 
+    def _thumb_cache_path(path: str, size: int, fit: str):
+        import hashlib
+        try:
+            mtime = int(os.path.getmtime(path))
+        except OSError:
+            return None
+        key = hashlib.blake2b(
+            f"{THUMB_KEY_VERSION}|{path}|{mtime}|{size}|{fit}".encode(), digest_size=12).hexdigest()
+        return THUMB_CACHE / f"{key}.jpg"
+
+    def _ensure_thumb(path: str, size: int = 540, fit: str = "cover"):
+        """Return the cached thumbnail path, generating it if missing. None on failure.
+        Shared by the /api/thumb route and the search pre-warmer."""
+        if not _serve_allowed(path):
+            return None
+        fit = "contain" if fit == "contain" else "cover"
+        cached = _thumb_cache_path(path, size, fit)
+        if cached is None:
+            return None
+        if cached.exists():
+            return cached
+        from .embedders import _load_rgb
+        try:
+            img = _load_rgb(path, max_side=max(size * 2, 1024))
+            if fit == "contain":
+                from PIL import Image
+                sq = img.copy(); sq.thumbnail((size, size), Image.LANCZOS)
+            else:
+                sq = _smart_crop_square(img, size)
+            tmp = cached.with_suffix(".jpg.tmp")
+            sq.save(tmp, "JPEG", quality=82, optimize=False)
+            tmp.replace(cached)  # atomic swap so partial writes never serve
+            return cached
+        except Exception:
+            return None
+
+    import concurrent.futures as _cf
+    # one shared pool so search results warm in parallel (PIL releases the GIL on
+    # decode/resize, so threads genuinely parallelize the CPU work)
+    _THUMB_POOL = _cf.ThreadPoolExecutor(max_workers=min(8, (os.cpu_count() or 4)),
+                                         thread_name_prefix="thumbwarm")
+    def _warm_thumbs(paths, size: int = 540, fit: str = "cover"):
+        """Fire-and-forget: pre-generate thumbnails for a result set in parallel so the
+        browser's requests all hit the warm cache (fast FileResponse) instead of
+        trickling in as each is generated on demand."""
+        for p in paths:
+            c = _thumb_cache_path(p, size, fit)
+            if c is None or c.exists():
+                continue
+            try:
+                _THUMB_POOL.submit(_ensure_thumb, p, size, fit)
+            except RuntimeError:
+                break  # pool shutting down
+
     # ---- File-serving jail (path traversal / secret-file leak guard) ---------
     # /api/image|thumb|upscale serve files named by a `?path=` query param. Without
     # a guard, `?path=/Users/.../central/.env` or `~/.ssh/id_rsa` leaks any local
@@ -2742,43 +2800,13 @@ def create_app(model: str = DEFAULT_MODEL):
         # is a no-op and ultra-wide / tall sources don't get squashed.
         # `fit=contain` preserves aspect (longest side = size) — used by the
         # masonry layout so tiles pack by their true proportions.
-        if not _serve_allowed(path):
-            raise HTTPException(404, "not found")
-        fit = "contain" if fit == "contain" else "cover"
-        try:
-            mtime = int(os.path.getmtime(path))
-        except OSError:
-            raise HTTPException(404, "stat failed")
-        import hashlib
-        key = hashlib.blake2b(
-            f"{THUMB_KEY_VERSION}|{path}|{mtime}|{size}|{fit}".encode(),
-            digest_size=12,
-        ).hexdigest()
-        cached = THUMB_CACHE / f"{key}.jpg"
         # The URL key changes when mtime or size changes, so we can be
         # aggressive with the browser cache. A week is generous.
         headers = {"Cache-Control": "public, max-age=604800, immutable"}
-        if cached.exists():
-            return FileResponse(cached, media_type="image/jpeg", headers=headers)
-        from .embedders import _load_rgb
-        try:
-            # Decode at a working res that's big enough to crop a square from
-            # the short side then resize to `size`. max_side = 2 * size covers
-            # most aspect ratios; ultra-wide (e.g. 16:1) would still benefit
-            # but the bandwidth cost of decoding the original is prohibitive.
-            img = _load_rgb(path, max_side=max(size * 2, 1024))
-            if fit == "contain":
-                from PIL import Image  # not in this scope otherwise (imported per-fn)
-                sq = img.copy()
-                sq.thumbnail((size, size), Image.LANCZOS)  # aspect-preserving
-            else:
-                sq = _smart_crop_square(img, size)
-            tmp = cached.with_suffix(".jpg.tmp")
-            sq.save(tmp, "JPEG", quality=82, optimize=False)
-            tmp.replace(cached)  # atomic swap so partial writes never serve
-            return FileResponse(cached, media_type="image/jpeg", headers=headers)
-        except Exception:
+        cached = _ensure_thumb(path, size, fit)
+        if cached is None:
             raise HTTPException(404, "thumb failed")
+        return FileResponse(cached, media_type="image/jpeg", headers=headers)
 
     # Formats browsers render natively — served raw (fast FileResponse path).
     # Anything else (TIFF/BMP/…) is transcoded to a browser-safe image on the

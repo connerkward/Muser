@@ -2167,7 +2167,7 @@ function openCart(){
     // Italic-serif "(upscaled)" tag after the filename — visual cue that this
     // item won't ship as-is. The per-item upscale toggle sits in the frow next
     // to Reveal / Remove so the user can flip the flag without leaving the modal.
-    d.innerHTML = `<img loading="lazy" src="/api/thumb?path=${enc(p)}" title="${p}">`
+    d.innerHTML = `<img decoding="async" fetchpriority="high" src="/api/thumb?path=${enc(p)}" title="${p}">`
       + `<div class="fn">${p}<span class="upmark" style="display:${upscaled?'inline':'none'};font:italic 400 11px/1 var(--serif);color:var(--mut);margin-left:6px"> (upscaled)</span></div>`
       + `<textarea class="cap" rows="1" placeholder="loading caption…"></textarea>`
       + `<div class="capsaved"></div>`
@@ -2836,7 +2836,7 @@ async function search(){
   if(_searchAbort) _searchAbort.abort();
   _searchAbort = new AbortController();
   let r;
-  try { r = await (await fetch(`/api/search?q=${enc(q)}&k=${_k}${folder?`&folder=${enc(folder)}`:""}${neg?`&neg=${enc(neg)}&neg_strength=${negS}`:""}${matchP}${fParams}`, {signal:_searchAbort.signal})).json(); }
+  try { r = await (await fetch(`/api/search?q=${enc(q)}&k=${_k}&tsize=${THUMB}${folder?`&folder=${enc(folder)}`:""}${neg?`&neg=${enc(neg)}&neg_strength=${negS}`:""}${matchP}${fParams}`, {signal:_searchAbort.signal})).json(); }
   catch(e){ if(e.name==="AbortError") return; _loading=false; throw e; }   // abort: a newer search now owns _loading
   _renderHits(r);
   _loading=false;
@@ -3668,7 +3668,7 @@ function _renderHits(r){
     if(h.width)  c.dataset.w=h.width;
     if(h.height) c.dataset.h=h.height;
     c.innerHTML=`
-      <div class="thumb"><span class="scoreb" title="${scoreTitle}">${pct}</span>${badge}${aib}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}&size=${THUMB}" title="${h.name} · uid:${uid}"></div>
+      <div class="thumb"><span class="scoreb" title="${scoreTitle}">${pct}</span>${badge}${aib}<img decoding="async" fetchpriority="high" src="/api/thumb?path=${enc(h.path)}&size=${THUMB}" title="${h.name} · uid:${uid}"></div>
       <div class="meta"><div class="name" title="${h.path}${uid?' · uid:'+uid:''}">${h.name}</div>
         <div class="bar"><i style="width:${pct}%"></i></div></div>
       <div class="foot">
@@ -3999,7 +3999,7 @@ function openDupes(h){
   const f=$("#dupesFiles"); f.innerHTML="";
   h.dupes.forEach(p=>{
     const d=document.createElement("div"); d.className="file";
-    d.innerHTML=`<img loading="lazy" src="/api/thumb?path=${enc(p)}" title="${p}"><div class="fn">${p}</div><div class="frow"><button class="lens">Lens</button><button class="rev">Reveal</button></div>`;
+    d.innerHTML=`<img decoding="async" fetchpriority="high" src="/api/thumb?path=${enc(p)}" title="${p}"><div class="fn">${p}</div><div class="frow"><button class="lens">Lens</button><button class="rev">Reveal</button></div>`;
     d.querySelector("img").onclick=()=>window.open(`/api/image?path=${enc(p)}`,"_blank");
     d.querySelector(".lens").onclick=e=>lensSearch(p,e.currentTarget);
     d.querySelector(".rev").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:p})}); toast("revealed in Finder"); };
@@ -4107,7 +4107,7 @@ function renderImageDetail(d){
     const tiles = d.dupes.map(p => {
       const fn = p.split("/").pop();
       return `<a data-path="${p.replace(/"/g,'&quot;')}" title="${p}" class="ddupe">
-        <img loading="lazy" src="/api/thumb?path=${enc(p)}&size=200">
+        <img decoding="async" fetchpriority="high" src="/api/thumb?path=${enc(p)}&size=200">
         <div class="dn">${fn}</div></a>`;
     }).join("");
     dupesBlock = `<div class="dsec"><h3>duplicates (${d.dupe_count})</h3>
@@ -4845,7 +4845,7 @@ function _renderScoreCard(h){
   c.dataset.uid = uid;
   c.dataset.path = h.path;
   c.dataset.filtertext = _filterText(h.path, h.name);
-  c.innerHTML = `<div class="thumb"><span class="scoreb">${Math.round(h.score*100)}</span>${dupe}<img loading="lazy" src="/api/thumb?path=${enc(h.path)}" title="${h.name}${uid?' · uid:'+uid:''}"></div>
+  c.innerHTML = `<div class="thumb"><span class="scoreb">${Math.round(h.score*100)}</span>${dupe}<img decoding="async" fetchpriority="high" src="/api/thumb?path=${enc(h.path)}" title="${h.name}${uid?' · uid:'+uid:''}"></div>
     <div class="meta"><div class="name" title="${h.path}${uid?' · uid:'+uid:''}">${h.name}</div></div>
     <div class="foot"><button class="lens" title="Copy image + open Google Lens (⌘V to search where it appears)">Lens</button></div>`;
   c.querySelector(".thumb").onclick = () => uid ? openDetail(uid) : window.open(`/api/image?path=${enc(h.path)}`,"_blank");
@@ -4859,7 +4859,7 @@ function _renderAICard(h){
   const c = document.createElement("div"); c.className = "card";
   c.dataset.path = h.path;
   c.dataset.filtertext = _filterText(h.path, h.name);
-  c.innerHTML = `<div class="thumb"><span class="aiflag" title="C2PA declares this ${h.kind==="composite"?"AI-edited":"AI-generated"}${h.tool?" — "+h.tool:""}">${how}?</span><img loading="lazy" src="/api/thumb?path=${enc(h.path)}"></div>
+  c.innerHTML = `<div class="thumb"><span class="aiflag" title="C2PA declares this ${h.kind==="composite"?"AI-edited":"AI-generated"}${h.tool?" — "+h.tool:""}">${how}?</span><img decoding="async" fetchpriority="high" src="/api/thumb?path=${enc(h.path)}"></div>
     <div class="meta"><div class="name" title="${h.path}">${h.name}</div></div>
     <div class="foot"><button class="sim" title="Find visually similar">Similar</button>
       <span class="more"><button class="lens" title="Copy image + open Google Lens">Lens</button>
@@ -4879,7 +4879,7 @@ function _facetCard(h){
   const pct = Math.max(0, Math.min(100, Math.round((h.score||0)*100)));
   const c = document.createElement("div"); c.className="card";
   c.dataset.path = h.path; c.dataset.uid = uid;
-  c.innerHTML = `<div class="thumb"><span class="scoreb" title="match strength">${pct}</span><img loading="lazy" src="/api/thumb?path=${enc(h.path)}&size=${THUMB}" title="${h.name}${uid?' · uid:'+uid:''}"></div>
+  c.innerHTML = `<div class="thumb"><span class="scoreb" title="match strength">${pct}</span><img decoding="async" fetchpriority="high" src="/api/thumb?path=${enc(h.path)}&size=${THUMB}" title="${h.name}${uid?' · uid:'+uid:''}"></div>
     <div class="meta"><div class="name" title="${h.path}">${h.name}</div></div>
     <div class="foot"><button class="sim" title="Find visually similar">Similar</button>
       <span class="more"><button class="lens" title="Copy image + open Google Lens">Lens</button>
@@ -5230,7 +5230,7 @@ async function loadClusters(){
       // restart doesn't blank the cluster grid.
       const p=(typeof r==="string")?r:r.path;
       const uid=(typeof r==="string")?"":r.uid;
-      return `<img loading="lazy" src="/api/thumb?path=${enc(p)}" data-uid="${uid}" title="${p}">`;
+      return `<img decoding="async" fetchpriority="high" src="/api/thumb?path=${enc(p)}" data-uid="${uid}" title="${p}">`;
     }).join("");
     const card=document.createElement("div"); card.className="card cluster";
     card.innerHTML=`<div class="mos">${mos}</div><div class="lab">${c.label}</div>
@@ -5298,7 +5298,7 @@ async function loadMoreClusterMembers(isFirst){
     const uid=h.uid||"";
     const c=document.createElement("div"); c.className="card";
     c.dataset.uid=uid;
-    c.innerHTML=`<div class="thumb"><img loading="lazy" src="/api/thumb?path=${enc(h.path)}" title="${h.name}${uid?' · uid:'+uid:''}"></div>
+    c.innerHTML=`<div class="thumb"><img decoding="async" fetchpriority="high" src="/api/thumb?path=${enc(h.path)}" title="${h.name}${uid?' · uid:'+uid:''}"></div>
       <div class="meta"><div class="name" title="${h.path}${uid?' · uid:'+uid:''}">${h.name}</div></div>`;
     c.querySelector(".thumb").onclick=()=> uid ? openDetail(uid) : window.open(`/api/image?path=${enc(h.path)}`,"_blank");
     g.appendChild(c);
@@ -5342,7 +5342,7 @@ async function loadFaces(){
   if(!people.length && !clusters.length) $("#facesMsg").textContent="no people groups";
 }
 function _faceCard(c, ref, label, named){
-  const mos=(c.reps||[]).slice(0,4).map(rp=>`<img loading="lazy" src="/api/thumb?path=${enc(rp.path)}" title="${rp.path}">`).join("");
+  const mos=(c.reps||[]).slice(0,4).map(rp=>`<img decoding="async" fetchpriority="high" src="/api/thumb?path=${enc(rp.path)}" title="${rp.path}">`).join("");
   const card=document.createElement("div"); card.className="card cluster"; card.dataset.ref=ref;
   if(_faceSel.has(ref)) card.classList.add("sel");
   card.innerHTML=`<div class="mos">${mos}</div>
@@ -5525,7 +5525,7 @@ async function loadMoreFaceMembers(){
     const uid=h.uid||"";
     const c=document.createElement("div"); c.className="card"; c.dataset.uid=uid; c.dataset.path=h.path;
     if(_fdExcl.has(h.path)) c.classList.add("excl");
-    c.innerHTML=`<div class="thumb"><img loading="lazy" src="/api/thumb?path=${enc(h.path)}&fit=contain" title="${h.name} — click to exclude, dblclick to zoom"></div>
+    c.innerHTML=`<div class="thumb"><img decoding="async" fetchpriority="high" src="/api/thumb?path=${enc(h.path)}&fit=contain" title="${h.name} — click to exclude, dblclick to zoom"></div>
       <div class="meta"><div class="name" title="${h.path}">${h.name}</div></div>`;
     // click toggles EXCLUDE (this isn't that person); dblclick zooms to judge
     c.querySelector(".thumb").onclick=()=>{
@@ -5564,7 +5564,7 @@ function evCard(it){
   const d=document.createElement("div"); d.className="ev"; d.dataset.path=it.path; d.dataset.model=it.bucket;
   const sig=it.sig||{}; const tags=[]; if(sig.people)tags.push("ppl"); if(sig.cam)tags.push("cam"); if((sig.F||0)>0)tags.push("face"); if(sig.doc)tags.push("doc");
   d.innerHTML=`
-    <img loading="lazy" src="/api/thumb?path=${enc(it.path)}&size=300&fit=contain" title="${esc(it.album||"")}">
+    <img decoding="async" fetchpriority="high" src="/api/thumb?path=${enc(it.path)}&size=300&fit=contain" title="${esc(it.album||"")}">
     <div class="body">
       <div class="pred">model: <span class="bk ${it.bucket}">${EV_BN[it.bucket]}</span> · P${Math.round((it.p||0)*100)} u${Math.round((it.unc||0)*100)}${tags.length?" · "+tags.join(" "):""}</div>
       <div class="btns">
@@ -5747,7 +5747,7 @@ function _cuCard(it){
   // fit=contain → the WHOLE frame is visible (judging blur/junk needs the full
   // image, not a square center-crop that can hide the defect or the subject).
   c.innerHTML=`<div class="thumb"><span class="scoreb jscore" title="junk score — dblclick image to zoom">${it.score}</span>
-      <img loading="lazy" src="/api/thumb?path=${enc(it.path)}&size=${typeof THUMB!=='undefined'?THUMB:200}&fit=contain" title="${esc(it.name)} — click to save, dblclick to zoom"></div>
+      <img decoding="async" fetchpriority="high" src="/api/thumb?path=${enc(it.path)}&size=${typeof THUMB!=='undefined'?THUMB:200}&fit=contain" title="${esc(it.name)} — click to save, dblclick to zoom"></div>
     <div class="reasons">${chips}</div>`;
   // click = SAVE from deletion; dblclick = zoom (judge blur at full size)
   c.querySelector(".thumb").onclick=()=>_cuToggleSave(c, it.path);
@@ -5883,7 +5883,7 @@ async function loadTrash(clean){
     r.items.forEach(it=>{
       const c=document.createElement("div"); c.className="card"; c.dataset.path=it.path;
       c.innerHTML=`<div class="thumb" title="${esc(it.name)} — click to RESTORE, dblclick to zoom">
-          <img loading="lazy" src="/api/thumb?path=${enc(it.path)}&size=${typeof THUMB!=='undefined'?THUMB:200}&fit=contain"></div>
+          <img decoding="async" fetchpriority="high" src="/api/thumb?path=${enc(it.path)}&size=${typeof THUMB!=='undefined'?THUMB:200}&fit=contain"></div>
         <div class="meta"><div class="name" title="${it.path}">${esc(it.name)}</div></div>`;
       c.querySelector(".thumb").onclick=async()=>{
         const r2=await fetch("/api/personal/eval-flag",{method:"POST",headers:{"content-type":"application/json"},
@@ -6829,7 +6829,7 @@ async function loadTriageBucket(clean){
       const c=document.createElement("div"); c.className="card";
       const pct=Math.round((it.p||0)*100), unc=Math.round((it.unc||0)*100);
       const vlm=it.vlm?` · VLM:${it.vlm.bucket} (${it.vlm.reason||""})`:"";
-      c.innerHTML=`<div class="thumb"><span class="scoreb" title="personal-ness ${pct}% · uncertainty ${unc}%${vlm}">${pct}</span><img loading="lazy" src="/api/thumb?path=${enc(it.path)}&size=${typeof THUMB!=='undefined'?THUMB:200}" title="${it.path}${vlm}"></div>`;
+      c.innerHTML=`<div class="thumb"><span class="scoreb" title="personal-ness ${pct}% · uncertainty ${unc}%${vlm}">${pct}</span><img decoding="async" fetchpriority="high" src="/api/thumb?path=${enc(it.path)}&size=${typeof THUMB!=='undefined'?THUMB:200}" title="${it.path}${vlm}"></div>`;
       g.appendChild(c);
     }
     _triage.offset+=r.items.length;
