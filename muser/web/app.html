@@ -2734,7 +2734,13 @@ let _rendered=0, _loading=false, _hasMore=true, _io=null;
 // of leaving stale (now-hidden) cards behind. Consumed once, then cleared, so it
 // never interferes with normal incremental scroll-pagination.
 let _forceClean=false;
-function liveSearch(){ clearTimeout(_searchTimer); _searchTimer=setTimeout(search, 180); }
+function liveSearch(){ clearTimeout(_searchTimer);
+  // Search per WORD, not per keystroke: a trailing space means a word was just
+  // completed → search promptly; mid-word, wait for a real pause so the gallery
+  // doesn't flicker on every character (the old flat 180ms fired mid-word and
+  // flashed the grid on each letter).
+  const q=$("#q").value, atWordBoundary=/\s$/.test(q)||q.trim()==="";
+  _searchTimer=setTimeout(search, atWordBoundary?120:650); }
 function loadMore(){
   if(_loading || !_hasMore) return;
   if(_mode==="text"){ _k += K_STEP; search(); }
