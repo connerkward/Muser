@@ -7,6 +7,7 @@ thin HTTP clients of this. Local-only by default (binds 127.0.0.1).
 
 from __future__ import annotations
 
+import contextvars
 import io
 import json
 import os
@@ -70,6 +71,17 @@ def _load_demo_hide() -> bool:
 
 
 _DEMO = {"hide": _load_demo_hide()}
+
+# Per-request "demo mode" for screen recordings (stateless, request-scoped).
+# When a search arrives with `?demo=1`, the recorder wants the demo to stay
+# clean WITHOUT changing the user's typed/displayed query: the server invisibly
+# (a) appends `-woman -girl` negatives to the search and (b) forces NSFW
+# filtering ON for just that request — independent of the persisted `_DEMO`
+# toggle above. A ContextVar (not the global toggle) keeps it per-request so a
+# demo search never alters what any other request sees. `_hidden()` reads it to
+# force the NSFW cut on; the /api/search handler reads it to inject the
+# negatives. The displayed query is left untouched.
+_DEMO_REQ = contextvars.ContextVar("muser_demo_request", default=False)
 
 # Hide images the user flagged 🗑 for deletion (Evaluate/Cleanup flags) from every
 # result endpoint. **On by default** (flagging means "I don't want to see this"),
@@ -1671,6 +1683,13 @@ def create_app(model: str = DEFAULT_MODEL):
             return True
         if _HIDEFLAG["on"] and path in _delete_flagged():
             return True
+        # Per-request demo (?demo=1): force the NSFW cut on for THIS request only,
+        # regardless of the persisted global demo toggle. (Doesn't pull in the
+        # people/selfie cluster-hiding — that's the persisted-toggle behavior;
+        # screen-demo mode wants only the NSFW filter + the -woman/-girl negatives
+        # injected by the handler.)
+        if _DEMO_REQ.get() and path in _refresh_scores_cache()["nsfw"]:
+            return True
         if not _DEMO["hide"]:
             return False  # demo mode off → only dead files are hidden
         if path in _refresh_scores_cache()["nsfw"]:
@@ -1795,7 +1814,7 @@ def create_app(model: str = DEFAULT_MODEL):
 
     @app.get("/api/search")
     def search(q: str, k: int = 24, dedup: bool = True, method: str = "embed", folder: str | None = None,
-               neg: str | None = None, neg_strength: float = 0.5,
+               neg: str | None = None, neg_strength: float = 0.5, demo: int = 0,
                ai_min: int = 0, ai_max: int = 100, sort: str | None = None, match: str = "blend",
                min_width: int | None = None, max_width: int | None = None,
                min_height: int | None = None, max_height: int | None = None,
@@ -1834,6 +1853,14 @@ def create_app(model: str = DEFAULT_MODEL):
         negs = [(t, -w) for t, w in concepts if w < 0]   # positive magnitudes
         if neg and neg.strip():
             negs.append((neg.lower(), 1.0))
+        # Screen-demo mode (?demo=1): invisibly push people/women out of results so
+        # a recorded demo stays clean, WITHOUT touching the user's typed/displayed
+        # query (the returned `query` and the on-screen chip stay exactly `q`). The
+        # ContextVar forces the NSFW cut on in _hidden() for this request only.
+        if demo:
+            _DEMO_REQ.set(True)
+            negs.append(("woman", 1.0))
+            negs.append(("girl", 1.0))
         if match == "all" and len(pos) >= 2:
             # Match-all (intersection): each concept must be strongly present.
             results = _search_match_all(pos, negs, k, folder, meta, neg_strength, ai_min, ai_max, sort)
