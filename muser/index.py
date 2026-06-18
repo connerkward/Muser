@@ -137,6 +137,36 @@ class MuserIndex:
             out = [p for p in out if p == under or p.startswith(pre)]
         return out
 
+    def vectors_for(self, model: str, paths: Sequence[str]) -> dict:
+        """{path -> L2-normalized embedding (np.float32)} for the given paths.
+
+        Used by the demo landing filter to score each candidate's SigLIP cosine to
+        concept vectors ("woman"/"girl") without re-embedding the image — the stored
+        index vector is exactly the indexed image embedding. Missing paths are simply
+        absent from the returned dict. Vectors are L2-normalized on the way out so the
+        caller's dot product is a cosine."""
+        import numpy as np
+        t = self._open(model)
+        if t is None or not paths:
+            return {}
+        want = set(paths)
+        out: dict = {}
+        # Fetch only rows we need. A `path IN (...)` predicate is fastest, but the list
+        # can be large (a 600-item landing pool); LanceDB handles it, and we SQL-escape
+        # the quotes. Select path+vector only.
+        esc = ",".join("'" + p.replace("'", "''") + "'" for p in want)
+        try:
+            rows = t.search().where(f"path IN ({esc})").select(["path", "vector"]).limit(len(want)).to_list()
+        except Exception:
+            # Fallback: scan (rare — only if the IN predicate trips on an odd path).
+            rows = t.search().select(["path", "vector"]).limit(100_000_000).to_list()
+            rows = [r for r in rows if r["path"] in want]
+        for r in rows:
+            v = np.asarray(r["vector"], dtype=np.float32)
+            n = float(np.linalg.norm(v))
+            out[r["path"]] = v / n if n > 0 else v
+        return out
+
     def folders(self, model: str, min_count: int = 2, limit: int = 400) -> list[dict]:
         """Indexed directories (each ancestor that contains images, any depth) with
         image counts, for the UI's folder-scope picker. Drops any folder holding *every*

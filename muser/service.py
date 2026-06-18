@@ -1683,13 +1683,16 @@ def create_app(model: str = DEFAULT_MODEL):
             return True
         if _HIDEFLAG["on"] and path in _delete_flagged():
             return True
-        # Per-request demo (?demo=1): force the NSFW cut on for THIS request only,
-        # regardless of the persisted global demo toggle. (Doesn't pull in the
-        # people/selfie cluster-hiding — that's the persisted-toggle behavior;
-        # screen-demo mode wants only the NSFW filter + the -woman/-girl negatives
-        # injected by the handler.)
-        if _DEMO_REQ.get() and path in _refresh_scores_cache()["nsfw"]:
-            return True
+        # Per-request demo (?demo=1): demo mode removes WOMEN & GIRLS + NSFW ONLY —
+        # it KEEPS men and other people. So here we force ONLY the NSFW cut on for
+        # THIS request, regardless of the persisted global demo toggle. We do NOT
+        # apply the all-people hidden-cluster cut (it would remove men too — its
+        # matchers include "a man that is sitting down"). Women/girls are removed by
+        # SigLIP signal instead: /api/search injects -woman/-girl negatives, and the
+        # query-less landing /api/score applies a woman/girl cosine cut (_demo_wg_drop).
+        if _DEMO_REQ.get():
+            if path in _refresh_scores_cache()["nsfw"]:
+                return True
         if not _DEMO["hide"]:
             return False  # demo mode off → only dead files are hidden
         if path in _refresh_scores_cache()["nsfw"]:
@@ -3612,12 +3615,70 @@ def create_app(model: str = DEFAULT_MODEL):
             scored = 0
         return {"scored": min(scored, total), "total": total}
 
+    # ---- Demo landing woman/girl SigLIP cut --------------------------------------
+    # The query-less landing feed (/api/score?demo=1) has no text negatives to push
+    # women/girls out (those only exist for /api/search). So we score each candidate
+    # by SigLIP cosine to the concept strings "woman"/"girl" — the SAME signal the
+    # search negatives use — and HIDE candidates where that signal is strong AND
+    # dominates the "man"/"boy" signal. The compound test is what KEEPS men: a man (or
+    # a man-dominant couple) reads higher on "man" than on "woman", so it survives even
+    # when its woman-cosine is moderately high. Without it, the 0.06–0.085 band still
+    # holds men and we'd nuke them.
+    #
+    # Thresholds picked by sampling the cosine distribution on this corpus and opening
+    # the dropped-vs-kept thumbnails (see /tmp/wg-rule one-off): SigLIP query↔image
+    # cosines are low-magnitude (~0.0–0.11); obvious women/girls land at the top, men
+    # carry a higher man-cosine. THR=0.075 + woman≥man drops obvious women/girls
+    # (≈9% of the 600-item pool) while keeping men / landscapes / art. Module constants
+    # so they're a one-line change; verified visually, not just by a number.
+    DEMO_WG_THRESHOLD = 0.075
+    _wg_vecs: dict = {"wg": None, "mb": None}
+
+    def _wg_concept_vecs():
+        """Embed woman/girl and man/boy concept vectors once (L2-normalized), cached
+        for the process. Returns (wg_vecs, mb_vecs)."""
+        if _wg_vecs["wg"] is None:
+            import numpy as np
+            emb = state.warm()
+            wg = np.asarray(emb.embed_queries(["woman", "girl"]), dtype=np.float32)
+            mb = np.asarray(emb.embed_queries(["man", "boy"]), dtype=np.float32)
+            _wg_vecs["wg"] = wg / (np.linalg.norm(wg, axis=1, keepdims=True) + 1e-9)
+            _wg_vecs["mb"] = mb / (np.linalg.norm(mb, axis=1, keepdims=True) + 1e-9)
+        return _wg_vecs["wg"], _wg_vecs["mb"]
+
+    def _demo_wg_drop(paths: list[str]) -> set:
+        """Subset of `paths` to hide as women/girls from the demo landing: max cosine
+        to woman/girl > DEMO_WG_THRESHOLD AND >= max cosine to man/boy. Fetches the
+        stored index vectors (no re-embed) and dots against the cached concept vectors.
+        Returns an empty set on any failure (fail-open: better to show a stray portrait
+        than to crash the landing)."""
+        if not paths:
+            return set()
+        try:
+            import numpy as np
+            wg, mb = _wg_concept_vecs()
+            vmap = state.index.vectors_for(state.model_name, paths)  # path -> normalized vec
+            drop = set()
+            for p, v in vmap.items():
+                w = float(np.max(wg @ v))
+                if w > DEMO_WG_THRESHOLD and w >= float(np.max(mb @ v)):
+                    drop.add(p)
+            return drop
+        except Exception:
+            return set()
+
     @app.get("/api/score")
     def score_rank(metric: str = "interesting", order: str = "desc", offset: int = 0, limit: int = 80,
-                   q: str | None = None):
+                   q: str | None = None, demo: int = 0):
         # `q` semantic-narrows the canonical set before metric sort: typing "car" on the
         # Interesting tab should return cars-ranked-by-aesthetic, not "cards whose basename
         # contains the substring 'car'" (which used to false-match Carlos, Carver, etc).
+        # demo=1 (the pre-search "curated aesthetic mix" landing grid in screen-recording
+        # mode): force NSFW + people/selfie cluster hiding ON via _hidden() for THIS
+        # request only, so the opening grid shows beautiful images and NO people/NSFW —
+        # the same per-request demo path /api/search uses.
+        if demo:
+            _DEMO_REQ.set(True)
         if not SCORES.exists():
             return {"built": False, "items": []}
         s = _refresh_scores_cache()["full"]
@@ -3635,19 +3696,20 @@ def create_app(model: str = DEFAULT_MODEL):
             canon = [p for p in canon if p in sem_paths]
         dupes = s.get("dupes", {})
         ranked = sorted(canon, key=lambda p: s["scores"][p].get(metric, 0), reverse=(order == "desc"))
-        # Walk the ranked list pulling live entries until we've filled the
-        # requested page. scores.json is written once per scoring pass and
-        # never re-validates the path on disk; filtering here keeps deleted
-        # files out of the UI without forcing a full re-score. We over-walk
-        # past `offset+limit` if needed, but stop once we have `limit` live
-        # items, so the cost stays bounded by the number of dead files seen.
+        # Live (on-disk, not-NSFW, not-flagged) ranked reps. _hidden under ?demo=1 is
+        # now NSFW-only (men/people kept — see _hidden). The women/girls cut for the
+        # query-less demo landing is a separate SigLIP-cosine pass applied below.
+        live = [p for p in ranked if not _hidden(p)]
+        wg_drop: set = set()
+        if demo:
+            # Score the women/girls cut over the live ranked reps in ONE batched vector
+            # fetch (cap the window so a huge corpus doesn't fetch 20k vectors per call;
+            # the landing pool only pages the top of the ranking anyway).
+            wg_drop = _demo_wg_drop(live[:2000])
+            live = [p for p in live if p not in wg_drop]
+        # Walk the filtered ranked list pulling entries until the page is full.
         items = []
-        for p in ranked[offset:]:
-            # Centralized hide policy: skip dead / NSFW / hidden-cluster reps.
-            # (Dead-file purge runs lazily via the search/filter endpoints; here
-            # we just skip so the Interesting page stays clean.)
-            if _hidden(p):
-                continue
+        for p in live[offset:]:
             d = [dp for dp in dupes.get(p, [p]) if not _hidden(dp)] or [p]
             items.append({
                 "path": p, "uid": uid_for(p), "name": os.path.basename(p),
@@ -3656,11 +3718,9 @@ def create_app(model: str = DEFAULT_MODEL):
             })
             if len(items) >= limit:
                 break
-        # `total` = count of all live (non-hidden, on-disk) ranked entries, so the
-        # paginator's last page lines up. Walk the whole ranked list once (O(n) over
-        # ~deduped reps; _hidden is O(1) set/dict lookups + one stat). Cheap relative
-        # to the per-request scores parse this endpoint used to do.
-        total = sum(1 for p in ranked if not _hidden(p))
+        # `total` = count of all live (non-hidden, women/girls-cut) ranked entries, so
+        # the paginator's last page lines up.
+        total = len(live)
         return {"built": True, "metric": metric, "metrics": s["metrics"],
                 "total": total,
                 "items": items, "coverage": _metric_coverage(metric, len(canon))}
