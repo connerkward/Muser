@@ -2783,8 +2783,13 @@ function showSkeletons(n = 12){
 // Cached/complete images are marked instantly so they never stay hidden.
 function _wireThumbFade(img){
   if(img.dataset.fade) return; img.dataset.fade = "1";
-  if(img.complete && img.naturalWidth){ img.classList.add("ld"); return; }
-  img.addEventListener("load",  ()=>img.classList.add("ld"), {once:true});
+  // Fade in only once the bitmap is DECODED (paint-ready), not merely loaded. decoding="async"
+  // means a `complete` img can still be unpainted, so marking .ld on `load` flashed grey/blank
+  // tiles (worst on grids that swap or get restored). decode() resolves when the tile can paint.
+  const show = ()=>{ (img.decode ? img.decode() : Promise.reject())
+                       .then(()=>img.classList.add("ld")).catch(()=>img.classList.add("ld")); };
+  if(img.complete && img.naturalWidth){ show(); return; }
+  img.addEventListener("load",  show, {once:true});
   img.addEventListener("error", ()=>img.classList.add("ld"), {once:true});  // broken img: don't pulse forever
 }
 (function initThumbFade(){
