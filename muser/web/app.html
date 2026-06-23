@@ -2763,8 +2763,18 @@ function ensureSentinel(){                          // a 1px marker kept just be
 // Skeleton placeholders shown in the gallery grid while a search is pending.
 // Same aspect-ratio + paper color as real cards' thumb backgrounds, so when
 // real cards land in their place there's no layout shift.
+//
+// CRITICAL: skeletons are paper/cream. Wiping a currently-PAINTED grid to lay
+// them down is exactly the one-frame white flash this guards against (a
+// search-over-results / showcase→results transition). So when #results already
+// holds painted content we DON'T wipe — the old grid stays on screen and
+// _renderHits' _commitReset keeps it there until the new tiles decode, then swaps
+// atomically. Skeletons are only for the cold first load (empty grid), where
+// there's nothing to lose.
 function showSkeletons(n = 12){
   const g = $("#results");
+  // Already-painted grid → leave it; no blank/cream flash (see _commitReset).
+  if (_hasPaintedGrid(g)) return;
   g.replaceChildren();
   // Masonry uses JS absolute positioning + a fixed grid height; block-flow
   // skeletons would overlap/overflow. Reset the layout state and skip them —
@@ -3651,6 +3661,117 @@ function aiBadge(pct){
   return `<span class="aib" style="background:rgba(190,30,110,${a})" `+
     `title="AI-likelihood ${pct}% — GRIP forensic detector (pixel-level, calibrated). A soft probability, not a verdict.">AI ${pct}%</span>`;
 }
+// Build one result card (DOM element, fully wired). Pulled out of _renderHits so
+// the same card can be appended live (incremental scroll) or staged in an
+// off-screen fragment for the keep-old-until-ready swap (see _commitReset).
+function _buildCard(h){
+  const conf = h.prob ?? h.score;                       // calibrated P(match) when the model provides it, else raw cosine
+  const pct=Math.max(0,Math.min(100,Math.round(conf*100)));
+  const scoreTitle = h.prob!=null ? "match probability (SigLIP-calibrated)" : "cosine similarity";
+  const dupes=h.dupe_count||1;
+  const badge = dupes>1 ? `<span class="dupe" title="${dupes} copies — click to see all">${dupes} copies</span>` : "";
+  const aib = aiBadge(h.ai_pct);
+  // uid: stable 12-char blake2b of the path — set as data-uid on the card so
+  // it's queryable from DevTools, and as the `title` tooltip so the user can
+  // see it. Not rendered visually (keeps the filename UI intact).
+  const uid=h.uid||"";
+  const c=document.createElement("div"); c.className="card";
+  c.dataset.uid=uid;
+  // dims (when known) let masonry reserve each tile's aspect-ratio → no pop-in
+  if(h.width)  c.dataset.w=h.width;
+  if(h.height) c.dataset.h=h.height;
+  // Build the thumb src already in its final fit. In masonry the wall uses
+  // aspect-preserving (contain) thumbs; _retuneThumbs would otherwise rewrite the
+  // src AFTER render, dropping the just-decoded bitmap and re-flashing grey. Baking
+  // the right URL in up front makes the post-render retune a no-op, so the tile we
+  // wait-to-decode in _commitReset is the one that stays painted.
+  const thumbSrc = _thumbFitSrc(`/api/thumb?path=${enc(h.path)}&size=${THUMB}`, _masonryOn());
+  c.innerHTML=`
+    <div class="thumb"><span class="scoreb" title="${scoreTitle}">${pct}</span>${badge}${aib}<img decoding="async" fetchpriority="high" src="${thumbSrc}" title="${h.name} · uid:${uid}"></div>
+    <div class="meta"><div class="name" title="${h.path}${uid?' · uid:'+uid:''}">${h.name}</div>
+      <div class="bar"><i style="width:${pct}%"></i></div></div>
+    <div class="foot">
+      <button class="add" data-path="${h.path.replace(/"/g, '&quot;')}" title="Add to selection (session cart)">${cartHas(h.path) ? "× Added" : "+ Add"}</button>
+      <span class="more">
+        <button class="sim" title="Find images visually similar to this one">Similar</button>
+        <button class="compose" title="Compose: this image + a text modification (e.g. 'in blue', 'at night')">Compose</button>
+        <button class="lens" title="Copy image + open Google Lens (⌘V to search where it appears)">Lens</button>
+        <button class="reveal" title="Reveal in Finder">Reveal</button>
+      </span></div>`;
+  // Thumb click → per-image detail view. The .thumb cursor stays zoom-in so the
+  // change is obvious; `Open externally` on the detail page is the new home of
+  // the "raw image in a new tab" affordance. uid comes from the search result;
+  // if it's missing (older servers) we fall back to opening the raw image.
+  c.querySelector(".thumb").onclick=()=> uid ? openDetail(uid) : window.open(`/api/image?path=${enc(h.path)}`,"_blank");
+  { const btn = c.querySelector(".add"); if (cartHas(h.path)) btn.classList.add("added");
+    btn.onclick = () => cartToggle(h.path, btn); }
+  c.querySelector(".sim").onclick=()=>searchImage(h.path);
+  c.querySelector(".compose").onclick=()=>openCompose(h.path);
+  c.querySelector(".lens").onclick=e=>lensSearch(h.path,e.currentTarget);
+  c.querySelector(".reveal").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:h.path})}); toast("revealed in Finder"); };
+  if(dupes>1) c.querySelector(".dupe").onclick=e=>{ e.stopPropagation(); openDupes(h); };
+  c2paFlag(c, h.path, h.c2pa);
+  return c;
+}
+
+// Monotonic render generation: bumped on every _renderHits reset. A pending
+// keep-old-until-ready swap checks this before committing so a newer search that
+// fired during the decode wait wins (the stale staged grid is dropped).
+let _renderGen = 0;
+
+// Does #results currently hold painted content the user can see? (real decoded
+// cards — NOT skeletons, NOT an empty grid). Only then do we keep-old-until-ready.
+function _hasPaintedGrid(g){
+  const imgs = g.querySelectorAll(".card .thumb img");
+  if(!imgs.length) return false;
+  for(const im of imgs){ if(im.complete && im.naturalWidth>0 && im.classList.contains("ld")) return true; }
+  return false;
+}
+
+// Swap a freshly-built grid (DocumentFragment of cards) into #results without ever
+// flashing the empty/cream container. If the grid is already painted, the OLD tiles
+// stay on screen while the new ones decode off-DOM; we replace only once the first
+// screenful is paint-ready (or a short safety cap elapses). On a cold first load
+// (skeletons / empty grid) there's nothing to protect, so we swap immediately and
+// let the per-tile fade-in handle it. Returns a Promise that resolves after the
+// swap actually lands, so the caller can run post-render bookkeeping in order.
+function _commitReset(g, frag, gen){
+  const decodeFirstScreenful = (cards)=>{
+    // Wait for the first ~N tiles to decode so the swapped-in grid is painted, not
+    // a wall of grey/cream boxes. Cap the wait so a slow/broken thumb can't hang the
+    // swap — after the cap we show what we have (still better than a blank flash, and
+    // the fade-in covers the stragglers).
+    const FIRST = Math.min(cards.length, 12);
+    const CAP_MS = 600;
+    const imgs = [];
+    for(let i=0;i<FIRST;i++){ const im=cards[i] && cards[i].querySelector(".thumb img"); if(im) imgs.push(im); }
+    if(!imgs.length) return Promise.resolve();
+    const one = (im)=> new Promise(res=>{
+      const done=()=>res();
+      const tryDecode=()=>{ (im.decode?im.decode():Promise.reject()).then(done).catch(done); };
+      if(im.complete && im.naturalWidth){ tryDecode(); return; }
+      im.addEventListener("load", tryDecode, {once:true});
+      im.addEventListener("error", done, {once:true});
+    });
+    return Promise.race([ Promise.all(imgs.map(one)), new Promise(res=>setTimeout(res, CAP_MS)) ]);
+  };
+
+  if(!_hasPaintedGrid(g)){
+    // Cold load: no painted content to lose → swap now (skeletons/empty → cards).
+    g.replaceChildren(frag);
+    return Promise.resolve();
+  }
+  // Hot swap: keep the old grid visible, decode the new one off-DOM, then replace
+  // atomically. Pre-mark already-decoded cards .ld so the swapped grid paints
+  // instantly instead of fading from grey.
+  const cards = Array.prototype.slice.call(frag.children);
+  return decodeFirstScreenful(cards).then(()=>{
+    if(gen !== _renderGen) return;                 // a newer search superseded us → drop this stale grid
+    cards.forEach(c=>{ const im=c.querySelector(".thumb img"); if(im && im.complete && im.naturalWidth) im.classList.add("ld"); });
+    g.replaceChildren(frag);
+  });
+}
+
 function _renderHits(r){
   const g=$("#results");
   if(_mode !== "showcase") _hideShowcaseBar();   // any real result set replaces the showcase
@@ -3665,66 +3786,44 @@ function _renderHits(r){
   }
   if (_mode==="text") _hasMore = r.results.length >= _k;  // text: full page ⇒ more ranked below. Other modes set _hasMore themselves.
   const _wasReset = (_rendered === 0);
-  if (_wasReset) g.replaceChildren();                    // first page back: drop skeletons before appending real cards
-  r.results.slice(_rendered).forEach(h=>{                // append only the newly-fetched tail (kNN prefix is stable)
-    const conf = h.prob ?? h.score;                       // calibrated P(match) when the model provides it, else raw cosine
-    const pct=Math.max(0,Math.min(100,Math.round(conf*100)));
-    const scoreTitle = h.prob!=null ? "match probability (SigLIP-calibrated)" : "cosine similarity";
-    const dupes=h.dupe_count||1;
-    const badge = dupes>1 ? `<span class="dupe" title="${dupes} copies — click to see all">${dupes} copies</span>` : "";
-    const aib = aiBadge(h.ai_pct);
-    // uid: stable 12-char blake2b of the path — set as data-uid on the card so
-    // it's queryable from DevTools, and as the `title` tooltip so the user can
-    // see it. Not rendered visually (keeps the filename UI intact).
-    const uid=h.uid||"";
-    const c=document.createElement("div"); c.className="card";
-    c.dataset.uid=uid;
-    // dims (when known) let masonry reserve each tile's aspect-ratio → no pop-in
-    if(h.width)  c.dataset.w=h.width;
-    if(h.height) c.dataset.h=h.height;
-    c.innerHTML=`
-      <div class="thumb"><span class="scoreb" title="${scoreTitle}">${pct}</span>${badge}${aib}<img decoding="async" fetchpriority="high" src="/api/thumb?path=${enc(h.path)}&size=${THUMB}" title="${h.name} · uid:${uid}"></div>
-      <div class="meta"><div class="name" title="${h.path}${uid?' · uid:'+uid:''}">${h.name}</div>
-        <div class="bar"><i style="width:${pct}%"></i></div></div>
-      <div class="foot">
-        <button class="add" data-path="${h.path.replace(/"/g, '&quot;')}" title="Add to selection (session cart)">${cartHas(h.path) ? "× Added" : "+ Add"}</button>
-        <span class="more">
-          <button class="sim" title="Find images visually similar to this one">Similar</button>
-          <button class="compose" title="Compose: this image + a text modification (e.g. 'in blue', 'at night')">Compose</button>
-          <button class="lens" title="Copy image + open Google Lens (⌘V to search where it appears)">Lens</button>
-          <button class="reveal" title="Reveal in Finder">Reveal</button>
-        </span></div>`;
-    // Thumb click → per-image detail view. The .thumb cursor stays zoom-in so the
-    // change is obvious; `Open externally` on the detail page is the new home of
-    // the "raw image in a new tab" affordance. uid comes from the search result;
-    // if it's missing (older servers) we fall back to opening the raw image.
-    c.querySelector(".thumb").onclick=()=> uid ? openDetail(uid) : window.open(`/api/image?path=${enc(h.path)}`,"_blank");
-    { const btn = c.querySelector(".add"); if (cartHas(h.path)) btn.classList.add("added");
-      btn.onclick = () => cartToggle(h.path, btn); }
-    c.querySelector(".sim").onclick=()=>searchImage(h.path);
-    c.querySelector(".compose").onclick=()=>openCompose(h.path);
-    c.querySelector(".lens").onclick=e=>lensSearch(h.path,e.currentTarget);
-    c.querySelector(".reveal").onclick=async()=>{ await fetch("/api/reveal",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:h.path})}); toast("revealed in Finder"); };
-    if(dupes>1) c.querySelector(".dupe").onclick=e=>{ e.stopPropagation(); openDupes(h); };
-    g.appendChild(c);
-    c2paFlag(c, h.path, h.c2pa);
-  });
-  _rendered = r.results.length;
-  _updateResultCount();
-  ensureSentinel();
-  renderRefinements(r.refinements || []);
-  // If the user has a non-default sort blend dialed in, apply it after each page
-  // lands so newly-appended cards land in the right rank.
-  if(_masonryOn()){
-    // Pinterest/Cosmos wall = append-only. Do NOT globally re-rank on each page:
-    // the sort blend would reshuffle the whole wall on every scroll. The blend
-    // still orders the normal grid, and an explicit blend-slider change re-packs
-    // the wall (see applySortBlend). Stable order here → existing tiles never move.
-    _retuneThumbs(true);
-    layoutMasonry(_wasReset);
-  } else if(_sortBlendActive()){
-    applySortBlend();
+  const newCount = r.results.length;
+
+  // Post-swap bookkeeping — runs AFTER the cards are actually in the DOM, so it's
+  // shared by both the synchronous append path and the deferred keep-old swap.
+  const finalize = ()=>{
+    _rendered = newCount;
+    _updateResultCount();
+    ensureSentinel();
+    renderRefinements(r.refinements || []);
+    // If the user has a non-default sort blend dialed in, apply it after each page
+    // lands so newly-appended cards land in the right rank.
+    if(_masonryOn()){
+      // Pinterest/Cosmos wall = append-only. Do NOT globally re-rank on each page:
+      // the sort blend would reshuffle the whole wall on every scroll. The blend
+      // still orders the normal grid, and an explicit blend-slider change re-packs
+      // the wall (see applySortBlend). Stable order here → existing tiles never move.
+      _retuneThumbs(true);
+      layoutMasonry(_wasReset);
+    } else if(_sortBlendActive()){
+      applySortBlend();
+    }
+  };
+
+  if(_wasReset){
+    // First page back. Build the new grid into an off-screen fragment and hand it
+    // to _commitReset, which keeps the currently-painted grid on screen until the
+    // new tiles decode (no blank/cream flash on a search-over-results transition).
+    const gen = ++_renderGen;
+    const frag = document.createDocumentFragment();
+    r.results.forEach(h=> frag.appendChild(_buildCard(h)));
+    _commitReset(g, frag, gen).then(()=>{ if(gen===_renderGen) finalize(); });
+    return;
   }
+
+  // Incremental page (infinite scroll): append only the newly-fetched tail
+  // (the kNN/showcase prefix is stable) directly to the live grid.
+  r.results.slice(_rendered).forEach(h=> g.appendChild(_buildCard(h)));
+  finalize();
 }
 
 // C2PA provenance badge: pin an "AI?" flag on the thumb when the file's signed
