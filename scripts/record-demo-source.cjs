@@ -123,8 +123,20 @@ const addDemo = (u) => u + (u.includes('?') ? '&' : '?') + 'demo=1';
   }, { timeout: 30000 }).catch(()=>process.stderr.write('results thumb-wait timeout (continuing)\n'));
   await page.evaluate(async ()=>{ const imgs=[...document.querySelectorAll('#results img')].filter(im=>{const r=im.getBoundingClientRect();return r.width>80&&r.top<900;}); await Promise.allSettled(imgs.map(im=>im.decode?im.decode().catch(()=>{}):null)); });
 
-  // ---- E. idle on the results (the studio auto-speeds this) ----
-  await holdFor(T_IDLE);
+  // ---- E. BROWSE the results by SCROLLING — moving content is what the auto-fast-forward finale
+  // speeds through (a static grid doesn't read as "fast-forward"; a scroll zipping by does). ----
+  await holdFor(1.4);                                          // static look at top results — room for the camera PAN beat
+  {
+    const n=Math.round(3.4*FPS), maxY=1700;                    // ease-scroll down through the gallery
+    for(let i=1;i<=n;i++){ const u=i/n, e=u<0.5?2*u*u:1-Math.pow(-2*u+2,2)/2;
+      await page.evaluate(y=>window.scrollTo(0,y), Math.round(maxY*e));
+      events.push({type:'move', t:tNow(), x:Math.round(curX), y:Math.round(curY)});
+      await snap();
+    }
+    // let any lazily-loaded tiles revealed by the scroll finish decoding before the loop-back
+    await page.evaluate(async ()=>{ const imgs=[...document.querySelectorAll('#results img')].filter(im=>{const r=im.getBoundingClientRect();return r.width>80&&r.top>-200&&r.top<1100;}); await Promise.allSettled(imgs.map(im=>im.decode?im.decode().catch(()=>{}):null)); });
+  }
+  await holdFor(0.4);
 
   // ---- F. RETURN to the landing showcase so the video LOOPS (deterministic seed → identical grid).
   // Muser persists the last query (concept-bar state survives a soft reload), so a plain goto comes
@@ -133,10 +145,13 @@ const addDemo = (u) => u + (u.includes('?') ? '&' : '?') + 'demo=1';
   // zoom was deemed unnecessary, and the click opened a lightbox rather than navigating cleanly.) ----
   await page.evaluate(()=>{ try{ localStorage.clear(); sessionStorage.clear(); }catch(e){} });
   await page.goto(URL, { waitUntil: 'networkidle' });
-  await page.evaluate(()=>{                                  // belt-and-suspenders: ensure showcase mode
+  await page.evaluate(()=>{                                  // ensure showcase mode + EMPTY bar (clean loop seam)
     window.scrollTo(0,0);
-    const inp=[...document.querySelectorAll('input')].find(i=>/type a concept/i.test(i.placeholder||''));
-    if(inp){ inp.value=''; inp.dispatchEvent(new Event('input',{bubbles:true})); }
+    // The actual query lives in #q (the concept bar builds it there) — clearing only the visible
+    // 'type a concept' entry left the green query chip rendered. Clear #q too.
+    const q=document.querySelector('#q'); if(q){ q.value=''; q.dispatchEvent(new Event('input',{bubbles:true})); }
+    const ce=[...document.querySelectorAll('input')].find(i=>/type a concept/i.test(i.placeholder||''));
+    if(ce){ ce.value=''; ce.dispatchEvent(new Event('input',{bubbles:true})); }
     if(typeof showShowcase==='function') showShowcase();
   });
   await page.waitForFunction(() => {                          // every visible tile faded in (.ld = decoded)
