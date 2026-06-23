@@ -97,6 +97,11 @@ const addDemo = (u) => u + (u.includes('?') ? '&' : '?') + 'demo=1';
   await moveCursor(sb.cx, sb.cy, 0.7);
   events.push({type:'down', t:tNow(), x:Math.round(sb.cx*DSF), y:Math.round(sb.cy*DSF), bbox: cssToVid({x:sb.x,y:sb.y,width:sb.w,height:sb.h})});
   await page.evaluate(()=>{ const i=document.querySelector('[data-rec-search]'); i.focus(); });
+  // Disable Muser's live search ENTIRELY while typing. clearTimeout(_searchTimer) does not stop the
+  // concept-bar's own search path (it fires when a word completes), which clears the showcase to a
+  // BLANK/loading gallery mid-type — captured as a white flash. No-op search() until Enter (restored
+  // in section D) so the static showcase stays painted the whole time you type.
+  await page.evaluate(()=>{ if(typeof window.search==='function'){ window.__realSearch=window.search; window.search=function(){}; } });
   await holdFor(T_PRETYPE);
 
   // ---- C. type the query (kill the live-search debounce each char so the grid doesn't flicker) ----
@@ -111,14 +116,15 @@ const addDemo = (u) => u + (u.includes('?') ? '&' : '?') + 'demo=1';
     }, typed);
     await holdFor(PER_CHAR);
   }
-  // post-type hold (full query visible). KEEP killing the debounce every frame: otherwise Muser
-  // auto-searches HERE (before Enter), the showcase clears, and the results-loading gallery is
-  // captured BLANK/white before thumbs paint. The search must fire ONLY on Enter (below).
-  { const n=Math.max(1,Math.round(T_POSTTYPE*FPS)); for(let i=0;i<n;i++){
-      await page.evaluate(()=>{ try{ clearTimeout(_searchTimer); }catch(e){} }); await snap(); } }
+  // NO post-type hold and NO snaps here: Muser's concept bar auto-searches the instant the last
+  // word completes (its search lives in a module scope we can't no-op from outside), so the showcase
+  // clears to a blank/loading gallery RIGHT HERE. Any frame captured now is the white flash. Instead
+  // go straight to Enter and let the entire search→load→paint happen inside the .ld wait below, which
+  // takes no screenshots — so the blank transition is never in the footage.
 
   // ---- D. Enter → submit; block on full results decode before capturing ----
   events.push({type:'key', t:tNow(), key:'↵'});
+  await page.evaluate(()=>{ if(window.__realSearch){ window.search=window.__realSearch; window.__realSearch=null; } });  // restore live search → Enter actually searches
   await page.evaluate(()=>{ const i=document.querySelector('[data-rec-search]'); i.focus(); });
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => {     // wait for tiles LOADED *and* faded-in (.ld = painted) — `complete`
