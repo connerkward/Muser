@@ -111,32 +111,29 @@ const addDemo = (u) => u + (u.includes('?') ? '&' : '?') + 'demo=1';
     }, typed);
     await holdFor(PER_CHAR);
   }
-  await holdFor(T_POSTTYPE);
+  // post-type hold (full query visible). KEEP killing the debounce every frame: otherwise Muser
+  // auto-searches HERE (before Enter), the showcase clears, and the results-loading gallery is
+  // captured BLANK/white before thumbs paint. The search must fire ONLY on Enter (below).
+  { const n=Math.max(1,Math.round(T_POSTTYPE*FPS)); for(let i=0;i<n;i++){
+      await page.evaluate(()=>{ try{ clearTimeout(_searchTimer); }catch(e){} }); await snap(); } }
 
   // ---- D. Enter → submit; block on full results decode before capturing ----
   events.push({type:'key', t:tNow(), key:'↵'});
   await page.evaluate(()=>{ const i=document.querySelector('[data-rec-search]'); i.focus(); });
   await page.keyboard.press('Enter');
-  await page.waitForFunction(() => {
+  await page.waitForFunction(() => {     // wait for tiles LOADED *and* faded-in (.ld = painted) — `complete`
     const imgs=[...document.querySelectorAll('#results img')].filter(im=>{const r=im.getBoundingClientRect();return r.width>80&&r.top>100&&r.top<880;});
-    return imgs.length>=8 && imgs.every(im=>im.complete && im.naturalWidth>0);
+    return imgs.length>=8 && imgs.every(im=>im.complete && im.naturalWidth>0 && im.classList.contains('ld'));   // alone left the grid BLANK/white (Pinterest fade not done) → captured a white flash
   }, { timeout: 30000 }).catch(()=>process.stderr.write('results thumb-wait timeout (continuing)\n'));
   await page.evaluate(async ()=>{ const imgs=[...document.querySelectorAll('#results img')].filter(im=>{const r=im.getBoundingClientRect();return r.width>80&&r.top<900;}); await Promise.allSettled(imgs.map(im=>im.decode?im.decode().catch(()=>{}):null)); });
+  await page.waitForTimeout(450);        // let the .ld opacity fade-in (0.4s) fully paint before capturing
 
-  // ---- E. BROWSE the results by SCROLLING — moving content is what the auto-fast-forward finale
-  // speeds through (a static grid doesn't read as "fast-forward"; a scroll zipping by does). ----
-  await holdFor(1.4);                                          // static look at top results — room for the camera PAN beat
-  {
-    const n=Math.round(3.4*FPS), maxY=1700;                    // ease-scroll down through the gallery
-    for(let i=1;i<=n;i++){ const u=i/n, e=u<0.5?2*u*u:1-Math.pow(-2*u+2,2)/2;
-      await page.evaluate(y=>window.scrollTo(0,y), Math.round(maxY*e));
-      events.push({type:'move', t:tNow(), x:Math.round(curX), y:Math.round(curY)});
-      await snap();
-    }
-    // let any lazily-loaded tiles revealed by the scroll finish decoding before the loop-back
-    await page.evaluate(async ()=>{ const imgs=[...document.querySelectorAll('#results img')].filter(im=>{const r=im.getBoundingClientRect();return r.width>80&&r.top>-200&&r.top<1100;}); await Promise.allSettled(imgs.map(im=>im.decode?im.decode().catch(()=>{}):null)); });
-  }
-  await holdFor(0.4);
+  // ---- E. PAN window, then IDLE. A static look at the results (room for the camera PAN beat),
+  // then a stretch where NOTHING happens — the cursor sits still, no interaction. THIS dead time
+  // is exactly what auto-fast-forward compresses (it skips idle; it does NOT speed up an active
+  // scroll). The studio puts a fast-forward speed block over this idle. ----
+  await holdFor(1.4);                                          // static results — room for the camera PAN
+  await holdFor(3.6);                                          // IDLE: nothing happening → gets auto-fast-forwarded
 
   // ---- F. RETURN to the landing showcase so the video LOOPS (deterministic seed → identical grid).
   // Muser persists the last query (concept-bar state survives a soft reload), so a plain goto comes
