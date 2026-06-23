@@ -6057,7 +6057,11 @@ pollStatus(); loadFolders(); loadClusterChips(); syncNsfwNav(); syncPersonalNav(
             : {view: r.view, uid: r.uid||null};
   history.replaceState(state, "", url);
   // Landing on the Search tab with no query → show the curated showcase homepage.
-  if(r.view === "search" && $("#q").value.trim().length < 2 && !filterActive()) showShowcase();
+  // Guard on an empty grid (same as setView): on initial boot both this routing
+  // pass and setView fire, and an unguarded second showShowcase() re-shuffled and
+  // cleared+refilled #results — a visible one-frame gallery flicker at load.
+  if(r.view === "search" && $("#q").value.trim().length < 2 && !filterActive()
+     && !$("#results").children.length) showShowcase();
 }
 
 /* ============================================================================
@@ -6342,9 +6346,16 @@ function cbBuildQuery(pending){
 function cbApply(){
   const q = cbBuildQuery($("#cbarEntry") && $("#cbarEntry").value);
   const qin = $("#q");
+  const prev = qin.value;
   qin.value = q;
   if (q.trim().length >= 2) liveSearch();
-  else { _lastKey=""; _rendered=0; search(); }   // empty → showcase, same as clearing #q
+  // Empty/short query → the showcase is the right view. But do NOT tear it down and
+  // rebuild it on the first keystroke of a fresh concept: if the showcase is already
+  // up (no prior real query), typing "s" then "su" must leave the static grid intact
+  // until the search actually fires at ≥2 chars. Rebuilding here re-shuffled and
+  // cleared #results every keystroke — a one-frame gallery flicker. Only fall back to
+  // search() when we're genuinely returning from a non-empty query to empty.
+  else if (prev.trim().length >= 2 || !_showcaseActive) { _lastKey=""; _rendered=0; search(); }
 }
 function _cbMkWord(c){
   const ac = c.s<0 ? "var(--neg-c)" : "var(--pos)";
