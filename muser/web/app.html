@@ -307,6 +307,18 @@
   .cart-est .estTotal .estTime { min-width:80px; }
   .busy { position:fixed; inset:0; background:var(--bg); z-index:30;
           display:flex; align-items:center; justify-content:center; }
+  /* Non-blocking variant: indexing/captioning run in the background and search
+     still works, so the overlay collapses to a bottom-right card with no
+     backdrop and lets clicks pass through to the app behind it. Only cold-start
+     / model-load keeps the full-screen blocking form above. */
+  .busy.float { inset:auto 22px 22px auto; background:transparent;
+                pointer-events:none; display:block; }
+  .busy.float .busy-card { pointer-events:auto; align-items:flex-start;
+                text-align:left; width:340px; max-width:calc(100vw - 44px);
+                background:var(--bg); border:1px solid var(--line);
+                padding:18px 20px 16px; box-shadow:0 8px 30px rgba(0,0,0,.18);
+                animation:ckoutIn .26s cubic-bezier(0.22,1,0.36,1); }
+  .busy.float .busy-bar { width:100%; }
   .busy-card { display:flex; flex-direction:column; align-items:center; gap:14px;
                max-width:380px; text-align:center; }
   .busy-card .spinner { width:18px; height:18px; }
@@ -2639,6 +2651,11 @@ function renderStatus(s){
     busy.style.display = "";
     bar.style.display = "none";
     const t = s.task;
+    // Only a not-yet-warm text encoder genuinely blocks search; indexing,
+    // captioning, etc. run in the background while search stays usable, so
+    // render those as a non-blocking corner card (clicks pass through).
+    const blocks = (t.kind === "loading_model" || !s.ready);
+    busy.classList.toggle("float", !blocks);
     $("#busyNote").textContent = "";
     if (t.kind === "loading_model") {
       $("#busyText").textContent = "Loading model";
@@ -3702,7 +3719,26 @@ function _buildCard(h){
   // change is obvious; `Open externally` on the detail page is the new home of
   // the "raw image in a new tab" affordance. uid comes from the search result;
   // if it's missing (older servers) we fall back to opening the raw image.
-  c.querySelector(".thumb").onclick=()=> uid ? openDetail(uid) : window.open(`/api/image?path=${enc(h.path)}`,"_blank");
+  // cmd/ctrl/shift-click and middle-click open in a new tab/window — same as a
+  // normal link. The deep-link `#/image/<uid>` boots straight into the detail
+  // view (routeFromHash on load); uid-less falls back to the raw image URL.
+  {
+    const thumbEl = c.querySelector(".thumb");
+    const newTabUrl = uid ? `#/image/${uid}` : `/api/image?path=${enc(h.path)}`;
+    const onThumb = (e) => {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) {
+        e.preventDefault();
+        window.open(newTabUrl, "_blank");
+        return;
+      }
+      if (e.button !== 0) return;   // ignore right-click etc.
+      uid ? openDetail(uid) : window.open(newTabUrl, "_blank");
+    };
+    thumbEl.onclick = onThumb;
+    thumbEl.onauxclick = onThumb;   // middle-click
+    // Suppress the middle-click autoscroll cursor so the new tab opens cleanly.
+    thumbEl.addEventListener("mousedown", (e) => { if (e.button === 1) e.preventDefault(); });
+  }
   { const btn = c.querySelector(".add"); if (cartHas(h.path)) btn.classList.add("added");
     btn.onclick = () => cartToggle(h.path, btn); }
   c.querySelector(".sim").onclick=()=>searchImage(h.path);
