@@ -60,7 +60,7 @@ W_APPEARANCE = 0.15 # 1-R, weak tiebreak only
 CAM_FLOOR = 0.48    # camera-taken → at least in_between (not buried in reference, not forced personal)
 PEOPLE_FLOOR = 0.95 # an image with a person the user TAGGED in Google Photos → decisive
 DOC_FLOOR = 0.50    # docs/screenshots → reviewable in_between, NOT auto-personal (logos etc.)
-Q_AESTHETIC = 0.70         # aesthetic_v2 ≥ this + personal ⇒ in_between
+Q_AESTHETIC = 0.70         # (shelved — see _classify_one)
 ALBUM_NUDGE = 0.08         # ± nudge from camera-roll vs named album
 DOC_PCTL = 0.90            # zero-shot doc/screenshot above this percentile ⇒ utility
 CONCEPTS = {
@@ -188,7 +188,8 @@ def _classify_one(R, F, A, Q, M, doc, has_people, cam) -> tuple[float, str, floa
     p = float(np.clip(p + ALBUM_NUDGE * (2 * A - 1), 0.0, 1.0))
 
     if p >= P_PERSONAL:
-        bucket = "in_between" if Q >= Q_AESTHETIC else "personal"
+        # aesthetic-Q demotion shelved 2026-06-30: Q is vestigial here (0.5 on 100% of corpus; supervised model ignores it) and conflates image quality with personal-ness. Q still recorded in sig for info.
+        bucket = "personal"
     elif p <= P_REFERENCE:
         bucket = "reference"
     else:
@@ -631,7 +632,8 @@ def reclassify_supervised(model: str = "siglip2-b", progress=None, _preloaded=No
             p = max(p, PEOPLE_FLOOR)
         Q = float(sig.get("Q", 0.5))
         if p >= P_PERSONAL:
-            bucket = "in_between" if Q >= Q_AESTHETIC else "personal"
+            # aesthetic-Q demotion shelved 2026-06-30: Q is vestigial here (0.5 on 100% of corpus; supervised model ignores it) and conflates image quality with personal-ness. Q still recorded in sig for info.
+            bucket = "personal"
         elif p <= P_REFERENCE:
             bucket = "reference"
         else:
