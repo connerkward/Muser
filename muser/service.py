@@ -580,6 +580,10 @@ def create_app(model: str = DEFAULT_MODEL):
             # True only on the hidden personal instance (MUSER_HOME=~/.muser-personal).
             # The frontend uses this to reveal the Triage tab; never set on the main one.
             "personal": _is_personal_instance(),
+            # True only on the curated outpaintings instance (MUSER_HOME=~/.muser-outpaintings):
+            # a read-only library indexed in place, scored for aesthetic + NSFW. The frontend
+            # uses this to hide the generate/cart/color/AI/explore tabs that don't apply.
+            "outpaintings": _is_outpaintings_instance(),
             # True once face clustering has run (face_clusters.json exists) — reveals
             # the Faces (people) tab on whichever instance has clustered faces.
             "faces": bool(_faces_mod.clusters()),
@@ -589,6 +593,10 @@ def create_app(model: str = DEFAULT_MODEL):
     def _is_personal_instance() -> bool:
         from .paths import is_personal
         return is_personal()
+
+    def _is_outpaintings_instance() -> bool:
+        from .paths import MUSER_HOME
+        return MUSER_HOME.name == ".muser-outpaintings"
 
     @app.get("/api/personal/summary")
     def personal_summary():

@@ -6169,7 +6169,7 @@ $("#indexPick").onclick = async () => {
   } catch (e) { toast("index failed (check path)"); }
 };
 
-pollStatus(); loadFolders(); loadClusterChips(); syncNsfwNav(); syncPersonalNav();
+pollStatus(); loadFolders(); loadClusterChips(); syncNsfwNav(); syncPersonalNav(); syncOutpaintingsNav();
 // Initial route: respect #/<view> (or #/image/<uid>) in the URL so deep-links
 // / reload land on the right tab. Use replaceState (via the suppress flag +
 // explicit replace) so we don't leave an empty entry behind the first real navigation.
@@ -6954,6 +6954,26 @@ function syncPersonalNav(attempt=0){
     const cur=location.hash.replace(/^#\/?/,"");
     if(["ai","jobs","color","results"].includes(cur)) showView("faces"); // off a hidden tab
   }).catch(()=>{ if(attempt<8) setTimeout(()=>syncPersonalNav(attempt+1), 2500); });
+}
+function syncOutpaintingsNav(attempt=0){
+  // The curated outpaintings instance (MUSER_HOME=~/.muser-outpaintings) is a
+  // read-only library scored for aesthetic + NSFW only. Strip every tab/control
+  // that doesn't apply: the generate pipeline (Results/Jobs/Cart), Color & AI
+  // facets (never computed here), Explore (no clusters), Index-folder. Leaves
+  // Search (SigLIP) + Interesting (aesthetic) + Review (NSFW).
+  fetch("/api/status").then(r=>r.json()).then(s=>{
+    if(!s.outpaintings) return;
+    document.querySelectorAll(
+      '[data-view="explore"], #navExplore, [data-view="faces"], #navFaces, '
+      + '[data-view="color"], #navColor, [data-view="ai"], #navAI, '
+      + '[data-view="results"], #navResults, [data-view="jobs"], #navJobs, '
+      + '#cartOpen, #indexPick').forEach(b=>b.style.display="none");
+    // Always surface the metric tabs on this instance (Review is otherwise demo-gated).
+    document.querySelectorAll('[data-view="interesting"], #navInteresting, [data-view="review"], #navReview')
+      .forEach(b=>b.style.display="");
+    const cur=location.hash.replace(/^#\/?/,"");
+    if(["explore","faces","color","ai","results","jobs"].includes(cur)) showView("search");
+  }).catch(()=>{ if(attempt<8) setTimeout(()=>syncOutpaintingsNav(attempt+1), 2500); });
 }
 const _triage={bucket:"personal", sort:"p", offset:0, total:0, loading:false};
 let _vlmPoll=null, _estTimer=null, _lastHist=null;

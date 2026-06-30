@@ -36,8 +36,11 @@ def db_dir() -> Path:
 
 
 def is_personal() -> bool:
-    """True when running against a non-default root (the personal sub-tool).
+    """True only on the hidden personal sub-tool's root (``~/.muser-personal``).
 
     Used to gate the hidden Triage UI: the main aesthetic instance never shows it.
+    Must match the personal root *specifically* — there are now other non-default
+    roots (e.g. ``~/.muser-outpaintings``) that are NOT the personal instance, so a
+    bare "non-default root" check would wrongly reveal the Triage tab on them.
     """
-    return MUSER_HOME.resolve() != (Path.home() / ".muser").resolve()
+    return MUSER_HOME.name == ".muser-personal"
