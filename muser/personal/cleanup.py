@@ -22,6 +22,8 @@ tab only *flags* candidates into the Evaluate delete set for the user to confirm
 """
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 
 from ..embedders import _load_rgb
@@ -147,17 +149,22 @@ def snapshot_deleted(paths, model: str = "siglip2-b") -> int:
     import numpy as np
 
     from ..index import MuserIndex
+    table_name = "img__" + model.replace("/", "_").replace("-", "_")
     try:
         import lancedb
         db = lancedb.connect(MuserIndex().db_path)
-        t = db.open_table("img__siglip2_b").to_arrow()
+        t = db.open_table(table_name).to_arrow()
         tp = t.column("path").to_pylist()
         tv = t.column("vector")
         want = set(paths)
         new = {tp[i]: np.asarray(tv[i].as_py(), np.float16) for i in range(len(tp)) if tp[i] in want}
-    except Exception:
+    except Exception as e:
+        print(f"[muser/cleanup] snapshot_deleted: failed to read {len(paths)} embeddings "
+              f"from '{table_name}': {e}", file=sys.stderr, flush=True)
         return 0
     if not new:
+        print(f"[muser/cleanup] snapshot_deleted: 0 of {len(paths)} paths found "
+              f"in '{table_name}'", file=sys.stderr, flush=True)
         return 0
     f = _deleted_npz()
     merged: dict = {}

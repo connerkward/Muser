@@ -18,6 +18,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from .paths import MUSER_HOME
@@ -51,10 +53,16 @@ class Sidecar:
         return self.path.exists()
 
     def _load_raw(self) -> dict:
-        try:
-            return json.loads(self.path.read_text())
-        except (OSError, json.JSONDecodeError):
+        if not self.path.exists():
             return {}
+        raw = self.path.read_text()
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            q = self.path.with_suffix(f".corrupt-{int(time.time())}.json")
+            q.write_text(raw)
+            raise RuntimeError(f"{self.path.name} is corrupt — quarantined to {q.name}; "
+                               "refusing to load from an empty base")
 
     def load(self) -> dict:
         return self._load_raw().get("entries", {})
@@ -71,7 +79,7 @@ class Sidecar:
         # (color/c2pa) passes by_hash=None — never clobber it to {}.
         if by_hash is None:
             by_hash = self._load_raw().get("by_hash", {})
-        tmp = self.path.with_suffix(".json.tmp")
+        tmp = self.path.parent / f".{os.getpid()}-{threading.get_ident()}-{self.path.name}.tmp"
         tmp.write_text(json.dumps({"version": 1, "entries": entries, "by_hash": by_hash}))
         tmp.replace(self.path)  # atomic — never leave a half-written sidecar
 
@@ -244,7 +252,6 @@ class Sidecar:
         # within the same scan reuse rather than both computing; a rare race (two
         # identical files resolved in the same instant) just costs one extra
         # compute, never a wrong value. Backfill items only hash (never compute).
-        import threading
         lock = threading.Lock()
 
         def _safe_compute(p):

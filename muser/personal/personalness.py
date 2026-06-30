@@ -151,7 +151,10 @@ def _face_signal(entry: dict, wh, clusters: dict) -> float:
         return 0.0
     W = entry.get("W") or (wh[0] if wh is not None else 0) or 0
     H = entry.get("H") or (wh[1] if wh is not None else 0) or 0
-    area = float(W * H) or 1.0
+    area = float(W * H)
+    dims_known = area > 0  # guard: absent/zero dims must not produce a false selfie signal
+    if not dims_known:
+        area = 1.0          # placeholder; selfie branch is skipped below
     recurring = 0.0
     selfie = 0.0
     for f in faces:
@@ -159,8 +162,9 @@ def _face_signal(entry: dict, wh, clusters: dict) -> float:
         if c is not None and c >= 0:
             size = clusters.get(str(c), {}).get("size", 0)
             recurring = max(recurring, min(1.0, size / RECURRING_FACE_FULL))
-        fa = (f.get("fw", 0) * f.get("fh", 0)) / area
-        selfie = max(selfie, min(1.0, fa / SELFIE_AREA_FULL))
+        if dims_known:      # skip selfie-area boost when image dimensions are unknown
+            fa = (f.get("fw", 0) * f.get("fh", 0)) / area
+            selfie = max(selfie, min(1.0, fa / SELFIE_AREA_FULL))
     return max(recurring, selfie)
 
 
@@ -253,8 +257,7 @@ def classify(model: str = "siglip2-b", retrain: bool = False, progress=None) -> 
         fe = faces_entries.get(path, {})
         tm = tmeta.get(path, {})
         F = _face_signal(fe, wh[i], fclusters)
-        A = 0.5 + (ALBUM_NUDGE if tm.get("roll") else -ALBUM_NUDGE)  # roll→personal lean
-        A = float(np.clip(A, 0.0, 1.0))
+        A = 1.0 if tm.get("roll") else 0.0   # binary: roll→1 (personal lean), named album→0
         Q = float((scores.get(path, {}) or {}).get("aesthetic_v2", 0.5))
         has_people = bool(tm.get("people"))
         cam = bool(tm.get("cam"))
@@ -346,7 +349,7 @@ def _load_supervised():
         return None
 
 
-def _exported_ref_examples() -> tuple[list[str], "np.ndarray | None"]:
+def _exported_ref_examples(model: str = "siglip2-b") -> tuple[list[str], "np.ndarray | None"]:
     """Embeddings of reference images the user exported OUT of the personal
     corpus — they must stay trainable or the reference class drains as the user
     curates. The corpora are LINKED, so nothing is really lost on a move:
@@ -376,7 +379,7 @@ def _exported_ref_examples() -> tuple[list[str], "np.ndarray | None"]:
         try:
             import lancedb
             db = lancedb.connect(Path.home() / ".muser" / "db")   # MAIN corpus
-            t = db.open_table("img__siglip2_b").to_arrow()
+            t = db.open_table("img__" + model.replace("/", "_").replace("-", "_")).to_arrow()
             tp = t.column("path").to_pylist()
             tv = t.column("vector")
             for i, p in enumerate(tp):
@@ -443,7 +446,7 @@ def train(model: str = "siglip2-b", progress=None) -> dict:
         y.append(1.0 if lab in ("personal", "in_between") else 0.0)
     # exported reference images: rows leave the index after the move, but their
     # snapshotted embeddings stay in the training set as reference examples
-    xp_paths, xp_X = _exported_ref_examples()
+    xp_paths, xp_X = _exported_ref_examples(model)
     added_exported = 0
     if xp_X is not None:
         for k, p in enumerate(xp_paths):
@@ -524,7 +527,7 @@ def learning_curve(kind: str = "bucket", model: str = "siglip2-b") -> dict:
         if i is not None:
             X.append(Xp[i]); y.append(v); seen.add(p)
     if kind == "bucket":     # exported reference examples survive the move (see train)
-        xp_paths, xp_X = _exported_ref_examples()
+        xp_paths, xp_X = _exported_ref_examples(model)
         if xp_X is not None:
             for k, p in enumerate(xp_paths):
                 if p not in seen:
@@ -627,7 +630,12 @@ def reclassify_supervised(model: str = "siglip2-b", progress=None, _preloaded=No
         if sig.get("people"):
             p = max(p, PEOPLE_FLOOR)
         Q = float(sig.get("Q", 0.5))
-        bucket = ("in_between" if Q >= Q_AESTHETIC else "personal") if p >= 0.5 else "reference"
+        if p >= P_PERSONAL:
+            bucket = "in_between" if Q >= Q_AESTHETIC else "personal"
+        elif p <= P_REFERENCE:
+            bucket = "reference"
+        else:
+            bucket = "in_between"
         e["p"] = round(p, 4)
         e["unc"] = round(1.0 - 2.0 * abs(p - 0.5), 4)
         sig["sup"] = True

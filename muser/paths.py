@@ -40,4 +40,4 @@ def is_personal() -> bool:
 
     Used to gate the hidden Triage UI: the main aesthetic instance never shows it.
     """
-    return MUSER_HOME.name != ".muser" or "MUSER_HOME" in os.environ
+    return MUSER_HOME.resolve() != (Path.home() / ".muser").resolve()

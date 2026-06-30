@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 
 import numpy as np
 
@@ -148,7 +149,10 @@ def _load_npz() -> dict[str, np.ndarray]:
         ids = z["ids"]
         return {fid: X[k] for k, fid in enumerate(ids)}
     except Exception:
-        return {}
+        q = EMB_NPZ.parent / f"{EMB_NPZ.stem}.corrupt-{int(time.time())}.npz"
+        q.write_bytes(EMB_NPZ.read_bytes())
+        raise RuntimeError(f"faces_emb.npz is corrupt — quarantined to {q.name}; "
+                           "refusing to continue from an empty embedding store")
 
 
 def _save_npz(emb: dict[str, np.ndarray]) -> None:
@@ -156,7 +160,7 @@ def _save_npz(emb: dict[str, np.ndarray]) -> None:
     ids = list(emb.keys())
     X = (np.stack([emb[i] for i in ids]) if ids
          else np.zeros((0, 512), np.float32)).astype(np.float16)
-    tmp = EMB_NPZ.with_suffix(".npz.tmp")
+    tmp = EMB_NPZ.parent / f".{os.getpid()}-{threading.get_ident()}-{EMB_NPZ.name}.tmp"
     with open(tmp, "wb") as f:  # file handle → np.savez won't re-append ".npz"
         np.savez(f, ids=np.array(ids, dtype=object).astype("U"), X=X)
     os.replace(tmp, EMB_NPZ)

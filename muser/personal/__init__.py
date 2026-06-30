@@ -20,7 +20,7 @@ from pathlib import Path
 PERSONAL_HOME = Path.home() / ".muser-personal"
 
 #: Default Takeout location (the user's export). Override with --src.
-DEFAULT_TAKEOUT = Path.home() / "Desktop" / "google-takeout" / "Takeout" / "Google Photos"
+DEFAULT_TAKEOUT = Path.home() / "dev" / "g-takeout" / "google-takeout" / "Takeout" / "Google Photos"
 
 
 def register_heic() -> None:

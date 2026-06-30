@@ -107,7 +107,10 @@ def _save(labels: dict) -> None:
         old = json.loads(LABELS_FILE.read_text())
         if len(old) - len(labels) > 50 and len(labels) < len(old) / 2:
             import time as _t
-            LABELS_FILE.with_suffix(f".pre-shrink-{int(_t.time())}.json").write_text(json.dumps(old))
+            _snap = LABELS_FILE.with_suffix(f".pre-shrink-{int(_t.time())}.json")
+            _stmp = _snap.parent / (_snap.name + ".tmp")
+            _stmp.write_text(json.dumps(old))
+            os.replace(_stmp, _snap)
     except Exception:
         pass
     tmp = LABELS_FILE.with_suffix(".json.tmp")
@@ -129,7 +132,9 @@ def _maybe_backup() -> None:
     _BAK_STATE["last"] = now
     try:
         bak = LABELS_FILE.with_suffix(".bak.json")
-        bak.write_text(LABELS_FILE.read_text())
+        bak_tmp = bak.parent / (bak.name + ".tmp")
+        bak_tmp.write_text(LABELS_FILE.read_text())
+        os.replace(bak_tmp, bak)
     except Exception:
         pass
 

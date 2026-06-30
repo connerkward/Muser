@@ -744,8 +744,8 @@ def create_app(model: str = DEFAULT_MODEL):
             try:
                 from .personal import cleanup as _cu
                 _cu.snapshot_deleted(list(paths))
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[muser] snapshot_deleted failed (tag-time): {e}", flush=True)
         threading.Thread(target=_bg, daemon=True, name="muser-snap-delete").start()
 
     @app.post("/api/personal/eval-flag")
@@ -767,6 +767,8 @@ def create_app(model: str = DEFAULT_MODEL):
         bucket in personalness.json (forced='manual', original kept in obucket for
         revert) AND records it as a ground-truth eval label. bucket ∈ personal |
         in_between | reference."""
+        if not _is_personal_instance():
+            raise HTTPException(403, "personal instance only")
         from .personal import evaluate as _ev
         from .personal import personalness as _pn
         path = req.get("path")
@@ -804,6 +806,8 @@ def create_app(model: str = DEFAULT_MODEL):
     def personal_set_bucket_bulk(req: dict):
         """Manually assign one bucket to MANY paths (Triage mark-all-shown).
         One personalness save + one labels save — never N per-path rewrites."""
+        if not _is_personal_instance():
+            raise HTTPException(403, "personal instance only")
         from .personal import evaluate as _ev
         from .personal import personalness as _pn
         bucket = req.get("bucket")
@@ -961,6 +965,8 @@ def create_app(model: str = DEFAULT_MODEL):
         (recoverable via Finder "Put Back" — never rm). macOS only (/usr/bin/trash,
         ships since Sequoia). KEEPS the delete flag — it's the durable training
         label, and the embedding was already snapshotted at tag time."""
+        if not _is_personal_instance():
+            raise HTTPException(403, "personal instance only")
         import platform
         import subprocess
         from .personal import evaluate as _ev
@@ -977,8 +983,8 @@ def create_app(model: str = DEFAULT_MODEL):
         try:
             from .personal import cleanup as _cu
             _cu.snapshot_deleted(paths)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[muser] snapshot_deleted failed (trash-time): {e}", flush=True)
         moved = []
         for i in range(0, len(paths), 200):              # arg-list-safe batches
             chunk = paths[i:i + 200]
@@ -1009,6 +1015,8 @@ def create_app(model: str = DEFAULT_MODEL):
         """MOVE human-'reference' images out of personal into the main library
         tree; COPY human-'in_between' (live in both). Then ask the MAIN muser
         instance (port 7777) to index the export folder."""
+        if not _is_personal_instance():
+            raise HTTPException(403, "personal instance only")
         from .personal import evaluate as _ev
         res = _ev.export_to_main()
         try:
@@ -1027,6 +1035,8 @@ def create_app(model: str = DEFAULT_MODEL):
     def cleanup_train():
         """Train the P(delete) head on the user's 🗑/saved flags and re-score the
         corpus (synchronous, ~15 s — logreg + one matrix multiply, no model load)."""
+        if not _is_personal_instance():
+            raise HTTPException(403, "personal instance only")
         from .personal import cleanup as _cu
         return _cu.train_model(model=state.model_name)
 
@@ -1047,6 +1057,8 @@ def create_app(model: str = DEFAULT_MODEL):
         """Train the embedding head on accumulated user labels and RE-BUCKET the
         corpus with it (asynchronous). Returns {started: true}; poll
         /api/personal/train-result. Accuracy reported is k-fold cross-validated."""
+        if not _is_personal_instance():
+            raise HTTPException(403, "personal instance only")
         if state.task is not None:
             raise HTTPException(409, f"busy: {state.task.get('kind')}")
         state.task = {"kind": "personal_training", "done": 0, "total": 100}

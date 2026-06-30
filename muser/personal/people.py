@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 
 from ..paths import data_file
 
@@ -35,17 +37,21 @@ CLAIM_FRAC = 0.5   # a raw cluster is "claimed" (hidden from the unnamed list) w
 def load() -> dict:
     if not PEOPLE_FILE.exists():
         return {"version": VERSION, "people": []}
+    raw = PEOPLE_FILE.read_text()
     try:
-        d = json.loads(PEOPLE_FILE.read_text())
+        d = json.loads(raw)
         d.setdefault("people", [])
         return d
-    except Exception:
-        return {"version": VERSION, "people": []}
+    except json.JSONDecodeError:
+        q = PEOPLE_FILE.with_suffix(f".corrupt-{int(time.time())}.json")
+        q.write_text(raw)
+        raise RuntimeError(f"people.json is corrupt — quarantined to {q.name}; "
+                           "refusing to continue from an empty people store")
 
 
 def _save(d: dict) -> None:
     PEOPLE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = PEOPLE_FILE.with_suffix(".json.tmp")
+    tmp = PEOPLE_FILE.parent / f".{os.getpid()}-{threading.get_ident()}-{PEOPLE_FILE.name}.tmp"
     tmp.write_text(json.dumps(d))
     os.replace(tmp, PEOPLE_FILE)
 
