@@ -85,33 +85,49 @@
 
 ### 1. Album art → outpainting
 
-The core: a square album cover → a clean, ultra-wide (~6:1) in-car image. Sub-steps
-(**the exact ComfyUI node breakdown is pending workflow identification — see
-[`outpainting-workflow-candidates.md`](./outpainting-workflow-candidates.md)**; this is the
-described method):
+The core: a square album cover → a clean, ultra-wide (~6:1) in-car image. **Confirmed from
+the real production workflow** (embedded in every `ComfyUI-BigLama-*.png`'s metadata — full
+node-map in [`outpainting-workflow-candidates.md`](./outpainting-workflow-candidates.md)). It
+splits into an **upstream Python prep stage** and the **ComfyUI outpaint graph** — the
+SAM/GroundingDINO + UltraSharp steps are *not* in the ComfyUI graph, they run before it.
 
-1. **Text / logo / label removal — SAM + GroundingDINO.** GroundingDINO does open-vocabulary
-   detection ("text", "logo", "wordmark") → boxes; SAM turns boxes into precise masks; the
-   masked regions are removed so the outpaint isn't anchored to copy/branding. (Also reduces
-   the legibility/text that a driver-distraction heuristic penalizes.)
-2. **Upscale — 4× UltraSharp.** ESRGAN-family `4x-UltraSharp` upscales the (now clean) cover
-   so the source has enough resolution to seed a wide canvas without softness at the center.
-3. **"Latent smudge" seed — BigLaMa.** The custom ultra-wide trick. `big-lama` (LaMa
-   inpainting, Suvorov et al. 2021 — Fourier convolutions, strong at large-mask structure)
-   takes the album-art structure and **smears it in a semi-repeating pattern across the
-   region to be outpainted**, giving the diffusion model *something coherent to extend from*
-   instead of blank latent. Then a **slight blur** on that smudge **reduces complexity** in
-   the final image so it doesn't trip the **heuristic driver-distraction filter** (busy,
-   high-contrast, high-frequency imagery reads as distracting).
-4. **Outpaint — Stable Diffusion, ~6:1.** With the smudge as a base, the diffusion model
-   outpaints the wings. The asymmetric pad (`ImagePadForOutpaint`, e.g. left=3000, right=2000
-   → cover offset right of center) defines the fill region. Heavy **prompt tuning + param
-   tuning** (denoise, steps, CFG, feathering), each candidate **cross-checked against the
-   heuristic driver-distraction verifier** — the verifier is in the tuning loop, not just a
-   final gate.
-5. **ControlNet (explored) — limit generated detail.** Using a ControlNet (e.g. a blurred/
-   low-freq structure or depth guide) to *cap* how much detail the model invents in the
-   wings, keeping the extension calm — another lever against distraction.
+**1a — Upstream prep (separate batch Python, not ComfyUI):**
+- **Text / logo / label removal — SAM2 + GroundingDINO.** GroundingDINO does open-vocabulary
+  detection ("text", "logo", "wordmark") → boxes; SAM2 turns boxes into precise masks; a
+  LaMa remover (`AILab_LamaRemover`, same `big-lama.pt`) erases them. Outputs
+  `*_outpaint_ready.jpg`. (Removes copy/branding so the outpaint isn't anchored to it, and
+  kills the legible text a distraction heuristic penalizes.)
+- **Upscale — 4× UltraSharp.** ESRGAN-family `4x-UltraSharp`, also a separate upstream stage,
+  so the clean cover has enough resolution to seed the wide canvas without center softness.
+
+**1b — ComfyUI outpaint graph** (one large ~580–630-node multi-branch dev graph):
+1. **"Latent smudge" — BigLaMa.** The custom ultra-wide trick, and the novel part.
+   `INPAINT_LoadInpaintModel → INPAINT_InpaintWithModel` with model **`big-lama.pt`** (LaMa,
+   Suvorov et al. 2021 — Fourier convolutions, strong at large-mask structure) takes the
+   album-art structure and **smears it in a semi-repeating pattern across the fill region**
+   (noise seeded by an `Image Power Noise` blue-noise source), giving the diffusion model
+   *something coherent to extend from* instead of blank latent. See the smudge output at
+   `~/Desktop/cc-muser/outpaint-biglama-smudge.png` — sharp cover center, structure smeared
+   + softened outward.
+2. **Slight blur — reduce complexity.** `INPAINT_MaskedBlur [100,0]` (+ `Blur`×9,
+   `ImageBlend`, `Image Blend by Mask`) softens the smudge so the final image's high-freq /
+   busy content stays **under the driver-distraction heuristic's threshold**.
+3. **Asymmetric outpaint pad.** `ImagePadForOutpaint [left=1680, top=104, right=1152,
+   bottom=160, feather=100]` — **left ≈ 1.46× right**, so the cover sits **offset-right** of
+   center. *(This is exactly the offset the Muser curation mask was independently re-derived
+   to — `x∈[0.52,0.64]`, center ≈0.58 — from cross-variant variance. Full circle.)*
+4. **Outpaint — SDXL inpaint.** Primary checkpoint **`realvisxlV50_v30InpaintBakedvae`**
+   (RealVisXL 5.0, SDXL-inpaint). Experimental alt branches in the same graph: a dedicated
+   `sdxl-inpaint` path and a **Flux-fill** (`flux1-fill-dev`) path (`FluxGuidance` 0.5/3) —
+   the seed the crashcourse Flux template grew into. Heavy **prompt + param tuning**, each
+   candidate cross-checked against the distraction verifier (below) — the verifier is *in the
+   tuning loop*, not just a final gate.
+5. **ControlNet — cap invented detail.** `sdxl-controlnet-tile` limits how much detail SDXL
+   invents in the wings, keeping the extension calm (another distraction lever) — this is the
+   "controlnet to limit generated detail" from the braindump, confirmed present.
+6. **In-graph driver-distraction verifier — IMIC.** `IMIC TrafficLight` + `Distractive Area
+   Percentage` / Entropy / Illumination / Edge Ratio nodes score each candidate's distraction
+   right inside the graph, closing the tuning loop.
 
 ### 2. Model choice + legal
 
@@ -238,9 +254,14 @@ Building on features already in flight elsewhere in the stack:
 
 ## Open items
 
-- [ ] **Identify the real ComfyUI workflow** → then write the exact node-by-node sub-bullets
-      for §1. Candidates + node-maps: [`outpainting-workflow-candidates.md`](./outpainting-workflow-candidates.md)
-      (background hunt in progress). Render node previews for the user to pick the right one.
+- [x] **Real ComfyUI workflow identified** — embedded in `ComfyUI-BigLama-*.png` metadata
+      (RealVisXL SDXL-inpaint + big-lama smudge + asymmetric pad + tile-ControlNet + IMIC
+      distraction verifier; SAM/GroundingDINO + UltraSharp were separate upstream stages). §1
+      above is written from it. Node-map: [`outpainting-workflow-candidates.md`](./outpainting-workflow-candidates.md).
+      **Confirm with Conner** it's the right graph, then finalize.
+- [ ] **Node-graph visual render** — not obtainable without launching ComfyUI (drag any
+      `ComfyUI-BigLama-*.png` in to see the live graph). For the portfolio, the smudge-stage
+      image itself (`~/Desktop/cc-muser/outpaint-biglama-smudge.png`) is the better visual.
 - [ ] Fill exact numbers into §0 and §8 (fleet size, per-image GPU cost, WebP/PNG ratio on
       real samples) once available.
 - [ ] Move this into `portfolio-2026` when the page is built; keep this as the source of truth
