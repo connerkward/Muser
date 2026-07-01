@@ -3852,7 +3852,9 @@ const NEG_METRICS = [
   { id:"nmar", field:"nsfw_marqo",     label:"Marqo",     color:"#8a5470" },
 ];
 const NEG_KEY = "muser-neg-v1";
-let _neg = (()=>{ try{ return Object.assign({enabled:{}, th:0.5}, JSON.parse(localStorage.getItem(NEG_KEY) || "{}")); }catch{ return {enabled:{}, th:0.5}; } })();
+// Outpaintings default grey-out: Marqo classifier on at a 0.91 threshold.
+const NEG_DEFAULT = { enabled:{ nmar:true }, th:0.91 };
+let _neg = (()=>{ try{ return Object.assign({}, NEG_DEFAULT, JSON.parse(localStorage.getItem(NEG_KEY) || "{}")); }catch{ return Object.assign({}, NEG_DEFAULT); } })();
 function _saveNeg(){ try{ localStorage.setItem(NEG_KEY, JSON.stringify(_neg)); }catch{} }
 function _negActive(){ return !!window._OUTPAINT && NEG_METRICS.some(m => _neg.enabled[m.id]); }
 function _negScore(h){ let mx=-1; for(const m of NEG_METRICS){ if(_neg.enabled[m.id]){ const v=+h[m.field]; if(!Number.isNaN(v) && v>mx) mx=v; } } return mx; }
@@ -7268,6 +7270,16 @@ function syncOutpaintingsNav(attempt=0){
     // sets the wider columns AND _retuneThumbs(true) re-adds &fit=contain to the
     // thumbs already in the DOM.
     applyGridSettings();
+    // Curated default aesthetic blend for a FRESH outpaintings load (no saved state):
+    // Aesthetic V2 23% · PickScore 33% · Quality 31% · Taste 13% (Relevance off). A saved
+    // blend in localStorage always wins, so this only seeds first-run / cleared browsers.
+    if(!localStorage.getItem("muser-alloc-v1") && typeof _alloc !== "undefined" && _alloc){
+      _alloc = { shares:{ vec:0, aes:0.232, ps:0.331, aes25:0, hps:0, aes0:0, qual:0.306, fav:0.131 },
+                 enabled:{ vec:false, aes:true, ps:true, aes25:false, hps:false, aes0:false, qual:true, fav:true } };
+      try{ if(typeof _saveAlloc==="function") _saveAlloc(); }catch{}
+      if(typeof buildSortConsole==="function") buildSortConsole();
+      if(typeof _showcaseReRank==="function" && _mode==="showcase") _showcaseReRank();
+    }
     document.querySelectorAll(
       '[data-view="explore"], #navExplore, [data-view="faces"], #navFaces, '
       + '[data-view="color"], #navColor, [data-view="ai"], #navAI, '
