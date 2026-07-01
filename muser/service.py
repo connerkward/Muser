@@ -449,6 +449,12 @@ def create_app(model: str = DEFAULT_MODEL):
         aprimed = _aidet.prime_cache_from_sidecar()
         if aprimed:
             print(f"  primed aidet cache: {aprimed} entries", flush=True)
+        # Intrinsic image-quality facet (blur/exposure/tiny) so the Sort-blend
+        # "Quality" weight resolves from RAM. No-op where cleanup.json isn't built.
+        from .personal import cleanup as _cln
+        qprimed = _cln.prime_cache_from_sidecar()
+        if qprimed:
+            print(f"  primed quality cache: {qprimed} entries", flush=True)
         # Face metadata cache (per-image faces + cluster ids) for People enrichment
         # and the personal-tool's recurring-person signal.
         from . import faces as _faces
@@ -587,6 +593,9 @@ def create_app(model: str = DEFAULT_MODEL):
             # True once face clustering has run (face_clusters.json exists) — reveals
             # the Faces (people) tab on whichever instance has clustered faces.
             "faces": bool(_faces_mod.clusters()),
+            # True once the intrinsic-quality facet (cleanup.json) is built — the
+            # frontend reveals the "Quality" weight in the Sort blend when set.
+            "quality": _quality_available(),
         }
 
     # ---- Hidden personal-triage endpoints (only meaningful on the personal root) ----
@@ -597,6 +606,10 @@ def create_app(model: str = DEFAULT_MODEL):
     def _is_outpaintings_instance() -> bool:
         from .paths import MUSER_HOME
         return MUSER_HOME.name == ".muser-outpaintings"
+
+    def _quality_available() -> bool:
+        from .personal import cleanup as _cln
+        return _cln.available() and _cln.cache_exists()
 
     @app.get("/api/personal/summary")
     def personal_summary():
@@ -1474,6 +1487,7 @@ def create_app(model: str = DEFAULT_MODEL):
         _attach_scores(results)
         _attach_c2pa(results)
         _attach_aidet(results)
+        _attach_quality(results)
         if int(ai_min or 0) > 0 or int(ai_max if ai_max is not None else 100) < 100:
             results = _filter_by_ai_band(results, ai_min, ai_max)
         if sort in ("ai", "ai_asc"):
@@ -1790,6 +1804,20 @@ def create_app(model: str = DEFAULT_MODEL):
             v = _aidet.lookup(r["path"])
             if v is not None and v.get("pct") is not None:
                 r["ai_pct"] = int(v["pct"])
+
+    def _attach_quality(results):
+        # Inline an intrinsic image-quality score (1.0 = clean, 0.0 = junky) per
+        # result from the cleanup facet — the unsupervised part of the personal
+        # delete-candidate detector (blur / over- or under-exposure / tiny resolution),
+        # NOT the learned P(delete) head (that needs the personal instance's flags).
+        # Surfaced so the Sort blend can carry a "Quality" weight that demotes
+        # low-quality outpaintings. Absent where the facet isn't built.
+        from .personal import cleanup as _cln
+        for r in results:
+            e = _cln.lookup(r["path"])
+            if e is not None:
+                junk, _ = _cln.delete_score(e)
+                r["quality"] = round(1.0 - junk / 100.0, 4)
 
     def _ai_pct(r):
         # AI-likelihood percentage for one result, from the inlined value or a
@@ -3757,13 +3785,18 @@ def create_app(model: str = DEFAULT_MODEL):
             live = [p for p in live if p not in wg_drop]
         # Walk the filtered ranked list pulling entries until the page is full.
         items = []
+        from .personal import cleanup as _cln
         for p in live[offset:]:
             d = [dp for dp in dupes.get(p, [p]) if not _hidden(dp)] or [p]
-            items.append({
+            it = {
                 "path": p, "uid": uid_for(p), "name": os.path.basename(p),
                 "score": s["scores"][p].get(metric, 0),
                 "scores": s["scores"][p], "dupes": d, "dupe_count": len(d),
-            })
+            }
+            qe = _cln.lookup(p)   # intrinsic quality → Sort-blend "Quality" weight
+            if qe is not None:
+                it["quality"] = round(1.0 - _cln.delete_score(qe)[0] / 100.0, 4)
+            items.append(it)
             if len(items) >= limit:
                 break
         # `total` = count of all live (non-hidden, women/girls-cut) ranked entries, so

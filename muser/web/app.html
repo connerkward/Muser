@@ -832,6 +832,9 @@
   body.fullwin #fullwinExit {
     display:inline-flex; align-items:center; gap:6px; position:fixed;
     top:8px; right:12px; z-index:40; }
+  /* The "Quality" blend metric is only meaningful where the intrinsic-quality facet
+     (cleanup.json) is built — reveal its segment + legend chip only then. */
+  body:not(.has-quality) .am-qual { display:none !important; }
   /* ---- legacy blend controls: kept in DOM for the existing JS, never shown ---- */
   .legacy-blend { display:none; }
 
@@ -1417,6 +1420,7 @@
       <input type="range" id="sW_aes25" min="0" max="2" step="0.05" value="0.00" /><span id="sW_aes25V">0.00</span>
       <input type="range" id="sW_hps"   min="0" max="2" step="0.05" value="0.00" /><span id="sW_hpsV">0.00</span>
       <input type="range" id="sW_aes0"  min="0" max="2" step="0.05" value="0.00" /><span id="sW_aes0V">0.00</span>
+      <input type="range" id="sW_qual"  min="0" max="2" step="0.05" value="0.00" /><span id="sW_qualV">0.00</span>
       <span id="sortAdvBody"></span>
       <button type="button" id="sortAdvToggle"></button>
     </div>
@@ -3248,6 +3252,7 @@ const SORT_METRICS = [
   { id:"aes25", field:"aesthetic_v25", def:0.00 },
   { id:"hps",   field:"hps_v21",       def:0.00 },
   { id:"aes0",  field:"aesthetic",     def:0.00 },
+  { id:"qual",  field:"quality",       def:0.00 },   // intrinsic quality (1=clean) — demotes low-quality when weighted up
 ];
 const SORT_DEFAULT = Object.assign({ open: false },
   Object.fromEntries(SORT_METRICS.map(m => [m.id, m.def])));
@@ -3468,13 +3473,14 @@ const ALLOC_METRICS = [
   { id:"aes25", label:"Aesthetic V2.5", color:"#5f7d5e", hint:"LAION Aesthetics V2.5 — refined successor to V2." },
   { id:"hps",   label:"HPS v2.1",       color:"#736a8c", hint:"Human Preference Score — prompt-aware preference." },
   { id:"aes0",  label:"Zero-shot",      color:"#5a8487", hint:"Zero-shot CLIP aesthetic prompt — fast but weak." },
+  { id:"qual",  label:"Quality",        color:"#7f8a55", hint:"Intrinsic quality (blur / over- or under-exposure / tiny). Turn up to demote low-quality frames — the personal cleanup detector's unsupervised signals." },
 ];
 const ABNEG = { min:0, max:1.5, def:0.50 };   // exclude strength range (separate control)
 // Default shares: seed from the legacy per-metric defaults, normalized to 1
 // over the metrics that start non-zero (vec/aes/ps), the rest enabled at 0-floor.
 const ALLOC_DEFAULT = (() => {
-  const seed = { vec:1.00, aes:0.30, ps:0.10, aes25:0, hps:0, aes0:0 };
-  const enabled = { vec:true, aes:true, ps:true, aes25:false, hps:false, aes0:false };
+  const seed = { vec:1.00, aes:0.30, ps:0.10, aes25:0, hps:0, aes0:0, qual:0 };
+  const enabled = { vec:true, aes:true, ps:true, aes25:false, hps:false, aes0:false, qual:false };
   return { shares: _normShares(seed, enabled), enabled };
 })();
 // Normalize a {id:weight} map to shares summing to 1 over the *enabled* ids.
@@ -3616,13 +3622,13 @@ function buildSortConsole(){
   const legend = host.querySelector("#allocLegend");
   ALLOC_METRICS.forEach(m => {
     const seg = document.createElement("div");
-    seg.className = "ab-seg"; seg.style.setProperty("--seg", m.color);
+    seg.className = "ab-seg am-" + m.id; seg.style.setProperty("--seg", m.color);
     seg.innerHTML = `<span class="ab-lab"><span class="ab-nm">${m.label}</span><span class="ab-pc">0%</span></span>`;
     bar.appendChild(seg);
     m._seg = seg; m._pc = seg.querySelector(".ab-pc");
 
     const leg = document.createElement("span");
-    leg.className = "ab-leg"; leg.style.setProperty("--seg", m.color);
+    leg.className = "ab-leg am-" + m.id; leg.style.setProperty("--seg", m.color);
     leg.title = m.hint + "  (click name to enable / disable)";
     leg.innerHTML = `<span class="dot"></span><span class="nm">${m.label}</span><span class="lv">0%</span>`;
     legend.appendChild(leg);
@@ -6286,6 +6292,8 @@ $("#indexPick").onclick = async () => {
 };
 
 pollStatus(); loadFolders(); loadClusterChips(); syncNsfwNav(); syncPersonalNav(); syncOutpaintingsNav();
+// Reveal the "Quality" blend metric only where the intrinsic-quality facet is built.
+_statusOnce().then(s => { if(s && s.quality) document.body.classList.add("has-quality"); });
 // Initial route: respect #/<view> (or #/image/<uid>) in the URL so deep-links
 // / reload land on the right tab. Use replaceState (via the suppress flag +
 // explicit replace) so we don't leave an empty entry behind the first real navigation.
