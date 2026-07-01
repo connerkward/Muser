@@ -69,7 +69,12 @@ conflates *blurred* with *simple-but-sharp*, so no single computed value is righ
 have to see where the covers actually stop looking blurry. A static "remove vs keep"
 image freezes one cutoff and can't answer "is it right?". So instead:
 
-![blur cutoff tuner](ephemeral-design-interfaces/03-blur-tuner.png)
+![blur cutoff tuner at the keep/remove boundary](ephemeral-design-interfaces/03-blur-tuner.png)
+
+*Captured at the threshold line itself — the defining state of the interface: blurry
+covers removed (red, scores 3.9–4.8) above the dashed boundary, sharp covers kept
+(Beatles 5.1, framed panels 5.3–5.5) below it. You can read straight off the image that
+a cutoff of 5 lands in the right place.*
 
 - Every cover sorted worst-first, so the decision boundary is a place you scroll to.
 - Each tile is the **region crop the metric actually scores** — what you see is what it sees.
