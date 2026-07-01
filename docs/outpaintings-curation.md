@@ -5,6 +5,12 @@ surface** over ~5,535 AI-outpainted album covers (square covers extended to ~6:1
 goal: judge which aesthetic model/blend picks the good ones, and drill into any cover to
 pick its best re-roll — on a **clean, one-per-cover spread**, not a wall of near-dupes.
 
+**Why this exists.** The outpainting portfolio (`w-mb-outpaint-portfolio2026`) was work
+Conner was doing before being laid off. This whole tool is a **reconstruction of the
+filter-and-sort curation pass** he'd have run to pick the portfolio's best covers — built
+as a simulation of that work, "as if we'd built it before the layoff." That framing is the
+point of the exercise, not an aside.
+
 ## The album facet (`muser/albums.py`)
 
 Album covers sit at a **fixed, offset-right box** in every outpainting —
