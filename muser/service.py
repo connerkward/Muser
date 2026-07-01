@@ -455,6 +455,12 @@ def create_app(model: str = DEFAULT_MODEL):
         qprimed = _cln.prime_cache_from_sidecar()
         if qprimed:
             print(f"  primed quality cache: {qprimed} entries", flush=True)
+        # Album grouping (region-dedup of same-cover outpaint variants + blur flag) for
+        # the outpaintings unique-spread + click-to-cluster. No-op where not built.
+        from . import albums as _albums
+        alprimed = _albums.prime()
+        if alprimed:
+            print(f"  primed albums cache: {alprimed} entries", flush=True)
         # Face metadata cache (per-image faces + cluster ids) for People enrichment
         # and the personal-tool's recurring-person signal.
         from . import faces as _faces
@@ -566,6 +572,7 @@ def create_app(model: str = DEFAULT_MODEL):
         from . import c2pa as _c2pa
         from . import aidet as _aidet_mod
         from . import faces as _faces_mod
+        from . import albums as _albums_mod
         # `ready` flips true once the model is warm. `task` is the single
         # in-flight long-running activity (loading_model / indexing) for the
         # busy overlay; null when idle. Frontend polls this — 4s idle,
@@ -599,6 +606,9 @@ def create_app(model: str = DEFAULT_MODEL):
             # True once the taste model (favorites_pred.json) is trained — the
             # frontend reveals the "Taste" weight in the Sort blend when set.
             "favorites": _favorites_available(),
+            # True once the album facet (album_groups.json) is built — reveals the
+            # outpaintings unique-spread (one rep/cover) + click-to-cluster.
+            "albums": _albums_mod.available(),
         }
 
     # ---- Hidden personal-triage endpoints (only meaningful on the personal root) ----
@@ -1496,6 +1506,7 @@ def create_app(model: str = DEFAULT_MODEL):
         _attach_aidet(results)
         _attach_quality(results)
         _attach_favorites(results)
+        _attach_albums(results)
         if int(ai_min or 0) > 0 or int(ai_max if ai_max is not None else 100) < 100:
             results = _filter_by_ai_band(results, ai_min, ai_max)
         if sort in ("ai", "ai_asc"):
@@ -1835,6 +1846,19 @@ def create_app(model: str = DEFAULT_MODEL):
             v = _fav.lookup(r["path"])
             if v is not None:
                 r["favorites"] = v
+
+    def _attach_albums(results):
+        # Inline album-group id + variant count per result from the albums facet
+        # (region-dedup of same-cover outpaint variants). Powers the outpaintings
+        # unique-spread badge (N variants) + click-to-cluster. Absent where the
+        # facet isn't built; ``album == -1`` marks a blurred cover the spread drops.
+        from . import albums as _albums
+        for r in results:
+            e = _albums.lookup(r["path"])
+            if e is not None:
+                r["album"] = e["group"]
+                r["album_count"] = e["count"]
+                r["album_removed"] = e["removed"]
 
     def _ai_pct(r):
         # AI-likelihood percentage for one result, from the inlined value or a

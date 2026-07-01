@@ -311,6 +311,21 @@ def score(model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to sc
 
 
 @app.command()
+def albums(model: str = typer.Option(DEFAULT_MODEL, help="Model whose index to group")):
+    """Group outpaintings by album-art region + flag blurred covers.
+
+    Crops each image to the fixed album-art box, embeds that region, clusters same-cover
+    variants by cosine, and picks the highest-aesthetic rep per group — writing
+    ~/.muser/album_groups.json (+ album_vecs.npz). Powers the outpaintings unique-spread
+    (one rep/cover) and click-to-cluster. Incremental: only new/changed images re-embed.
+    """
+    from . import albums as _albums
+
+    out = _albums.build(model, on_progress=lambda m: con.print(f"[dim]{m}[/]"))
+    con.print(out["message"] if out.get("built") else f"[red]{out.get('message')}[/]")
+
+
+@app.command()
 def caption(
     folder: str = typer.Argument(None, help="Optional folder prefix to restrict (else: every indexed image)"),
     paths: list[str] = typer.Option(None, "--paths", help="Explicit paths to caption (bypasses the index)"),
