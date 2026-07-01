@@ -187,8 +187,14 @@
   .neg-th input[type=range] { width:120px; accent-color:#c0574b; }
   .neg-count { font-size:11px; color:#c0574b; }
   /* Greyed (flagged) cards: desaturated + dimmed in place, red edge; still clickable. */
-  .card.filtered .thumb img { filter:grayscale(.92) brightness(.6); opacity:.42; transition:filter .2s, opacity .2s; }
+  .card.filtered .thumb img { filter:grayscale(.95) brightness(.5); opacity:.38; transition:filter .2s, opacity .2s; }
   .card.filtered .thumb { outline:2px solid #c0574b; outline-offset:-2px; }
+  /* Mark greyed covers with a red ✕ where the variant badge sits (top-right). */
+  .card.filtered .albumb { display:none; }
+  .card.filtered .thumb::after {
+    content:"✕"; position:absolute; top:6px; right:6px; z-index:4; width:22px; height:22px;
+    display:flex; align-items:center; justify-content:center; background:#c0574b; color:#fff;
+    font-size:14px; font-weight:800; line-height:1; pointer-events:none; }
   /* AI-likelihood: single native range (mode set by an adjacent .seg toggle) */
   .airange { width:160px; height:18px; margin:0; vertical-align:middle; -webkit-appearance:none; appearance:none; background:transparent; cursor:pointer; }
   .airange::-webkit-slider-runnable-track { height:3px; background:var(--line, #cfc8b6); }
