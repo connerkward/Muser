@@ -172,6 +172,9 @@
                 color:var(--mut); cursor:pointer; border-right:1px solid var(--line, #cfc8b6); }
   .seg button:last-child { border-right:0; }
   .seg button.on { background:var(--fg); color:var(--bg); }
+  /* NSFW filter lives on the outpaintings blend bar only (needs nsfw scores). */
+  .nsfw-seg { margin-left:8px; }
+  body:not(.op) #nsfwSeg { display:none; }
   /* AI-likelihood: single native range (mode set by an adjacent .seg toggle) */
   .airange { width:160px; height:18px; margin:0; vertical-align:middle; -webkit-appearance:none; appearance:none; background:transparent; cursor:pointer; }
   .airange::-webkit-slider-runnable-track { height:3px; background:var(--line, #cfc8b6); }
@@ -1440,6 +1443,11 @@
     <div class="filter-actions">
       <button class="apply" id="sApply">Apply</button>
       <button class="reset" id="sReset">Reset</button>
+      <!-- NSFW filter (outpaintings blend bar): filter the spread/cluster by the
+           consensus of the NSFW classifiers. A filter, not a ranking weight. -->
+      <span class="seg nsfw-seg" id="nsfwSeg" title="Filter by NSFW likelihood (consensus of the NSFW classifiers)">
+        <button data-nsfw="all" class="on" title="No NSFW filtering.">All</button><button data-nsfw="sfw" title="Hide covers the classifiers flag NSFW.">Hide NSFW</button><button data-nsfw="nsfw" title="Show only covers flagged NSFW.">Only NSFW</button>
+      </span>
       <span style="flex:1"></span>
       <span class="filter-cov" id="sortCov"><i>final = Σ wᵢ·scoreᵢ (vec + aesthetic models) · exclude pushes the query vector away</i></span>
     </div>
@@ -2997,7 +3005,8 @@ function _showcaseRank(pool){
   scored.sort((a, b) => b.k - a.k);
   // Collapse to one rep per album AFTER ranking → the top-ranked re-roll of each
   // cover survives, so the landing is a spread of UNIQUE covers to judge models on.
-  return _collapseAlbums(scored.map(x => x.h));
+  // Then apply the NSFW blend-bar filter (no-op unless Hide/Only is selected).
+  return _applyNsfw(_collapseAlbums(scored.map(x => x.h)));
 }
 function _showcaseReRank(){                           // re-sort the whole pool + repaint from the top
   if(!_showcasePool || _mode !== "showcase") return;
@@ -3098,6 +3107,7 @@ function _hideClusterBar(){ const b = $("#clusterBar"); if(b) b.style.display = 
 // it swaps the whole page for that cover's variants (region-dedup group) ranked again by
 // the active aesthetic blend, so you pick the best re-roll. Back returns to the spread.
 async function showAlbumCluster(path){
+  _clusterPath = path;   // remembered so an NSFW-filter toggle can re-run this cluster
   _mode = "cluster"; _hasMore = false; _rendered = 0; _resultTotal = null;
   if(_searchAbort){ _searchAbort.abort(); _searchAbort = null; }
   _hideShowcaseBar();
@@ -3111,8 +3121,9 @@ async function showAlbumCluster(path){
     _mode = "text"; if(uid) openDetail(uid); return;
   }
   r.items.forEach(it => { if(it.scores) Object.assign(it, it.scores); });  // metrics top-level for the blend
-  _mountClusterBar(r.count);
-  _renderHits({ results: r.items, refinements: [] });
+  const items = _applyNsfw(r.items);   // honor the NSFW blend-bar filter inside the cluster too
+  _mountClusterBar(items.length);
+  _renderHits({ results: items, refinements: [] });
   if(_sortBlendActive()) applySortBlend();               // "ranked again by the retrieval algorithm"
 }
 function _mountClusterBar(count){
@@ -3293,6 +3304,30 @@ $("#fAISeg").addEventListener("click", e => {
   const b = e.target.closest("button[data-aimode]"); if(!b) return;
   _setAiMode(b.dataset.aimode); _syncAi(); _applyAi();
 });
+
+// ---- NSFW filter on the outpaintings blend bar (client-side; consensus classifier) ----
+// A FILTER, not a ranking weight: drops (or isolates) covers the NSFW classifiers flag,
+// by the consensus probability inlined on each result. Applies to the unique spread and
+// to a drilled cover cluster; re-applies live on toggle.
+const _NSFW_T = 0.5;
+let _clusterPath = null;   // last cover drilled into, so a filter toggle can re-run it
+function _nsfwMode(){ const b = $("#nsfwSeg") && $("#nsfwSeg").querySelector("button.on"); return b ? b.dataset.nsfw : "all"; }
+function _nsfwScore(h){ const v = (h.nsfw_consensus != null) ? h.nsfw_consensus : (h.nsfw != null ? h.nsfw : 0); return +v || 0; }
+function _applyNsfw(hits){
+  const m = _nsfwMode(); if(m === "all" || !window._OUTPAINT) return hits;
+  return hits.filter(h => m === "sfw" ? _nsfwScore(h) < _NSFW_T : _nsfwScore(h) >= _NSFW_T);
+}
+function _setNsfwMode(m){
+  const seg = $("#nsfwSeg"); if(seg) seg.querySelectorAll("button").forEach(x => x.classList.toggle("on", x.dataset.nsfw === m));
+  try{ localStorage.setItem("muser-nsfw", m); }catch{}
+}
+if($("#nsfwSeg")) $("#nsfwSeg").addEventListener("click", e => {
+  const b = e.target.closest("button[data-nsfw]"); if(!b) return;
+  _setNsfwMode(b.dataset.nsfw);
+  if(_mode === "showcase") _showcaseReRank();
+  else if(_mode === "cluster" && _clusterPath) showAlbumCluster(_clusterPath);
+});
+try{ const _nm = localStorage.getItem("muser-nsfw"); if(_nm) _setNsfwMode(_nm); }catch{}
 $("#fAISlider").addEventListener("input", _syncAi);   // live: relabel as you drag
 $("#fAISlider").addEventListener("change", _applyAi); // apply on release
 // Boot: rehydrate persisted state, then refresh the coverage line.
