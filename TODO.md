@@ -87,3 +87,7 @@ Full session writeup: `reports/2026-06-13-personal-triage.md`. Sub-tool shipped
 - **Grey-out threshold tuner** — the NSFW classifiers over-flag album art; a per-model
   ephemeral cutoff tuner (like the blur one in `docs/ephemeral-design-interfaces.md`) would
   make picking the grey-out threshold visual instead of guessed.
+- **Variance-field art → blog post** — eventually use the variance-map art (per-pixel std
+  across a cover's re-rolls → magma/mako fields; galleries in `~/Desktop/cc-muser/variance-art/`,
+  method in `docs/variance-maps.md`) as visuals / a section in the blog post. Favorite
+  colormaps: viridis · twilight_shifted · magma · mako · inferno.
