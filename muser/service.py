@@ -3828,6 +3828,7 @@ def create_app(model: str = DEFAULT_MODEL):
         items = []
         from .personal import cleanup as _cln
         from . import favorites as _favmod
+        from . import albums as _albums
         for p in live[offset:]:
             d = [dp for dp in dupes.get(p, [p]) if not _hidden(dp)] or [p]
             it = {
@@ -3841,6 +3842,9 @@ def create_app(model: str = DEFAULT_MODEL):
             fv = _favmod.lookup(p)   # taste model P(favorite) → Sort-blend "Taste" weight
             if fv is not None:
                 it["favorites"] = fv
+            ae = _albums.lookup(p)   # album group + variant count → unique-spread + click-to-cluster
+            if ae is not None:
+                it["album"] = ae["group"]; it["album_count"] = ae["count"]; it["album_removed"] = ae["removed"]
             items.append(it)
             if len(items) >= limit:
                 break
@@ -3850,6 +3854,41 @@ def create_app(model: str = DEFAULT_MODEL):
         return {"built": True, "metric": metric, "metrics": s["metrics"],
                 "total": total,
                 "items": items, "coverage": _metric_coverage(metric, len(canon))}
+
+    @app.get("/api/album")
+    def album_cluster(path: str, limit: int = 300):
+        # Click-to-cluster: every outpainting variant in `path`'s album group (region
+        # dedup), shaped as search-result rows and pre-ranked by aesthetic, so the
+        # frontend re-ranks them with the current Sort blend. The payoff of the albums
+        # facet — drill from one cover-rep into all its re-rolls to pick the best.
+        from . import albums as _albums
+        gid = _albums.group_of(path)
+        if gid is None or gid < 0:
+            return {"built": False, "items": [], "rep": path, "count": 0}
+        mem = _albums.members(gid)
+        s = _refresh_scores_cache().get("full") or {}
+        scores = s.get("scores", {})
+        from .personal import cleanup as _cln
+        from . import favorites as _favmod
+        items = []
+        for p in mem:
+            if _hidden(p):
+                continue
+            sc = scores.get(p, {})
+            it = {"path": p, "uid": uid_for(p), "name": os.path.basename(p),
+                  "score": sc.get("aesthetic_v2", sc.get("aesthetic", 0.0)),
+                  "scores": sc, "dupes": [p], "dupe_count": 1,
+                  "album": gid, "album_count": len(mem), "album_removed": False}
+            qe = _cln.lookup(p)   # Sort-blend "Quality"
+            if qe is not None:
+                it["quality"] = round(1.0 - _cln.delete_score(qe)[0] / 100.0, 4)
+            fv = _favmod.lookup(p)   # Sort-blend "Taste"
+            if fv is not None:
+                it["favorites"] = fv
+            items.append(it)
+        items.sort(key=lambda it: it["score"], reverse=True)
+        return {"built": True, "rep": mem[0] if mem else path,
+                "count": len(items), "total": len(items), "items": items[:limit]}
 
     # ---- per-image detail page (uid → everything we know about that file) ----
     # The web UI's #/image/<uid> route bundles every per-image fact into a single

@@ -233,6 +233,9 @@
   #results .card .thumb img.ld { opacity:1; }
   .dupe { position:absolute; top:8px; right:8px; background:rgba(0,0,0,.72); color:#fff;
           font-size:10px; padding:2px 7px; border:0; cursor:pointer; }
+  /* Outpaintings variant-count badge — click the thumb to drill into the cover's re-rolls. */
+  .albumb { position:absolute; top:8px; right:8px; background:rgba(201,162,75,.94); color:#12100e;
+            font-size:10px; font-weight:700; padding:2px 7px; border:0; letter-spacing:.2px; }
   .scoreb { position:absolute; top:8px; left:8px; background:rgba(0,0,0,.72); color:#fff;
             font-size:10px; padding:2px 7px; border:0; font-variant-numeric:tabular-nums; }
   /* C2PA provenance flag — bottom-left, clear of scoreb (TL) and dupe (TR). Amber =
@@ -2964,6 +2967,23 @@ function _statusOnce(){
   return _statusOncePromise || (_statusOncePromise =
     fetch("/api/status").then(r=>r.json()).catch(()=>({})));
 }
+// Outpaintings UNIQUE SPREAD: one representative per album group (region-dedup of a
+// cover's re-rolls), blurred covers dropped. Call AFTER ranking so the best-ranked
+// variant of each cover is the one kept. Pass-through for the main instance or for
+// items the album facet hasn't grouped (album == null).
+function _collapseAlbums(hits){
+  if(!window._OUTPAINT) return hits;
+  const seen = new Set(); const out = [];
+  for(const h of hits){
+    if(h.album_removed) continue;                    // blurred cover → not in the spread
+    if(h.album != null){
+      if(seen.has(h.album)) continue;                // already have this cover's rep
+      seen.add(h.album);
+    }
+    out.push(h);
+  }
+  return out;
+}
 function _showcaseRank(pool){
   const w = {}; SORT_METRICS.forEach(m => w[m.id] = parseFloat($("#sW_"+m.id).value));
   w.vec = 0;                                         // no relevance on the landing
@@ -2975,7 +2995,9 @@ function _showcaseRank(pool){
   // live when the blend changes) instead of the item's arbitrary source-metric %.
   scored.forEach(x => { x.h._blendPct = Math.round(100 * x.k / maxK); });
   scored.sort((a, b) => b.k - a.k);
-  return scored.map(x => x.h);
+  // Collapse to one rep per album AFTER ranking → the top-ranked re-roll of each
+  // cover survives, so the landing is a spread of UNIQUE covers to judge models on.
+  return _collapseAlbums(scored.map(x => x.h));
 }
 function _showcaseReRank(){                           // re-sort the whole pool + repaint from the top
   if(!_showcasePool || _mode !== "showcase") return;
@@ -3069,6 +3091,39 @@ function _mountShowcaseBar(total){
   bar.style.display = "";
 }
 function _hideShowcaseBar(){ const b = $("#showcaseBar"); if(b) b.style.display = "none"; }
+function _hideClusterBar(){ const b = $("#clusterBar"); if(b) b.style.display = "none"; }
+
+// ---- Click-to-cluster: drill from a cover-rep into ALL its re-rolls, re-ranked ----
+// The payoff of the albums facet: on the unique spread each tile is one cover; clicking
+// it swaps the whole page for that cover's variants (region-dedup group) ranked again by
+// the active aesthetic blend, so you pick the best re-roll. Back returns to the spread.
+async function showAlbumCluster(path){
+  _mode = "cluster"; _hasMore = false; _rendered = 0; _resultTotal = null;
+  if(_searchAbort){ _searchAbort.abort(); _searchAbort = null; }
+  _hideShowcaseBar();
+  showSkeletons(8);
+  let r;
+  try{ r = await (await fetch(`/api/album?path=${enc(path)}`)).json(); }
+  catch(e){ r = null; }
+  if(_mode !== "cluster") return;                        // user navigated away mid-fetch
+  if(!r || !r.built || !r.items || !r.items.length){
+    const uid = r && r.items && r.items[0] && r.items[0].uid;   // singleton / facet miss → detail page
+    _mode = "text"; if(uid) openDetail(uid); return;
+  }
+  r.items.forEach(it => { if(it.scores) Object.assign(it, it.scores); });  // metrics top-level for the blend
+  _mountClusterBar(r.count);
+  _renderHits({ results: r.items, refinements: [] });
+  if(_sortBlendActive()) applySortBlend();               // "ranked again by the retrieval algorithm"
+}
+function _mountClusterBar(count){
+  let bar = $("#clusterBar");
+  if(!bar){ bar = document.createElement("div"); bar.id = "clusterBar"; bar.className = "showcase-bar"; $("#results").before(bar); }
+  bar.innerHTML =
+    `<button id="clusterBack" class="sc-shuffle" title="Back to the unique spread of covers">← back to spread</button>
+     <span class="sc-title">This cover · <b>${count}</b> variants — ranked by your blend</span>`;
+  bar.querySelector("#clusterBack").onclick = () => { _hideClusterBar(); showShowcase(); };
+  bar.style.display = "";
+}
 
 // ---- Filter panel: resolution / aspect / file-size constraints, with
 //      presets. When a query is active the params ride on /api/search; with
@@ -3819,6 +3874,10 @@ function _buildCard(h){
   const dupes=h.dupe_count||1;
   const badge = dupes>1 ? `<span class="dupe" title="${dupes} copies — click to see all">${dupes} copies</span>` : "";
   const aib = aiBadge(h.ai_pct);
+  // Outpaintings: variant-count badge. Clicking the thumb drills into all N re-rolls
+  // of this cover (region-dedup group), re-ranked by the active blend.
+  const albumBadge = (window._OUTPAINT && (h.album_count||1) > 1)
+    ? `<span class="albumb" title="Click to see all ${h.album_count} variants of this cover, re-ranked">${h.album_count} variants</span>` : "";
   // uid: stable 12-char blake2b of the path — set as data-uid on the card so
   // it's queryable from DevTools, and as the `title` tooltip so the user can
   // see it. Not rendered visually (keeps the filename UI intact).
@@ -3839,7 +3898,7 @@ function _buildCard(h){
   const _tsz = window._OUTPAINT ? Math.max(THUMB, 1080) : THUMB;
   const thumbSrc = _thumbFitSrc(`/api/thumb?path=${enc(h.path)}&size=${_tsz}`, _masonryOn() || !!window._OUTPAINT);
   c.innerHTML=`
-    <div class="thumb"><span class="scoreb" title="${scoreTitle}">${pct}</span>${badge}${aib}<img decoding="async" fetchpriority="high" src="${thumbSrc}" title="${h.name} · uid:${uid}"></div>
+    <div class="thumb"><span class="scoreb" title="${scoreTitle}">${pct}</span>${badge}${albumBadge}${aib}<img decoding="async" fetchpriority="high" src="${thumbSrc}" title="${h.name} · uid:${uid}"></div>
     <div class="meta"><div class="name" title="${h.path}${uid?' · uid:'+uid:''}">${h.name}</div>
       <div class="bar"><i style="width:${pct}%"></i></div></div>
     <div class="foot">
@@ -3867,6 +3926,12 @@ function _buildCard(h){
         return;
       }
       if (e.button !== 0) return;   // ignore right-click etc.
+      // Outpaintings: a plain click drills into this cover's variants (region-dedup
+      // group), re-ranked — NOT the per-image detail page. Only when the cover has
+      // >1 variant and we're not already inside its cluster.
+      if (window._OUTPAINT && h.album != null && (h.album_count||1) > 1 && _mode !== "cluster") {
+        showAlbumCluster(h.path); return;
+      }
       uid ? openDetail(uid) : window.open(newTabUrl, "_blank");
     };
     thumbEl.onclick = onThumb;
@@ -3946,6 +4011,7 @@ function _commitReset(g, frag, gen){
 function _renderHits(r){
   const g=$("#results");
   if(_mode !== "showcase") _hideShowcaseBar();   // any real result set replaces the showcase
+  if(_mode !== "cluster") _hideClusterBar();     // leaving a cover cluster → drop its back-bar
   _currentResults = r.results || [];
   if(!r.results.length){
     g.innerHTML="";
