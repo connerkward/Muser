@@ -796,6 +796,42 @@
   .filter-panel { display:none; border:1px solid var(--line); padding:14px 16px;
                   margin:6px 0 14px; font-size:12px; color:var(--mut); }
   .filter-panel.on { display:block; }
+
+  /* ── Density + full-window modes ─────────────────────────────────────────
+     body.op      = outpaintings instance: full-width, tighter search grid so
+                    more images fit on screen.
+     body.fullwin = max-density: strip every bit of chrome except the thumbnail,
+                    its score badge, and the (sticky) aesthetic-blend console. */
+  body.op .wrap { max-width:none; }
+  body.op .grid { gap:12px 10px; }
+  /* Blend console sticks to the top of the viewport while it's open, so it stays
+     reachable while scrolling the ranked grid (normal outpaintings + full-window). */
+  body.op #sortPanel.on, body.fullwin #sortPanel {
+    position:sticky; top:0; z-index:20;
+    background:rgba(18,17,20,.96); backdrop-filter:blur(10px); }
+
+  body.fullwin header,
+  body.fullwin #searchView > .compose,
+  body.fullwin #searchView > .searchbar,
+  body.fullwin #searchView > #cbar,
+  body.fullwin #searchView > .tools,
+  body.fullwin #searchView > #filterPanel,
+  body.fullwin #showcaseBar,
+  body.fullwin #results .card .meta,
+  body.fullwin #results .card .foot,
+  body.fullwin #results .card .thumb .dupe,
+  body.fullwin #results .card .thumb .aib { display:none !important; }
+  body.fullwin .wrap { max-width:none; padding:0; }
+  body.fullwin #results {
+    grid-template-columns:repeat(auto-fill,minmax(160px,1fr)) !important;
+    gap:3px !important; padding:0 3px 40px; }
+  body.fullwin #sortPanel {
+    display:block !important; max-width:none !important; margin:0 !important;
+    border-radius:0; border-left:0; border-right:0; border-top:0; }
+  #fullwinExit { display:none; }
+  body.fullwin #fullwinExit {
+    display:inline-flex; align-items:center; gap:6px; position:fixed;
+    top:8px; right:12px; z-index:40; }
   /* ---- legacy blend controls: kept in DOM for the existing JS, never shown ---- */
   .legacy-blend { display:none; }
 
@@ -1227,6 +1263,8 @@
   <button class="nav" id="hideFlaggedBtn" style="display:none" title="Toggle hiding images flagged for deletion across all tabs">🗑 hidden</button>
   <!-- Algorithm explainer: expands a panel describing the active tab's exact algorithm -->
   <button class="nav" id="algoBtn" title="How does this tab work? Exact algorithms + components">ⓘ</button>
+  <!-- Full-window: hide all chrome, show only thumbnails + score + the sticky blend console -->
+  <button class="nav" id="fullwinBtn" title="Full window — max image density (only thumbnails, score, and the blend console). Esc to exit.">⛶ Full</button>
   <span class="mut" id="status">…</span>
   <span class="sp"></span>
   <span class="spinner" id="spinner" style="display:none" title="Working…"></span>
@@ -1237,6 +1275,8 @@
   <select id="model"></select>
 </header>
 
+<!-- Fixed exit button, visible only in full-window mode (body.fullwin) -->
+<button id="fullwinExit" class="nav" title="Exit full window (Esc)">⛶ Exit</button>
 <div class="wrap" id="searchView">
   <div class="compose" id="compose">
     <span class="lab">compose with</span>
@@ -3378,6 +3418,25 @@ $("#sortAdvToggle").addEventListener("click", () => {
   $("#sortAdvToggle").classList.toggle("open", open);
   if(open) _refreshBlendVisFromWeights();   // opening Advanced shows the six that the single slider produced
 });
+// ---- Full-window mode: max image density (thumbnails + score + sticky blend) -----
+function setFullWin(on){
+  on = !!on;
+  document.body.classList.toggle("fullwin", on);
+  // Ensure the blend console is open (built at init) so it shows + lays out while pinned.
+  if(on && !$("#sortPanel").classList.contains("on")){
+    $("#sortPanel").classList.add("on");
+    $("#sortToggle").classList.add("open","on");
+  }
+  try{ localStorage.setItem("muser-fullwin", on ? "1" : "0"); }catch{}
+  if(typeof _masonryOn === "function" && _masonryOn()) layoutMasonry(true);
+}
+$("#fullwinBtn").addEventListener("click", () => setFullWin(!document.body.classList.contains("fullwin")));
+$("#fullwinExit").addEventListener("click", () => setFullWin(false));
+document.addEventListener("keydown", (e) => {
+  if(e.key === "Escape" && document.body.classList.contains("fullwin")){ e.preventDefault(); setFullWin(false); }
+});
+try{ if(localStorage.getItem("muser-fullwin") === "1") setFullWin(true); }catch{}
+
 _wireSortBlendInputs();
 // Restore the single slider from its own persisted value if present; otherwise
 // estimate it from the persisted six weights so the bar isn't blank.
@@ -7021,6 +7080,7 @@ function syncOutpaintingsNav(attempt=0){
   fetch("/api/status").then(r=>r.json()).then(s=>{
     if(!s.outpaintings) return;
     window._OUTPAINT = true;   // showShowcase() resolves this itself via _statusOnce()
+    document.body.classList.add("op");   // full-width + denser search grid
     document.querySelectorAll(
       '[data-view="explore"], #navExplore, [data-view="faces"], #navFaces, '
       + '[data-view="color"], #navColor, [data-view="ai"], #navAI, '
