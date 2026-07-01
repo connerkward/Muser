@@ -596,6 +596,9 @@ def create_app(model: str = DEFAULT_MODEL):
             # True once the intrinsic-quality facet (cleanup.json) is built — the
             # frontend reveals the "Quality" weight in the Sort blend when set.
             "quality": _quality_available(),
+            # True once the taste model (favorites_pred.json) is trained — the
+            # frontend reveals the "Taste" weight in the Sort blend when set.
+            "favorites": _favorites_available(),
         }
 
     # ---- Hidden personal-triage endpoints (only meaningful on the personal root) ----
@@ -610,6 +613,10 @@ def create_app(model: str = DEFAULT_MODEL):
     def _quality_available() -> bool:
         from .personal import cleanup as _cln
         return _cln.available() and _cln.cache_exists()
+
+    def _favorites_available() -> bool:
+        from . import favorites as _fav
+        return _fav.available()
 
     @app.get("/api/personal/summary")
     def personal_summary():
@@ -1488,6 +1495,7 @@ def create_app(model: str = DEFAULT_MODEL):
         _attach_c2pa(results)
         _attach_aidet(results)
         _attach_quality(results)
+        _attach_favorites(results)
         if int(ai_min or 0) > 0 or int(ai_max if ai_max is not None else 100) < 100:
             results = _filter_by_ai_band(results, ai_min, ai_max)
         if sort in ("ai", "ai_asc"):
@@ -1818,6 +1826,15 @@ def create_app(model: str = DEFAULT_MODEL):
             if e is not None:
                 junk, _ = _cln.delete_score(e)
                 r["quality"] = round(1.0 - junk / 100.0, 4)
+
+    def _attach_favorites(results):
+        # Inline the taste model's P(favorite) per result (soft — trained on the
+        # user's favorites folder). Surfaced as the Sort-blend "Taste" weight.
+        from . import favorites as _fav
+        for r in results:
+            v = _fav.lookup(r["path"])
+            if v is not None:
+                r["favorites"] = v
 
     def _ai_pct(r):
         # AI-likelihood percentage for one result, from the inlined value or a
@@ -3786,6 +3803,7 @@ def create_app(model: str = DEFAULT_MODEL):
         # Walk the filtered ranked list pulling entries until the page is full.
         items = []
         from .personal import cleanup as _cln
+        from . import favorites as _favmod
         for p in live[offset:]:
             d = [dp for dp in dupes.get(p, [p]) if not _hidden(dp)] or [p]
             it = {
@@ -3796,6 +3814,9 @@ def create_app(model: str = DEFAULT_MODEL):
             qe = _cln.lookup(p)   # intrinsic quality → Sort-blend "Quality" weight
             if qe is not None:
                 it["quality"] = round(1.0 - _cln.delete_score(qe)[0] / 100.0, 4)
+            fv = _favmod.lookup(p)   # taste model P(favorite) → Sort-blend "Taste" weight
+            if fv is not None:
+                it["favorites"] = fv
             items.append(it)
             if len(items) >= limit:
                 break
