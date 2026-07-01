@@ -217,6 +217,13 @@
   .card .thumb { position:relative; aspect-ratio:1; background:var(--paper);
                  cursor:zoom-in; overflow:hidden; }
   .card .thumb img { width:100%; height:100%; object-fit:cover; }
+  /* Outpaintings instance (body.op): images are ultra-wide (~6:1). Show the full
+     panorama instead of a square center-crop — the builder fetches thumbs
+     aspect-preserving (fit=contain) and the tile is a matching 6:1 box, so
+     object-fit:cover fills it with no crop. Masonry mode overrides this via
+     #dbgStyle (higher specificity) when the user toggles it. */
+  body.op .card .thumb,
+  body.op .skeleton { aspect-ratio:6/1; }
   /* Pinterest-style fade-in (search/showcase grid only): the grey box gently
      pulses until each image has decoded, then the thumb fades in — so the grid
      never flashes white / pops as results stream or swap in. Scoped to #results
@@ -825,6 +832,10 @@
   body.fullwin #results {
     grid-template-columns:repeat(auto-fill,minmax(160px,1fr)) !important;
     gap:3px !important; padding:0 3px 40px; }
+  /* Outpaintings (~6:1) in max-density: 160px cols would be ~27px-tall slivers;
+     use a wider min track so the panoramas stay legible. */
+  body.op.fullwin #results {
+    grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr)) !important; }
   body.fullwin #sortPanel {
     display:block !important; max-width:none !important; margin:0 !important;
     border-radius:0; border-left:0; border-right:0; border-top:0; }
@@ -3826,7 +3837,11 @@ function _buildCard(h){
   // src AFTER render, dropping the just-decoded bitmap and re-flashing grey. Baking
   // the right URL in up front makes the post-render retune a no-op, so the tile we
   // wait-to-decode in _commitReset is the one that stays painted.
-  const thumbSrc = _thumbFitSrc(`/api/thumb?path=${enc(h.path)}&size=${THUMB}`, _masonryOn());
+  // Outpaintings are ~6:1: request a wider source and keep it aspect-preserving
+  // (contain) so the tile shows the full panorama, not a square crop. Survives the
+  // post-render _retuneThumbs because applyGridSettings passes wide=true there too.
+  const _tsz = window._OUTPAINT ? Math.max(THUMB, 720) : THUMB;
+  const thumbSrc = _thumbFitSrc(`/api/thumb?path=${enc(h.path)}&size=${_tsz}`, _masonryOn() || !!window._OUTPAINT);
   c.innerHTML=`
     <div class="thumb"><span class="scoreb" title="${scoreTitle}">${pct}</span>${badge}${aib}<img decoding="async" fetchpriority="high" src="${thumbSrc}" title="${h.name} · uid:${uid}"></div>
     <div class="meta"><div class="name" title="${h.path}${uid?' · uid:'+uid:''}">${h.name}</div>
@@ -6764,12 +6779,16 @@ function applyGridSettings(){
     layoutMasonry(true);
   } else {
     // cols 0 → auto-fill with the thumb size as min track; cols N → exactly N columns.
+    // Outpaintings (~6:1): use a wider min track so the panoramic strips get real
+    // height, and keep thumbs aspect-preserving (contain) rather than square.
+    const wide = !!window._OUTPAINT;
+    const minTrack = wide ? Math.max(s.thumb * 2, 440) : s.thumb;
     const cols = s.cols > 0
       ? `repeat(${s.cols}, 1fr)`
-      : `repeat(auto-fill, minmax(${s.thumb}px, 1fr))`;
+      : `repeat(auto-fill, minmax(min(100%, ${minTrack}px), 1fr))`;
     style.textContent = `.grid { grid-template-columns:${cols} !important; }`;
     _clearMasonryLayout();
-    _retuneThumbs(false);
+    _retuneThumbs(wide);
   }
 }
 
@@ -7097,6 +7116,13 @@ function syncOutpaintingsNav(attempt=0){
     if(!s.outpaintings) return;
     window._OUTPAINT = true;   // showShowcase() resolves this itself via _statusOnce()
     document.body.classList.add("op");   // full-width + denser search grid
+    // The instance flag resolves ASYNCHRONOUSLY (after this /api/status), but
+    // applyGridSettings() already ran at boot with _OUTPAINT undefined — so it
+    // picked the square/narrow branch and _retuneThumbs(false) stripped the wide
+    // (fit=contain) srcs the builder baked. Re-run it now that wide is known: it
+    // sets the wider columns AND _retuneThumbs(true) re-adds &fit=contain to the
+    // thumbs already in the DOM.
+    applyGridSettings();
     document.querySelectorAll(
       '[data-view="explore"], #navExplore, [data-view="faces"], #navFaces, '
       + '[data-view="color"], #navColor, [data-view="ai"], #navAI, '
