@@ -1,5 +1,8 @@
 # Ultra-wide album-art outpainting — ComfyUI workflow candidates
 
+> **CORRECTION (2026-07-01, after the user flagged it):** this PNG-based investigation was INCOMPLETE. The *full* pipeline — including SAM3 text removal, UltraSharp upscale, and the `SaveLayeredTIFFXMP` archive — lives in the **`ComfyUI-XMP_*.tiff`** multi-layer archives (`OUTPAINTINGS/comfyui-output/`, 879 files), as ONE ComfyUI graph, not a separate upstream Python stage. Removal is `SAM3Segment` (+ RMBG), NOT SAM+GroundingDINO (0/16 sampled TIFFs contain GroundingDINO). See `outpainting-pipeline.md` §1 for the verified breakdown. The BigLama PNGs below held only the outpaint half.
+
+
 Read-only investigation (2026-07-01). Goal: find the real production ComfyUI workflow behind
 the ultra-wide album-cover outpainting pipeline (SAM+GroundingDINO text removal → 4× UltraSharp
 → "BigLaMa latent smudge" → slight blur → Stable-Diffusion ultra-wide outpaint → driver-distraction

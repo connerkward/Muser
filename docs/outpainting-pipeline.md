@@ -86,48 +86,49 @@
 ### 1. Album art → outpainting
 
 The core: a square album cover → a clean, ultra-wide (~6:1) in-car image. **Confirmed from
-the real production workflow** (embedded in every `ComfyUI-BigLama-*.png`'s metadata — full
-node-map in [`outpainting-workflow-candidates.md`](./outpainting-workflow-candidates.md)). It
-splits into an **upstream Python prep stage** and the **ComfyUI outpaint graph** — the
-SAM/GroundingDINO + UltraSharp steps are *not* in the ComfyUI graph, they run before it.
+the real production workflow**, which is embedded in the **archival multi-layer XMP TIFFs**
+(`OUTPAINTINGS/comfyui-output/ComfyUI-XMP_*.tiff`, 879 of them) — NOT in the standalone
+`ComfyUI-BigLama-*.png`s (those held only the outpaint half). It is **one ComfyUI graph**
+end-to-end that terminates in a `SaveLayeredTIFFXMP` node baking every stage into the TIFF.
+Verified across a 16-TIFF sample (signatures 16/16 unless noted):
 
-**1a — Upstream prep (separate batch Python, not ComfyUI):**
-- **Text / logo / label removal — SAM2 + GroundingDINO.** GroundingDINO does open-vocabulary
-  detection ("text", "logo", "wordmark") → boxes; SAM2 turns boxes into precise masks; a
-  LaMa remover (`AILab_LamaRemover`, same `big-lama.pt`) erases them. Outputs
-  `*_outpaint_ready.jpg`. (Removes copy/branding so the outpaint isn't anchored to it, and
-  kills the legible text a distraction heuristic penalizes.)
-- **Upscale — 4× UltraSharp.** ESRGAN-family `4x-UltraSharp`, also a separate upstream stage,
-  so the clean cover has enough resolution to seed the wide canvas without center softness.
+1. **Load** — `LoadImage` / `LoadImageListFromDir //Inspire` (batch) → the 640×640 cover.
+2. **Text / logo / label removal — SAM3.** `SAM3Segment` (SAM 3 — text-promptable
+   open-vocabulary segmentation, so it does detection *and* masking itself; this **replaces
+   the SAM+GroundingDINO combo** — no GroundingDINO node appears in any archived TIFF,
+   0/16) + `RMBG` (background/matte, ~9/16) → `AILab_LamaRemover` (LaMa) erases the masked
+   copy/branding. (Removes what anchors the outpaint to IP and what a distraction heuristic
+   penalizes as legible text.)
+3. **Upscale — 4× UltraSharp (in-graph).** `UpscaleModelLoader` + `ImageUpscaleWithModel`
+   (16/16) — so the clean cover has resolution to seed the wide canvas.
+4. **"Latent smudge" — big-lama.** The novel ultra-wide trick.
+   `INPAINT_LoadInpaintModel → INPAINT_InpaintWithModel` with **`big-lama.pt`** (LaMa,
+   Suvorov et al. 2021 — Fourier convs, strong at large-mask structure) smears the cover's
+   structure in a semi-repeating pattern across the fill region → the **`lama`** +
+   **`lama-vignette`** layers. Blurred/vignetted (`CR Vignette Filter`, masked blur) to keep
+   complexity **under the driver-distraction threshold**. See the smudge at
+   `~/Desktop/cc-muser/outpaint-biglama-smudge.png`.
+5. **Asymmetric outpaint pad.** `ImagePadForOutpaint` (e.g. `[left=1680, top=104, right=1152,
+   bottom=160, feather=100]`) — **left ≈ 1.46× right**, cover **offset-right**. *(Exactly the
+   offset the Muser curation mask was independently re-derived to — center ≈0.58 — from
+   cross-variant variance. Full circle: the curator reverse-engineered the generator's pad.)*
+6. **Outpaint — SDXL.** `InpaintModelConditioning` + `KSampler` on an **SDXL** inpaint
+   checkpoint (RealVisXL family, 16/16), with **`IPAdapter`** (`IPAdapterUnifiedLoader`,
+   ~3/16) carrying the cover's *style* into the wings and **`ControlNet`** (`ControlNetLoader`,
+   ~9/16) capping invented detail — the "controlnet to limit generated detail," confirmed.
+   `OpenAIChatConfig` node in-graph (prompt/caption assist). Heavy prompt + param tuning.
+7. **Composite + finish.** The sharp 640×640 **`album-art`** is composited back over the
+   generated wings (`ImageCompositeMasked`) → the center stays the crisp original while the
+   wings are generated; `FilmGrain` + vignette finish. Layers separate this out:
+   `final-render-no-album-art` vs `final-render-ui` / `-no-ui` / `-upscale`.
+8. **Archive — `SaveLayeredTIFFXMP`.** Bakes all 7 named layers (`album-art`, `lama`,
+   `lama-vignette`, `final-render-upscale`, `final-render-no-ui`, `final-render-ui`,
+   `final-render-no-album-art`) + the workflow into the XMP TIFF → **regenerate from any
+   step**. This IS the "archival multi-layer TIFF with all components" from §6.
 
-**1b — ComfyUI outpaint graph** (one large ~580–630-node multi-branch dev graph):
-1. **"Latent smudge" — BigLaMa.** The custom ultra-wide trick, and the novel part.
-   `INPAINT_LoadInpaintModel → INPAINT_InpaintWithModel` with model **`big-lama.pt`** (LaMa,
-   Suvorov et al. 2021 — Fourier convolutions, strong at large-mask structure) takes the
-   album-art structure and **smears it in a semi-repeating pattern across the fill region**
-   (noise seeded by an `Image Power Noise` blue-noise source), giving the diffusion model
-   *something coherent to extend from* instead of blank latent. See the smudge output at
-   `~/Desktop/cc-muser/outpaint-biglama-smudge.png` — sharp cover center, structure smeared
-   + softened outward.
-2. **Slight blur — reduce complexity.** `INPAINT_MaskedBlur [100,0]` (+ `Blur`×9,
-   `ImageBlend`, `Image Blend by Mask`) softens the smudge so the final image's high-freq /
-   busy content stays **under the driver-distraction heuristic's threshold**.
-3. **Asymmetric outpaint pad.** `ImagePadForOutpaint [left=1680, top=104, right=1152,
-   bottom=160, feather=100]` — **left ≈ 1.46× right**, so the cover sits **offset-right** of
-   center. *(This is exactly the offset the Muser curation mask was independently re-derived
-   to — `x∈[0.52,0.64]`, center ≈0.58 — from cross-variant variance. Full circle.)*
-4. **Outpaint — SDXL inpaint.** Primary checkpoint **`realvisxlV50_v30InpaintBakedvae`**
-   (RealVisXL 5.0, SDXL-inpaint). Experimental alt branches in the same graph: a dedicated
-   `sdxl-inpaint` path and a **Flux-fill** (`flux1-fill-dev`) path (`FluxGuidance` 0.5/3) —
-   the seed the crashcourse Flux template grew into. Heavy **prompt + param tuning**, each
-   candidate cross-checked against the distraction verifier (below) — the verifier is *in the
-   tuning loop*, not just a final gate.
-5. **ControlNet — cap invented detail.** `sdxl-controlnet-tile` limits how much detail SDXL
-   invents in the wings, keeping the extension calm (another distraction lever) — this is the
-   "controlnet to limit generated detail" from the braindump, confirmed present.
-6. **In-graph driver-distraction verifier — IMIC.** `IMIC TrafficLight` + `Distractive Area
-   Percentage` / Entropy / Illumination / Edge Ratio nodes score each candidate's distraction
-   right inside the graph, closing the tuning loop.
+*(The `IMIC TrafficLight` / Distractive-Area-% / Entropy / Illumination / Edge-Ratio
+driver-distraction verifier lives in the BigLama-PNG variant of the graph; whether it's also
+wired into every TIFF run vs. a separate verify pass — see §3 — is worth confirming.)*
 
 ### 2. Model choice + legal
 
@@ -254,14 +255,20 @@ Building on features already in flight elsewhere in the stack:
 
 ## Open items
 
-- [x] **Real ComfyUI workflow identified** — embedded in `ComfyUI-BigLama-*.png` metadata
-      (RealVisXL SDXL-inpaint + big-lama smudge + asymmetric pad + tile-ControlNet + IMIC
-      distraction verifier; SAM/GroundingDINO + UltraSharp were separate upstream stages). §1
-      above is written from it. Node-map: [`outpainting-workflow-candidates.md`](./outpainting-workflow-candidates.md).
-      **Confirm with Conner** it's the right graph, then finalize.
-- [ ] **Node-graph visual render** — not obtainable without launching ComfyUI (drag any
-      `ComfyUI-BigLama-*.png` in to see the live graph). For the portfolio, the smudge-stage
-      image itself (`~/Desktop/cc-muser/outpaint-biglama-smudge.png`) is the better visual.
+- [x] **Real full workflow identified** — embedded in the archival **`ComfyUI-XMP_*.tiff`**
+      (879 files, `OUTPAINTINGS/comfyui-output/`), ONE graph end-to-end (SAM3 removal →
+      UltraSharp → big-lama smudge → asymmetric pad → SDXL + IPAdapter + ControlNet →
+      composite → `SaveLayeredTIFFXMP`). The `ComfyUI-BigLama-*.png`s held only the outpaint
+      half — that earlier finding was incomplete. §1 rewritten from the TIFFs.
+- [ ] **SAM3 vs SAM+GroundingDINO** — the archived graph uses `SAM3Segment` (0/16 TIFFs have
+      any GroundingDINO/SAM2/Florence node). Braindump said "SAM+GroundingDINO" — likely the
+      older approach SAM3 later replaced. **Confirm with Conner** which era the portfolio
+      should describe (or note both).
+- [ ] **Distraction verifier wiring** — `IMIC TrafficLight` verifier is in the BigLama-PNG
+      graph variant; confirm whether it also runs inside the TIFF graph or as a separate pass.
+- [ ] **Node-graph visual render** — needs the ComfyUI GUI (drag any `ComfyUI-BigLama-*.png`
+      or open a `ComfyUI-XMP_*.tiff`'s workflow in). For the portfolio, the smudge-stage image
+      (`~/Desktop/cc-muser/outpaint-biglama-smudge.png`) + the 7 TIFF layers are better visuals.
 - [ ] Fill exact numbers into §0 and §8 (fleet size, per-image GPU cost, WebP/PNG ratio on
       real samples) once available.
 - [ ] Move this into `portfolio-2026` when the page is built; keep this as the source of truth
