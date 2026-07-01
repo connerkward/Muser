@@ -77,3 +77,13 @@ Full session writeup: `reports/2026-06-13-personal-triage.md`. Sub-tool shipped
 ## Announce
 
 - **Crosspost the muser publish** (deferred 2026-06-17) — muser shipped as a triple-duty Claude Code plugin (CLI + MCP server + bundled skill) in the `connerkward/ckw-skills` marketplace, topic-indexed for skill/MCP scrapers. Announce via the `crosspost` skill (human-gated, preview-first): lead with `docs/demo.gif`, the one-line install (`/plugin marketplace add connerkward/ckw-skills` → `/plugin install muser@connerkward`), and the on-device/offline/$0 angle; tag @claudeai. (The MCP-runtime-distribution item under "Distribution / packaging" is the prerequisite for a clean install before a big push.)
+
+## Outpaintings curation (2026-07-01)
+
+- **Album facet auto-trigger** — `muser albums` builds `album_groups.json` + `album_vecs.npz`
+  but, unlike c2pa/color/aidet, does NOT auto-run after re-indexing. Wire it into the
+  post-index hook (incremental: only new region-embeds) so the unique spread stays current.
+  Low priority — the outpaintings corpus is static. See `docs/outpaintings-curation.md`.
+- **Grey-out threshold tuner** — the NSFW classifiers over-flag album art; a per-model
+  ephemeral cutoff tuner (like the blur one in `docs/ephemeral-design-interfaces.md`) would
+  make picking the grey-out threshold visual instead of guessed.

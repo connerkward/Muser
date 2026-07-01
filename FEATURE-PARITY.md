@@ -155,7 +155,15 @@ Legend: ✅ full · 🟡 partial / constrained · ❌ gap (hidden or not compute
   - **Aesthetic-blend-ranked landing** — the empty-query showcase is ranked by the
     sort-blend (`_showcaseRank`), not shuffled, turning the landing into a
     model-comparison surface; each card carries a `_blendPct` relative to the top.
-  - **Quality metric in the blend bar** — in progress (extends `SORT_METRICS`).
+  - **Quality + Taste metrics in the blend bar** (`SORT_METRICS`/`ALLOC_METRICS`).
+  - **Album curation** (`muser/albums.py` + `/api/album`) — region-dedup of a cover's
+    re-rolls (fixed album-art box `x∈[0.52,0.64] y∈[0.13,0.74]`, region cosine ≥0.92):
+    - **Unique spread** — one rep per cover on the landing (`_collapseAlbums`), "N variants" badge.
+    - **Click-to-cluster** — click a cover → its variants re-ranked, ← back to spread.
+    - **Grey out (negative bar)** — toggle NSFW classifiers (Falconsai/AdamCodd/Marqo) + a
+      threshold; flagged covers grey out in place (red ✕), ranking untouched. A filter, not a weight.
+    - Curated defaults: grey-out Marqo@0.91, blend AesV2 23%/PickScore 33%/Quality 31%/Taste 13%.
+    - Full writeup: `docs/outpaintings-curation.md`. All gated to `s.albums` / `body.op`.
   - Demo-mode flipped **off** so the NSFW **Review** tab is shown.
 - **Tabs kept:** Search (SigLIP) + Interesting (aesthetic) + Review (NSFW). Everything
   else is hidden: Explore, Faces, Color, AI, Results, Jobs, plus `#cartOpen` (generate)

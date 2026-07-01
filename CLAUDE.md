@@ -148,6 +148,21 @@ See `REQUIREMENTS.md` for scope/decisions.
   falls back to SigLIP when a sidecar/path is missing. **Cluster names** are baked into
   `dinov3_clusters.json` as a `label` per cluster (a one-off gpt-4o-mini pass over each
   cluster's rep images — "bmw logo", "car interior", "modern architecture").
+- `muser/albums.py` — **album facet** (outpaintings curation). Crops each outpainting to
+  the fixed album-art box (`x∈[0.52,0.64] y∈[0.13,0.74]`, derived from cross-variant
+  variance + confirmed by the ComfyUI outpaint pad), embeds the region (SigLIP), clusters
+  same-cover variants by region cosine `≥0.92`, drops covers with region-blur `<5` or in a
+  `/blurred/` folder, reps = highest-`aesthetic_v2`. Persists `album_vecs.npz` (incremental)
+  + `album_groups.json`. `muser albums` builds it (391 groups / 255 blurred at build).
+  Backend: `/api/status` `albums` flag, `_attach_albums` inlines `album`/`album_count`/
+  `album_removed` on every result (+ in `/api/score`), `GET /api/album?path=` returns a
+  cover's variant group ranked by aesthetic. Frontend (outpaintings only): **unique spread**
+  (`_collapseAlbums` — one rep/cover on the landing, "N variants" badge), **click-to-cluster**
+  (`showAlbumCluster` — a cover's re-rolls re-ranked, ← back to spread), and the **negative
+  "Grey out" bar** (`NEG_METRICS` — toggle NSFW classifiers Falconsai/AdamCodd/Marqo + a
+  threshold; flagged covers grey out IN PLACE with a red ✕, ranking untouched — a filter,
+  not a blend weight). Curated defaults: grey-out Marqo@0.91, blend AesV2 23%/PickScore
+  33%/Quality 31%/Taste 13%. Full writeup: `docs/outpaintings-curation.md`.
 - `muser/projection.py` — `/api/projection` 3D point cloud for the **Explore** tab:
   pulls a stride-sampled (≤`MAX_N=5000`) set of (path, vector) rows from the model's
   LanceDB table, PCA-projects to 3D via **numpy SVD** (no sklearn), colors each point by
