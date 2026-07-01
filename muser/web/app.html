@@ -2914,7 +2914,14 @@ function _showcaseRank(pool){
   const w = {}; SORT_METRICS.forEach(m => w[m.id] = parseFloat($("#sW_"+m.id).value));
   w.vec = 0;                                         // no relevance on the landing
   const st = _blendNormStats(pool);
-  return pool.slice().sort((a, b) => _sortBlendKey(b, w, st) - _sortBlendKey(a, w, st));
+  const scored = pool.map(h => ({ h, k: _sortBlendKey(h, w, st) }));
+  const maxK = scored.reduce((m, x) => x.k > m ? x.k : m, 0) || 1;
+  // Stamp each item with its blend score as a 0–100 relative to the top of THIS
+  // ranking, so the card badge reflects what we're actually ranking by (and updates
+  // live when the blend changes) instead of the item's arbitrary source-metric %.
+  scored.forEach(x => { x.h._blendPct = Math.round(100 * x.k / maxK); });
+  scored.sort((a, b) => b.k - a.k);
+  return scored.map(x => x.h);
 }
 function _showcaseReRank(){                           // re-sort the whole pool + repaint from the top
   if(!_showcasePool || _mode !== "showcase") return;
@@ -3725,8 +3732,13 @@ function aiBadge(pct){
 // off-screen fragment for the keep-old-until-ready swap (see _commitReset).
 function _buildCard(h){
   const conf = h.prob ?? h.score;                       // calibrated P(match) when the model provides it, else raw cosine
-  const pct=Math.max(0,Math.min(100,Math.round(conf*100)));
-  const scoreTitle = h.prob!=null ? "match probability (SigLIP-calibrated)" : "cosine similarity";
+  // On the outpaintings ranked landing the card carries a _blendPct (its score under
+  // the active aesthetic blend, relative to the top) — show THAT so the badge matches
+  // the ranking; elsewhere fall back to the per-hit match/cosine score.
+  const pct = (h._blendPct != null) ? h._blendPct
+    : Math.max(0, Math.min(100, Math.round(conf*100)));
+  const scoreTitle = (h._blendPct != null) ? "aesthetic-blend score (relative to top of this ranking)"
+    : (h.prob!=null ? "match probability (SigLIP-calibrated)" : "cosine similarity");
   const dupes=h.dupe_count||1;
   const badge = dupes>1 ? `<span class="dupe" title="${dupes} copies — click to see all">${dupes} copies</span>` : "";
   const aib = aiBadge(h.ai_pct);
