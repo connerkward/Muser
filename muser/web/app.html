@@ -172,6 +172,23 @@
                 color:var(--mut); cursor:pointer; border-right:1px solid var(--line, #cfc8b6); }
   .seg button:last-child { border-right:0; }
   .seg button.on { background:var(--fg); color:var(--bg); }
+  /* Negative / grey-out filter bar (outpaintings only). */
+  body:not(.op) #negConsole { display:none; }
+  .neg-console { margin-top:6px; }
+  .neg-console .ch-title.neg { color:#c0574b; }
+  .neg-row { display:flex; align-items:center; gap:16px; flex-wrap:wrap; padding:6px 2px 2px; }
+  .neg-chips { display:inline-flex; gap:6px; flex-wrap:wrap; }
+  .neg-chip { display:inline-flex; align-items:center; gap:5px; border:1px solid var(--line,#cfc8b6);
+              padding:2px 9px; font-size:11px; cursor:pointer; color:var(--mut,#9a9284); user-select:none; }
+  .neg-chip .dot { width:8px; height:8px; border-radius:50%; background:var(--seg,#c0574b); opacity:.35; }
+  .neg-chip.on { color:var(--fg); border-color:var(--seg,#c0574b); }
+  .neg-chip.on .dot { opacity:1; }
+  .neg-th { display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--mut,#9a9284); }
+  .neg-th input[type=range] { width:120px; accent-color:#c0574b; }
+  .neg-count { font-size:11px; color:#c0574b; }
+  /* Greyed (flagged) cards: desaturated + dimmed in place, red edge; still clickable. */
+  .card.filtered .thumb img { filter:grayscale(.92) brightness(.6); opacity:.42; transition:filter .2s, opacity .2s; }
+  .card.filtered .thumb { outline:2px solid #c0574b; outline-offset:-2px; }
   /* AI-likelihood: single native range (mode set by an adjacent .seg toggle) */
   .airange { width:160px; height:18px; margin:0; vertical-align:middle; -webkit-appearance:none; appearance:none; background:transparent; cursor:pointer; }
   .airange::-webkit-slider-runnable-track { height:3px; background:var(--line, #cfc8b6); }
@@ -847,8 +864,6 @@
   body:not(.has-quality) .am-qual { display:none !important; }
   /* Same for the "Taste" metric — only where the favorites model is trained. */
   body:not(.has-favorites) .am-fav { display:none !important; }
-  /* NSFW-model chips belong on the outpaintings blend bar (model-comparison surface). */
-  body:not(.op) .am-nfal, body:not(.op) .am-nada, body:not(.op) .am-nmar { display:none !important; }
   /* ---- legacy blend controls: kept in DOM for the existing JS, never shown ---- */
   .legacy-blend { display:none; }
 
@@ -1421,6 +1436,20 @@
          to the legacy hidden inputs (#sW_* and #negStrength) so all the existing
          re-rank / re-search plumbing comes along unchanged. -->
     <div class="console" id="sortConsole" aria-label="Ranking blend console"></div>
+    <!-- Negative bar (outpaintings): a FILTER, not a ranking term. Toggle NSFW
+         classifiers + a threshold; covers a chosen model scores at/above it grey out
+         IN PLACE (dimmed), leaving the aesthetic ranking untouched. -->
+    <div class="console neg-console" id="negConsole" aria-label="Grey-out filter">
+      <div class="console-head">
+        <span class="ch-title neg">Grey out</span>
+        <span class="ch-hint">flag covers a chosen NSFW classifier scores at/above the threshold — they dim in place, ranking unchanged</span>
+      </div>
+      <div class="neg-row">
+        <span class="neg-chips" id="negChips"></span>
+        <span class="neg-th">threshold <b id="negThV">0.50</b><input type="range" id="negTh" min="0" max="1" step="0.01" value="0.50"></span>
+        <span class="neg-count mut" id="negCount"></span>
+      </div>
+    </div>
     <!-- Legacy controls kept in the DOM (hidden) — applySortBlend() / search()
          read these inputs directly; the console is just a nicer driver of them. -->
     <div class="legacy-blend" aria-hidden="true">
@@ -1436,9 +1465,6 @@
       <input type="range" id="sW_aes0"  min="0" max="2" step="0.05" value="0.00" /><span id="sW_aes0V">0.00</span>
       <input type="range" id="sW_qual"  min="0" max="2" step="0.05" value="0.00" /><span id="sW_qualV">0.00</span>
       <input type="range" id="sW_fav"   min="0" max="2" step="0.05" value="0.00" /><span id="sW_favV">0.00</span>
-      <input type="range" id="sW_nfal"  min="0" max="2" step="0.05" value="0.00" /><span id="sW_nfalV">0.00</span>
-      <input type="range" id="sW_nada"  min="0" max="2" step="0.05" value="0.00" /><span id="sW_nadaV">0.00</span>
-      <input type="range" id="sW_nmar"  min="0" max="2" step="0.05" value="0.00" /><span id="sW_nmarV">0.00</span>
       <span id="sortAdvBody"></span>
       <button type="button" id="sortAdvToggle"></button>
     </div>
@@ -3327,9 +3353,6 @@ const SORT_METRICS = [
   { id:"aes0",  field:"aesthetic",     def:0.00 },
   { id:"qual",  field:"quality",       def:0.00 },   // intrinsic quality (1=clean) — demotes low-quality when weighted up
   { id:"fav",   field:"favorites",     def:0.00 },   // taste model P(favorite), trained on the favorites folder (soft)
-  { id:"nfal",  field:"nsfw_falconsai", def:0.00 },  // NSFW classifier — Falconsai ViT (weight up to surface what IT flags)
-  { id:"nada",  field:"nsfw_adamcodd",  def:0.00 },  // NSFW classifier — AdamCodd
-  { id:"nmar",  field:"nsfw_marqo",     def:0.00 },  // NSFW classifier — Marqo
 ];
 const SORT_DEFAULT = Object.assign({ open: false },
   Object.fromEntries(SORT_METRICS.map(m => [m.id, m.def])));
@@ -3552,16 +3575,13 @@ const ALLOC_METRICS = [
   { id:"aes0",  label:"Zero-shot",      color:"#5a8487", hint:"Zero-shot CLIP aesthetic prompt — fast but weak." },
   { id:"qual",  label:"Quality",        color:"#7f8a55", hint:"Intrinsic quality (blur / over- or under-exposure / tiny). Turn up to demote low-quality frames — the personal cleanup detector's unsupervised signals." },
   { id:"fav",   label:"Taste",          color:"#8a5f8a", hint:"A soft taste score trained on your favorites folder — nudges toward outpaintings like the ones you verified. A weak prior, not an authoritative ranker." },
-  { id:"nfal",  label:"NSFW · Falconsai", color:"#c0574b", hint:"Falconsai NSFW ViT classifier. Weight up to rank by what THIS model flags NSFW — a per-model comparison surface, not a filter." },
-  { id:"nada",  label:"NSFW · AdamCodd",  color:"#a8566b", hint:"AdamCodd NSFW classifier. Weight up to rank by what this model flags — compare it against Falconsai / Marqo." },
-  { id:"nmar",  label:"NSFW · Marqo",     color:"#8a5470", hint:"Marqo NSFW classifier. Weight up to rank by what this model flags — compare it against Falconsai / AdamCodd." },
 ];
 const ABNEG = { min:0, max:1.5, def:0.50 };   // exclude strength range (separate control)
 // Default shares: seed from the legacy per-metric defaults, normalized to 1
 // over the metrics that start non-zero (vec/aes/ps), the rest enabled at 0-floor.
 const ALLOC_DEFAULT = (() => {
-  const seed = { vec:1.00, aes:0.30, ps:0.10, aes25:0, hps:0, aes0:0, qual:0, fav:0, nfal:0, nada:0, nmar:0 };
-  const enabled = { vec:true, aes:true, ps:true, aes25:false, hps:false, aes0:false, qual:false, fav:false, nfal:false, nada:false, nmar:false };
+  const seed = { vec:1.00, aes:0.30, ps:0.10, aes25:0, hps:0, aes0:0, qual:0, fav:0 };
+  const enabled = { vec:true, aes:true, ps:true, aes25:false, hps:false, aes0:false, qual:false, fav:false };
   return { shares: _normShares(seed, enabled), enabled };
 })();
 // Normalize a {id:weight} map to shares summing to 1 over the *enabled* ids.
@@ -3816,6 +3836,48 @@ function _wireDivider(div, leftId, rightId){
   _refreshBlendVisFromWeights();
   buildSortConsole();
 })();
+
+// ---- Negative bar: grey-out FILTER driven by the NSFW classifiers (outpaintings) ----
+// NOT a ranking term. Toggle classifiers + a threshold; any enabled model scoring at/above
+// it greys the cover out IN PLACE (dim + red edge), leaving the aesthetic ranking untouched.
+const NEG_METRICS = [
+  { id:"nfal", field:"nsfw_falconsai", label:"Falconsai", color:"#c0574b" },
+  { id:"nada", field:"nsfw_adamcodd",  label:"AdamCodd",  color:"#a8566b" },
+  { id:"nmar", field:"nsfw_marqo",     label:"Marqo",     color:"#8a5470" },
+];
+const NEG_KEY = "muser-neg-v1";
+let _neg = (()=>{ try{ return Object.assign({enabled:{}, th:0.5}, JSON.parse(localStorage.getItem(NEG_KEY) || "{}")); }catch{ return {enabled:{}, th:0.5}; } })();
+function _saveNeg(){ try{ localStorage.setItem(NEG_KEY, JSON.stringify(_neg)); }catch{} }
+function _negActive(){ return !!window._OUTPAINT && NEG_METRICS.some(m => _neg.enabled[m.id]); }
+function _negScore(h){ let mx=-1; for(const m of NEG_METRICS){ if(_neg.enabled[m.id]){ const v=+h[m.field]; if(!Number.isNaN(v) && v>mx) mx=v; } } return mx; }
+function _isGrey(h){ if(!_negActive() || !h) return false; const s=_negScore(h); return s>=0 && s>=_neg.th; }
+function buildNegConsole(){
+  const chips=$("#negChips"); if(!chips) return;
+  chips.innerHTML="";
+  NEG_METRICS.forEach(m=>{
+    const c=document.createElement("span");
+    c.className="neg-chip"+(_neg.enabled[m.id]?" on":""); c.style.setProperty("--seg", m.color);
+    c.innerHTML=`<span class="dot"></span>${m.label}`;
+    c.title=`Grey out covers ${m.label} scores at/above the threshold.`;
+    c.onclick=()=>{ _neg.enabled[m.id]=!_neg.enabled[m.id]; c.classList.toggle("on"); _saveNeg(); _applyGrey(); };
+    chips.appendChild(c);
+  });
+  const th=$("#negTh"), thv=$("#negThV");
+  if(th){ th.value=_neg.th; if(thv) thv.textContent=(+_neg.th).toFixed(2);
+    th.oninput=()=>{ _neg.th=+th.value; if(thv) thv.textContent=(+th.value).toFixed(2); _applyGrey(); };
+    th.addEventListener("change", _saveNeg); }
+}
+function _applyGrey(){
+  const g=$("#results"); if(!g) return;
+  const byUid=new Map(); (typeof _currentResults!=="undefined" ? _currentResults : []).forEach(h=>{ if(h && h.uid) byUid.set(h.uid, h); });
+  let n=0;
+  g.querySelectorAll(".card").forEach(c=>{
+    const grey = _isGrey(byUid.get(c.dataset.uid));
+    c.classList.toggle("filtered", grey); if(grey) n++;
+  });
+  const cnt=$("#negCount"); if(cnt) cnt.textContent = _negActive() ? `${n} greyed` : "";
+}
+buildNegConsole();
 // Keep the console in sync if state changes elsewhere (Reset button, the legacy
 // negStrength handler firing, etc.). Re-derives shares from the live weights so a
 // Reset that rewrites #sW_* is reflected on the bar.
@@ -4046,6 +4108,7 @@ function _renderHits(r){
     _updateResultCount();
     ensureSentinel();
     renderRefinements(r.refinements || []);
+    _applyGrey();   // grey out covers the negative bar's NSFW classifiers flag (in place)
     // If the user has a non-default sort blend dialed in, apply it after each page
     // lands so newly-appended cards land in the right rank.
     if(_masonryOn()){
