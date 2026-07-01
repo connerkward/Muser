@@ -2900,6 +2900,29 @@ function _shuffle(a){
   }
   for(let i=a.length-1;i>0;i--){ const j=Math.random()*(i+1)|0; [a[i],a[j]]=[a[j],a[i]]; } return a;
 }
+// Outpaintings instance: the empty-query landing RANKS by the aesthetic blend (the
+// Sort-console weights) instead of shuffling — relevance (vec) is meaningless with no
+// query so it's forced to 0. Lets you compare aesthetic models / mixes of them live.
+// The instance is resolved from /api/status ONCE (cached), and showShowcase awaits it
+// BEFORE choosing shuffle-vs-rank so the landing never flashes shuffled then flips.
+let _statusOncePromise = null;
+function _statusOnce(){
+  return _statusOncePromise || (_statusOncePromise =
+    fetch("/api/status").then(r=>r.json()).catch(()=>({})));
+}
+function _showcaseRank(pool){
+  const w = {}; SORT_METRICS.forEach(m => w[m.id] = parseFloat($("#sW_"+m.id).value));
+  w.vec = 0;                                         // no relevance on the landing
+  const st = _blendNormStats(pool);
+  return pool.slice().sort((a, b) => _sortBlendKey(b, w, st) - _sortBlendKey(a, w, st));
+}
+function _showcaseReRank(){                           // re-sort the whole pool + repaint from the top
+  if(!_showcasePool || _mode !== "showcase") return;
+  _showcaseQueue = _showcaseRank(_showcasePool);
+  _showcaseCursor = 0; _showcaseResults = []; _rendered = 0;
+  $("#results").innerHTML = ""; _hasMore = false;
+  showcaseMore();
+}
 async function _loadShowcasePool(){
   if(_showcasePool) return _showcasePool;
   const byPath = new Map();
@@ -2910,7 +2933,12 @@ async function _loadShowcasePool(){
       const r = await (await fetch(`/api/score?metric=${enc(m)}&order=desc&limit=600`)).json();
       if(r && Array.isArray(r.items)){
         anyOk = true;
-        for(const it of r.items){ if(it && it.path && !byPath.has(it.path)) byPath.set(it.path, it); }
+        for(const it of r.items){ if(it && it.path && !byPath.has(it.path)){
+          // Surface the per-image aesthetic metrics top-level (they arrive nested
+          // under .scores) so the Sort-blend can rank the landing by them.
+          if(it.scores) Object.assign(it, it.scores);
+          byPath.set(it.path, it);
+        } }
       }
     }catch(e){ /* metric may not exist — ignore, others may still work */ }
   });
@@ -2934,9 +2962,13 @@ async function showShowcase(){
     $("#empty").textContent = "Index a folder, then search it.";
     return;
   }
-  // Shuffle the whole pool once, then page through it on scroll (Pinterest/Cosmos
-  // style) instead of showing a fixed 30. _hasMore stays true until the queue runs out.
-  _showcaseQueue = _shuffle(pool.slice());
+  // Resolve the instance before choosing order (cached; no flash of shuffled).
+  try{ window._OUTPAINT = !!(await _statusOnce()).outpaintings; }catch{}
+  if(!_showcaseActive) return;
+  // Main muser: shuffle the whole pool once, then page through it on scroll
+  // (Pinterest/Cosmos style). Outpaintings instance: rank by the aesthetic blend
+  // instead, so the landing is a model-comparison surface, not a random mix.
+  _showcaseQueue = window._OUTPAINT ? _showcaseRank(pool) : _shuffle(pool.slice());
   _showcaseCursor = 0;
   _showcaseResults = [];
   _rendered = 0;
@@ -2959,12 +2991,18 @@ function _mountShowcaseBar(total){
   if(!bar){
     bar = document.createElement("div");
     bar.id = "showcaseBar"; bar.className = "showcase-bar";
-    bar.innerHTML =
-      `<span class="sc-title">✨ A curated mix of your most aesthetic images</span>
-       <button id="showcaseShuffle" class="sc-shuffle" title="Re-roll the selection">✨ shuffle</button>
-       <span class="sc-count mut"></span>`;
+    bar.innerHTML = window._OUTPAINT
+      ? `<span class="sc-title">Ranked by your aesthetic blend</span>
+         <button id="showcaseSortOpen" class="sc-shuffle" title="Open the ranking console to compare aesthetic models / mixes of them">⚖ compare models…</button>
+         <span class="sc-count mut"></span>`
+      : `<span class="sc-title">✨ A curated mix of your most aesthetic images</span>
+         <button id="showcaseShuffle" class="sc-shuffle" title="Re-roll the selection">✨ shuffle</button>
+         <span class="sc-count mut"></span>`;
     $("#results").before(bar);
-    bar.querySelector("#showcaseShuffle").onclick = () => { if(_showcaseActive) showShowcase(); };
+    const shuf = bar.querySelector("#showcaseShuffle");
+    if(shuf) shuf.onclick = () => { if(_showcaseActive) showShowcase(); };
+    const sortOpen = bar.querySelector("#showcaseSortOpen");
+    if(sortOpen) sortOpen.onclick = () => { if(!$("#sortPanel").classList.contains("on")) $("#sortToggle").click(); };
   }
   bar.querySelector(".sc-count").textContent = `· from ${total.toLocaleString()} ranked`;
   bar.style.display = "";
@@ -3211,6 +3249,10 @@ function _sortBlendKey(h, w, st){
   return SORT_METRICS.reduce((sum, m) => sum + w[m.id] * _normField(h, m, st), 0);
 }
 function applySortBlend(){
+  // On the outpaintings landing the "results" are the paged showcase queue — a card
+  // reorder isn't enough (the true top-N must be re-pulled from the full pool), so
+  // re-rank the whole pool and repaint from the top instead.
+  if(_mode === "showcase" && window._OUTPAINT){ _showcaseReRank(); return; }
   // Snapshot the weights once (don't re-read the DOM per comparison), then
   // build a uid → card lookup and reorder by sorting the in-memory result list
   // by final score and re-appending. appendChild moves an existing node — no
@@ -3840,7 +3882,10 @@ function _renderHits(r){
       // the wall (see applySortBlend). Stable order here → existing tiles never move.
       _retuneThumbs(true);
       layoutMasonry(_wasReset);
-    } else if(_sortBlendActive()){
+    } else if(_sortBlendActive() && !(_mode === "showcase" && window._OUTPAINT)){
+      // Outpaintings showcase is already ranked into the queue by _showcaseRank();
+      // re-applying here would recurse (applySortBlend → _showcaseReRank → showcaseMore
+      // → _renderHits → here → …). The queue order already IS the blend order, so skip.
       applySortBlend();
     }
   };
@@ -6963,6 +7008,7 @@ function syncOutpaintingsNav(attempt=0){
   // Search (SigLIP) + Interesting (aesthetic) + Review (NSFW).
   fetch("/api/status").then(r=>r.json()).then(s=>{
     if(!s.outpaintings) return;
+    window._OUTPAINT = true;   // showShowcase() resolves this itself via _statusOnce()
     document.querySelectorAll(
       '[data-view="explore"], #navExplore, [data-view="faces"], #navFaces, '
       + '[data-view="color"], #navColor, [data-view="ai"], #navAI, '
