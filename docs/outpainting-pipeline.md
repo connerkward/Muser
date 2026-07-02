@@ -132,12 +132,19 @@ wired into every TIFF run vs. a separate verify pass — see §3 — is worth co
 
 ### 2. Model choice + legal
 
-- **Stable Diffusion**, chosen for quality + control (local, tunable, ControlNet ecosystem)
-  over closed APIs.
-- **Legal posture:** the team got sign-off to **proceed until cease-and-desist** — i.e.,
-  album art is copyrighted, the derived outpaintings are a legal gray area, and legal's
-  call was to ship and stop only if a rights-holder objects, rather than pre-clear every
-  cover. (Worth stating plainly in the portfolio as the real-world constraint it was.)
+- **Stable Diffusion — SDXL**, specifically a **RealVisXL 5.0 inpaint** checkpoint
+  (confirmed in the archived graph, §1), chosen for quality + control (local, tunable,
+  ControlNet + IPAdapter ecosystem) over closed APIs. **IPAdapter** carries the cover's own
+  style into the generated wings so the extension reads as *of* the cover, not generic.
+- **Only the wings are generated — the center is the untouched original cover.** The pipeline
+  composites the sharp 640×640 album art back on top of the generated extension (§1 step 7;
+  the `final-render-no-album-art` vs `final-render-*` layers). So the copyrighted cover is
+  preserved pixel-for-pixel and the AI only *surrounds* it — a meaningful quality *and* legal
+  point.
+- **Legal posture:** even so, the derived ultra-wide image is a gray area; the team got
+  sign-off to **proceed until cease-and-desist** — ship, and stop only if a rights-holder
+  objects, rather than pre-clear every cover. (Worth stating plainly in the portfolio as the
+  real-world constraint it was.)
 
 ### 3. Quality / safety passes (every finished outpainting)
 
@@ -171,10 +178,13 @@ wired into every TIFF run vs. a separate verify pass — see §3 — is worth co
 - **Over-the-wire to the car: optimized WebP.** Encoded to the display's **actual screen
   resolution** (no wasted pixels) with **differential compression**. WebP over PNG is a large
   saving on photographic content (see cost note below).
-- **Archival: multi-layer TIFF** stored in the browser/pipeline holding **all components**
-  (source cover, mask, smudge, outpaint, final) so any image can be **regenerated from any
-  step** — the same layered-TIFF-with-all-passes idea used elsewhere in the fleet. Deploy
-  the compact WebP; archive the fat regenerable TIFF.
+- **Archival: multi-layer XMP TIFF** — this is a real, in-graph `SaveLayeredTIFFXMP` node
+  (§1 step 8), not an afterthought: every run bakes **7 named layers** + the full workflow
+  into the TIFF's XMP — `album-art` · `lama` · `lama-vignette` · `final-render-upscale` ·
+  `final-render-no-ui` · `final-render-ui` · `final-render-no-album-art`. Any image is
+  **regenerable from any step** because every intermediate *and* the graph travel with it
+  (879 archived at `OUTPAINTINGS/comfyui-output/ComfyUI-XMP_*.tiff`). Deploy the compact WebP;
+  archive the fat regenerable TIFF.
 - **On-car cache** of ~**100 images** with a **time-decay function** (recently/likely-played
   art stays warm; stale art evicts).
 - **Look-ahead (considered, blocked):** pre-generating the *next* song's art was limited by
