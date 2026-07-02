@@ -83,6 +83,19 @@
   - The decision this model drives: **where on the Zipfian curve to cut N** — the point
     where marginal coverage-per-dollar drops below worth-it.
 
+**Initial-build cost — 1,000,000 covers (the dataset goal).** Per-cover runtime is dominated
+by the SDXL ultra-wide outpaint (~20–45s); everything else (SAM3, LaMa remove, UltraSharp,
+smudge, composite, save) is ~7–13s combined → **~27–58s raw, ~42s central**, ×1.3 for
+distraction-gate re-gens ≈ **~55s effective/cover** on an A10G/L4/4090-class GPU.
+- **Compute:** ~$5k (fast · $0.50/hr spot) → **~$15k central** (on-demand A10G @ $1/hr, 55s) →
+  ~$42k (heavy · A100 @ $2/hr). **Headline ≈ $10–20k for the full 1M build** — cheap, because
+  the pipeline is fast per-item and embarrassingly parallel.
+- **Wall clock:** 1M × 55s ≈ **15,300 GPU-hours** → 50 GPUs ≈ 13 d · 100 ≈ 6.4 d · 200 ≈ 3.2 d.
+- **Storage (the sleeper):** 1M archival layered TIFFs @ ~30 MB ≈ **~30 TB** → ~$690/mo S3
+  Standard or ~$30/mo Glacier Deep; the deployed WebP (~0.3 MB) is negligible.
+- **Biggest uncertainty:** the ultra-wide SDXL time — if tiled/slower (~60–90s), the top of
+  the range (~$20–40k) applies. One real timed pass through the graph pins it.
+
 ### 1. Album art → outpainting
 
 The core: a square album cover → a clean, ultra-wide (~6:1) in-car image. **Confirmed from
